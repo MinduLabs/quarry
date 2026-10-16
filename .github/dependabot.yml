@@ -5,8 +5,19 @@ updates:
     schedule:
       interval: weekly
     groups:
-      gtk-rs:
-        patterns: ["gtk4", "libadwaita", "relm4*", "glib*", "gio", "sourceview5"]
+      tauri:
+        patterns: ["tauri*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      tauri:
+        patterns: ["@tauri-apps/*"]
+      codemirror:
+        patterns: ["@codemirror/*", "@lezer/*"]
+      radix:
+        patterns: ["@radix-ui/*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

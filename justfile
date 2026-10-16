@@ -44,10 +44,25 @@ db-down:
 test-db:
     QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test -p quarry-driver-mysql -p quarry-engine
 
-# macOS: build dist/Quarry.dmg (universal binary). Run on a Mac.
+# macOS: build the universal .dmg (target/universal-apple-darwin/release/bundle/dmg). Run on a Mac.
 dmg:
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     pnpm tauri build --target universal-apple-darwin --bundles dmg
+
+# macOS from Linux: dist/macos/Quarry.app + .dmg (universal, ad-hoc signed, not notarized)
+mac-cross:
+    pnpm build
+    docker build -t quarry-mac-cross -f docker/mac-cross.Dockerfile docker
+    docker run --rm -u {{uid}}:{{gid}} -e HOME=/tmp -v {{justfile_directory()}}:/src -w /src \
+      -e CARGO_HOME=/src/target/.cargo-home-mac -e CARGO_TARGET_DIR=/src/target quarry-mac-cross packaging/macos/cross-build.sh
+
+# Linux: dist/linux/*.AppImage + *.deb, built inside Docker (Ubuntu 24.04)
+linux-bundles: dev-image
+    pnpm build
+    {{docker_dev}} sh -c "test -x target/.tauri-cli/bin/cargo-tauri || cargo install --locked tauri-cli --version '^2.12' --root target/.tauri-cli; \
+      APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 target/.tauri-cli/bin/cargo-tauri build --bundles appimage,deb --config docker/tauri.prebuilt-ui.json"
+    mkdir -p dist/linux
+    cp target/docker/release/bundle/appimage/*.AppImage target/docker/release/bundle/deb/*.deb dist/linux/
 
 # Linux: build dist/quarry-<version>.flatpak inside Docker
 flatpak:

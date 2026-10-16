@@ -1,5 +1,5 @@
 # Linux build environment for the Tauri app (Ubuntu 24.04, WebKitGTK 4.1).
-# Used by CI-like local checks (`just check-docker`) and UI screenshots (`just screenshot`).
+# Used by `just check-docker` and `just linux-bundles`.
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
