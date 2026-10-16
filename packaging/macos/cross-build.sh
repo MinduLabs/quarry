@@ -1,6 +1,9 @@
 #!/bin/sh
-# Build dist/macos/Quarry.app and the .dmg from Linux (see `just mac-cross`).
+# Build dist/macos/Quarry.app and Quarry_<version>_universal.app.zip from Linux (see `just mac-cross`).
 # Expects ui/dist to be built and the SDK at $SDKROOT (docker/mac-cross.Dockerfile).
+#
+# No .dmg here on purpose: a real DMG (UDIF) can only be produced by macOS `hdiutil`, and
+# genisoimage yields an ISO 9660 image that macOS refuses to mount. Use `just dmg` on a Mac.
 #
 # Default is a fast build (no LTO, parallel codegen, incremental): ~40 s when warm instead of ~3 min.
 # RELEASE=1 uses the full release profile from Cargo.toml.
@@ -30,11 +33,5 @@ printf 'APPL????' > "$app/Contents/PkgInfo"
 # Ad-hoc signature: required for arm64 binaries to launch at all.
 rcodesign sign "$app"
 
-staging="$out/dmg"
-mkdir -p "$staging"
-cp -R "$app" "$staging/"
-ln -s /Applications "$staging/Applications"
-genisoimage -quiet -V Quarry -D -R -apple -no-pad -o "$out/Quarry_${version}_universal.dmg" "$staging"
-rm -rf "$staging"
 (cd "$out" && zip -qry "Quarry_${version}_universal.app.zip" Quarry.app)
 echo "Built $out"

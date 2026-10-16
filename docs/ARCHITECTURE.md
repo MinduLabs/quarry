@@ -118,7 +118,7 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 |---|---|---|
 | Linux | Flatpak (GNOME 51 runtime, WebKitGTK 4.1) | `just flatpak` → `dist/quarry-<version>.flatpak` |
 | Linux | AppImage, `.deb` | `just linux-bundles` (inside Docker) → `dist/linux/` |
-| macOS | `.app` / `.dmg` (universal) | `just dmg` on a Mac (release, CI), or `just mac-cross` from Linux → `dist/macos/` (ad-hoc signed, not notarized) |
+| macOS | `.app` / `.dmg` (universal) | `just dmg` on a Mac (release, CI), or `just mac-cross` from Linux → `dist/macos/` (`.app` + `.app.zip` only, no `.dmg`; ad-hoc signed, not notarized) |
 
 `just mac-cross` and `just linux-bundles` use a fast profile by default (no LTO, 16 codegen units,
 incremental, separate target dir) so a warm rebuild takes under a minute. Pass `1`
