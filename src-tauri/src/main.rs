@@ -8,6 +8,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "linux")]
+mod desktop;
+
 use std::sync::{Arc, Mutex};
 
 use quarry_engine::{Command, EngineHandle, Event};
@@ -39,7 +42,10 @@ fn engine_subscribe(bridge: State<'_, Bridge>, on_event: Channel<Event>) {
 fn statement_at(text: String, offset: usize) -> Option<(usize, usize)> {
     let byte = utf16_to_byte(&text, offset);
     let range = quarry_engine::sql::statement_at(&text, byte)?;
-    Some((byte_to_utf16(&text, range.start), byte_to_utf16(&text, range.end)))
+    Some((
+        byte_to_utf16(&text, range.start),
+        byte_to_utf16(&text, range.end),
+    ))
 }
 
 fn utf16_to_byte(text: &str, utf16: usize) -> usize {
@@ -59,8 +65,13 @@ fn byte_to_utf16(text: &str, byte: usize) -> usize {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_env("QUARRY_LOG").unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_env("QUARRY_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
+
+    #[cfg(target_os = "linux")]
+    desktop::integrate();
 
     let (engine, events) = match EngineHandle::spawn() {
         Ok(pair) => pair,
@@ -74,7 +85,11 @@ fn main() {
     let forward = subscriber.clone();
     let result = tauri::Builder::default()
         .manage(Bridge { engine, subscriber })
-        .invoke_handler(tauri::generate_handler![engine_send, engine_subscribe, statement_at])
+        .invoke_handler(tauri::generate_handler![
+            engine_send,
+            engine_subscribe,
+            statement_at
+        ])
         .setup(move |app| {
             // Forward engine events to whichever webview subscribed last.
             tauri::async_runtime::spawn(async move {
@@ -87,8 +102,12 @@ fn main() {
                     }
                 }
             });
-            if let Some(window) = app.get_webview_window("main") {
-                tracing::debug!(label = window.label(), "window ready");
+            // X11 and dev runs on macOS read the icon from the window/app, not the bundle.
+            // 256px: GDK silently drops a 512px _NET_WM_ICON.
+            if let Some(window) = app.get_webview_window("main")
+                && let Err(err) = window.set_icon(tauri::include_image!("icons/128x128@2x.png"))
+            {
+                tracing::warn!(%err, "window icon");
             }
             Ok(())
         })
@@ -110,6 +129,9 @@ mod tests {
         let second = text.find("SELECT 2").unwrap();
         let utf16 = byte_to_utf16(text, second);
         assert_eq!(utf16_to_byte(text, utf16), second);
-        assert_eq!(statement_at(text.to_owned(), utf16 + 1), Some((utf16, utf16 + 8)));
+        assert_eq!(
+            statement_at(text.to_owned(), utf16 + 1),
+            Some((utf16, utf16 + 8))
+        );
     }
 }

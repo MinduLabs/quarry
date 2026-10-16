@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+GenericName=Database Client
+Comment=Query and edit your databases
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories=Development;Database;
+StartupWMClass=io.github.mindulabs.Quarry
+StartupNotify=true
