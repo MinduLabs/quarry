@@ -120,6 +120,10 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 | Linux | AppImage, `.deb` | `just linux-bundles` (inside Docker) → `dist/linux/` |
 | macOS | `.app` / `.dmg` (universal) | `just dmg` on a Mac (release, CI), or `just mac-cross` from Linux → `dist/macos/` (ad-hoc signed, not notarized) |
 
+`just mac-cross` and `just linux-bundles` use a fast profile by default (no LTO, 16 codegen units,
+incremental, separate target dir) so a warm rebuild takes under a minute. Pass `1`
+(`just mac-cross 1`) for the full release profile; CI and Flatpak always use it.
+
 The desktop entry, AppStream metadata and icons live in `packaging/linux/` and `src-tauri/icons/`.
 On Wayland the dock takes the icon from the desktop entry named after the app ID, not from the window.
 Flatpak and system packages install that entry; for unpackaged runs (`just dev`, AppImage) the app
