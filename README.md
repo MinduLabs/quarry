@@ -1,37 +1,50 @@
 <p align="center">
-  <img src="data/icons/hicolor/scalable/apps/io.github.mindulabs.Quarry.svg" width="128" alt="Quarry logo">
+  <img src="src-tauri/icons/icon.svg" width="128" alt="Quarry logo">
 </p>
 
 <h1 align="center">Quarry</h1>
 
-<p align="center">A fast, native, open-source database client for Linux.</p>
+<p align="center">A fast, open-source database client for Linux and macOS.</p>
 
-> **Status:** early development — nothing usable yet. Follow the [roadmap](docs/product/ROADMAP.md).
+> **Status:** early development. MySQL / MariaDB work today; PostgreSQL and SQLite are next.
 
 ## Why Quarry
 
-- **Native** — Rust + GTK4 + libadwaita. No Electron, no JVM.
-- **Multi-database** — PostgreSQL, MySQL/MariaDB and SQLite first; more to follow.
-- **Safe on production** — every write is previewed; production connections are clearly marked.
+- **Light** — Tauri 2 with the system webview and a Rust core. No bundled Chromium, no JVM.
+- **Safe on production** — production connections are marked in red, and every write asks first.
+- **Keyboard-first** — `Ctrl/⌘+Enter` runs the statement under the cursor.
 - **Open source** — AGPL-3.0-or-later.
+
+What works now: saved connections with passwords in the system keyring, schema tree, SQL editor with
+completion, multiple query tabs, a virtualized result grid, cancel, and safe mode.
 
 ## Install
 
-Download the latest `.flatpak` from [Releases](https://github.com/MinduLabs/quarry/releases), then:
+Download from [Releases](https://github.com/MinduLabs/quarry/releases):
 
-```bash
-flatpak install --user quarry-*.flatpak
-```
-
-Flathub listing will come with v0.1.
+- **Linux:** `quarry-<version>.flatpak`, then `flatpak install --user quarry-*.flatpak`
+  (or the AppImage / `.deb`).
+- **macOS:** `Quarry_<version>_universal.dmg`. Development builds are not notarized yet: the first time,
+  right-click the app → **Open**, or run `xattr -cr /Applications/Quarry.app`.
 
 ## Build from source
 
-See [docs/dev/SETUP.md](docs/dev/SETUP.md) and [docs/dev/BUILDING.md](docs/dev/BUILDING.md).
+Requirements: Rust (stable), Node 20+ with pnpm, [just](https://github.com/casey/just), and Tauri's
+system dependencies — `libwebkit2gtk-4.1-dev` on Linux, Xcode Command Line Tools on macOS.
+
+```bash
+pnpm install
+just dev        # run with hot reload
+just check      # lint + tests
+```
+
+No WebKitGTK on your Linux host? `just check-docker` runs the Rust part in Docker. Packaging:
+`just flatpak`, `just linux-bundles`, `just dmg` (on a Mac) or `just mac-cross` (from Linux).
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md). Design and architecture docs live in [docs/](docs/README.md).
+Read [CONTRIBUTING.md](CONTRIBUTING.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/STYLE-GUIDE.md](docs/STYLE-GUIDE.md).
 
 ## License
 

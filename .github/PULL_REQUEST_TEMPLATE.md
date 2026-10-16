@@ -4,8 +4,8 @@
 
 ## Checklist
 
-- [ ] `just lint` and `just test` pass (or `just check` in Docker)
-- [ ] UI changes follow `docs/design/STYLE-GUIDE.md`; screenshots attached (light + dark)
-- [ ] User-facing strings wrapped in `gettext`
-- [ ] Docs / ADR updated if behaviour or architecture changed
+- [ ] `just check` passes (or `just check-docker`)
+- [ ] UI changes follow `docs/STYLE-GUIDE.md`; screenshots attached (light + dark)
+- [ ] `just bindings` run if `Command` / `Event` / model types changed
+- [ ] Docs updated if behaviour or architecture changed
 - [ ] I have signed the CLA

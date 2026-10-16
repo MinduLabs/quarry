@@ -15,7 +15,7 @@ Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). UI rules: [docs/STYL
 
 ## Commands
 
-`just dev` · `just check` (or `just check-docker` on hosts without webkit2gtk-4.1) · `just db-up` + `just test-db` · `just bindings` · `just flatpak` · `just dmg` (macOS only).
+`just dev` · `just check` (or `just check-docker` on hosts without webkit2gtk-4.1) · `just db-up` + `just test-db` · `just bindings` · `just flatpak` · `just linux-bundles` · `just dmg` (macOS only) · `just mac-cross` (macOS app from Linux).
 
 ## Rules
 

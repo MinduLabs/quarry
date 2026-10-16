@@ -22,7 +22,7 @@ Quiet, dense, fast — a modern desktop tool in the spirit of TablePro and Table
 4. Icons: `lucide-react`, 16px (14px in dense rows), `strokeWidth={1.75}`, color `currentColor`.
 5. Animate only `opacity` and `transform` (WebKitGTK on Linux is slow at layout animations). Never `transition: all`. No `backdrop-filter`, no large blurred shadows.
 6. Respect `prefers-reduced-motion` (handled globally in `base.css`; do not override).
-7. Check light and dark before you finish (`just screenshot`).
+7. Check light and dark before you finish.
 
 ## Color tokens
 
