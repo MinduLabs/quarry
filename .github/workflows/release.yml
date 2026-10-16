@@ -45,7 +45,7 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ui-dist
       - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
@@ -105,7 +105,7 @@ jobs:
     needs: [flatpak, linux, macos]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true
