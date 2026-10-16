@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/Button";
+import { Kbd } from "@/components/ui/Kbd";
 import { modKey } from "@/lib/platform";
 import { useApp } from "@/store/app";
 
@@ -31,11 +32,13 @@ export function Welcome() {
           New connection
         </Button>
       )}
-      <dl className="grid grid-cols-[auto_auto] gap-x-8 gap-y-1.5 text-sm">
+      <dl className="grid grid-cols-[auto_auto] items-center gap-x-8 gap-y-2 text-sm">
         {SHORTCUTS.map(([label, keys]) => (
           <div key={label} className="contents">
             <dt className="text-muted">{label}</dt>
-            <dd className="text-right font-mono text-faint">{keys}</dd>
+            <dd className="flex justify-end">
+              <Kbd keys={keys} />
+            </dd>
           </div>
         ))}
       </dl>

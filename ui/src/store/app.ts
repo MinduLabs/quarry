@@ -47,6 +47,8 @@ export interface Tab {
   connId: string;
   database: string | null;
   sql: string;
+  /** The user typed in this tab. Nothing is saved to disk yet, so edited SQL is lost on quit. */
+  edited: boolean;
   running: boolean;
   sets: ResultSet[];
   activeSet: number;
@@ -60,6 +62,19 @@ export interface Toast {
   id: number;
   kind: "info" | "success" | "warning" | "error";
   message: string;
+}
+
+/** What would be lost by quitting now. */
+export interface QuitInfo {
+  running: number;
+  unsaved: number;
+}
+
+/** Returns what quitting would lose, or null when it is safe to quit without asking. */
+export function pendingWork(tabs: Tab[]): QuitInfo | null {
+  const running = tabs.filter((t) => t.running).length;
+  const unsaved = tabs.filter((t) => t.edited && t.sql.trim() !== "").length;
+  return running + unsaved > 0 ? { running, unsaved } : null;
 }
 
 export interface PendingConfirm {
@@ -112,6 +127,22 @@ interface State {
   cancel: (id: number) => void;
   setActiveSet: (id: number, set: number) => void;
   answerConfirm: (run: boolean) => void;
+  /** Sidebar visibility; remembered between launches. */
+  sidebarOpen: boolean;
+  toggleSidebar: () => void;
+  quit: QuitInfo | null;
+  askQuit: (info: QuitInfo) => void;
+  dismissQuit: () => void;
+}
+
+const SIDEBAR_KEY = "quarry.sidebarOpen";
+
+function loadSidebarOpen(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 let nextTabId = 1;
@@ -155,6 +186,7 @@ export const useApp = create<State>()((set, get) => {
       connId,
       database,
       sql,
+      edited: false,
       running: false,
       sets: [],
       activeSet: 0,
@@ -176,6 +208,19 @@ export const useApp = create<State>()((set, get) => {
     activeTabId: null,
     dialog: null,
     test: null,
+    sidebarOpen: loadSidebarOpen(),
+    toggleSidebar: () =>
+      set((s) => {
+        try {
+          localStorage.setItem(SIDEBAR_KEY, s.sidebarOpen ? "0" : "1");
+        } catch {
+          // Not remembered; the toggle still works.
+        }
+        return { sidebarOpen: !s.sidebarOpen };
+      }),
+    quit: null,
+    askQuit: (info) => set({ quit: info }),
+    dismissQuit: () => set({ quit: null }),
     confirm: null,
     toasts: [],
 
@@ -392,7 +437,7 @@ export const useApp = create<State>()((set, get) => {
         };
       });
     },
-    setSql: (id, sql) => patchTab(id, () => ({ sql })),
+    setSql: (id, sql) => patchTab(id, () => ({ sql, edited: true })),
     run: (id, sql) => {
       const tab = get().tabs.find((t) => t.id === id);
       if (!tab || tab.running || !sql.trim()) return;

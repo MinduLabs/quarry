@@ -1,25 +1,32 @@
 import { forwardRef, type InputHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
-export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  function Input({ className, ...props }, ref) {
-    return (
-      <input
-        ref={ref}
-        spellCheck={false}
-        autoComplete="off"
-        className={cn(
-          "h-7 w-full rounded-md border border-line-strong bg-app px-2 text-base text-fg",
-          "placeholder:text-faint transition-colors-fast",
-          "focus:border-accent focus:outline-none focus:ring-3 focus:ring-accent-soft",
-          "aria-invalid:border-danger",
-          className,
-        )}
-        {...props}
-      />
-    );
-  },
-);
+export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "size"> {
+  /** `lg` is taller and rounder; used for search boxes. */
+  inputSize?: "md" | "lg";
+}
+
+export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
+  { className, inputSize = "md", ...props },
+  ref,
+) {
+  return (
+    <input
+      ref={ref}
+      spellCheck={false}
+      autoComplete="off"
+      className={cn(
+        "w-full border border-line-strong bg-app px-2 text-base text-fg",
+        inputSize === "lg" ? "h-8 rounded-lg" : "h-7 rounded-md",
+        "placeholder:text-faint transition-colors-fast",
+        "focus:border-accent focus:outline-none focus:ring-3 focus:ring-accent-soft",
+        "aria-invalid:border-danger",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
 
 export function Field({
   label,

@@ -1,10 +1,11 @@
-import { CircleAlert, CircleCheck } from "lucide-react";
+import { CircleCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { Environment } from "@/bindings/Environment";
 import type { SslMode } from "@/bindings/SslMode";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
+import { ErrorNotice } from "@/components/ui/ErrorNotice";
 import { Field, Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Spinner } from "@/components/ui/Spinner";
@@ -115,15 +116,9 @@ export function ConnectionDialog() {
         <>
           <div className="mr-auto flex min-w-0 items-center gap-2 text-sm">
             {test?.pending && <Spinner size={12} />}
-            {test && !test.pending && (
-              <span
-                className={`flex min-w-0 items-center gap-1.5 ${test.ok ? "text-success" : "text-danger"}`}
-              >
-                {test.ok ? (
-                  <CircleCheck size={14} strokeWidth={1.75} />
-                ) : (
-                  <CircleAlert size={14} strokeWidth={1.75} />
-                )}
+            {test?.ok && (
+              <span className="flex min-w-0 items-center gap-1.5 text-success">
+                <CircleCheck size={14} strokeWidth={1.75} />
                 <span className="truncate" title={test.message}>
                   {test.message}
                 </span>
@@ -159,6 +154,10 @@ export function ConnectionDialog() {
           if (config) saveConnection(config, password, form.remember);
         }}
       >
+        {test && !test.pending && !test.ok && (
+          <ErrorNotice key={test.request} message={test.message} />
+        )}
+
         <div className="grid grid-cols-[1fr_140px] gap-3">
           <Field label="Name">
             <Input

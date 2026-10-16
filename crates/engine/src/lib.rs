@@ -636,8 +636,7 @@ fn safety_check(environment: Environment, sql: &str) -> Option<String> {
 /// A user-facing error message.
 fn describe(err: &DriverError) -> String {
     match err {
-        DriverError::Auth => "Access denied — check the user name and password".to_owned(),
-        DriverError::Connect(msg) => format!("Couldn't connect: {msg}"),
+        DriverError::Auth(msg) | DriverError::Connect(msg) => msg.clone(),
         DriverError::Cancelled => "Query cancelled".to_owned(),
         other => other.to_string(),
     }

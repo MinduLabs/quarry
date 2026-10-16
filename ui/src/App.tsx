@@ -1,14 +1,20 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/Toaster";
 import { TooltipProvider } from "@/components/ui/Tooltip";
+import { cn } from "@/lib/cn";
 import { send, subscribe } from "@/lib/engine";
-import { useApp } from "@/store/app";
+import { isMac } from "@/lib/platform";
+import { pendingWork, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { QueryView } from "./features/query/QueryView";
 import { Sidebar } from "./features/sidebar/Sidebar";
+import { SidebarToggle } from "./features/sidebar/SidebarToggle";
 import { TabBar } from "./features/tabs/TabBar";
 import { Welcome } from "./features/welcome/Welcome";
+import { QuitDialog } from "./features/window/QuitDialog";
+import { WindowControls } from "./features/window/WindowControls";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 400;
@@ -16,6 +22,7 @@ const SIDEBAR_MAX = 400;
 export function App() {
   const tabs = useApp((s) => s.tabs);
   const activeId = useApp((s) => s.activeTabId);
+  const sidebarOpen = useApp((s) => s.sidebarOpen);
   const [sidebarWidth, setSidebarWidth] = useState(248);
 
   useEffect(() => {
@@ -29,6 +36,19 @@ export function App() {
       );
   }, []);
 
+  // Closing the window (button, Alt+F4, the macOS red button) asks first only if work would be lost.
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onCloseRequested((event) => {
+      const work = pendingWork(useApp.getState().tabs);
+      if (!work) return;
+      event.preventDefault();
+      useApp.getState().askQuit(work);
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
@@ -38,6 +58,7 @@ export function App() {
       if (key === "n") openDialog({ mode: "new" });
       else if (key === "t") newQuery();
       else if (key === "w" && activeTabId !== null) closeTab(activeTabId);
+      else if (key === "b") useApp.getState().toggleSidebar();
       else return;
       e.preventDefault();
     };
@@ -59,19 +80,39 @@ export function App() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-full">
-        <div style={{ width: sidebarWidth }} className="shrink-0">
-          <Sidebar />
-        </div>
+      <div className="relative flex h-full overflow-hidden">
+        {/* The sidebar slides with a transform only (no layout animation); the content area
+            changes size at once. It is inert while hidden so Tab can't reach it. */}
         <div
-          role="separator"
-          aria-orientation="vertical"
-          onPointerDown={startResize}
-          className="relative w-px shrink-0 cursor-col-resize bg-line"
+          inert={!sidebarOpen}
+          style={{ width: sidebarWidth + 1 }}
+          className={cn(
+            "absolute inset-y-0 left-0 z-20 flex transition-transform duration-(--duration-slow) ease-(--ease-out)",
+            sidebarOpen ? "translate-x-0" : "-translate-x-full",
+          )}
         >
-          <div className="absolute inset-y-0 -left-1 w-2 transition-colors-fast hover:bg-accent-soft" />
+          <div className="min-w-0 flex-1">
+            <Sidebar />
+          </div>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            onPointerDown={startResize}
+            className="relative w-px shrink-0 cursor-col-resize bg-line"
+          >
+            <div className="absolute inset-y-0 -left-1 w-2 transition-colors-fast hover:bg-accent-soft" />
+          </div>
         </div>
-        <main className="flex min-w-0 flex-1 flex-col bg-app">
+        <SidebarToggle />
+        <main
+          style={{ marginLeft: sidebarOpen ? sidebarWidth + 1 : 0 }}
+          className="relative flex min-w-0 flex-1 flex-col bg-app"
+        >
+          {!isMac && (
+            <div className="absolute top-0 right-0 z-30">
+              <WindowControls />
+            </div>
+          )}
           {tabs.length === 0 ? (
             <Welcome />
           ) : (
@@ -93,6 +134,7 @@ export function App() {
       <ConnectionDialog />
       <DeleteConnectionDialog />
       <ConfirmRunDialog />
+      <QuitDialog />
       <Toaster />
     </TooltipProvider>
   );

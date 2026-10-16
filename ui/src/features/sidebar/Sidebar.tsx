@@ -1,17 +1,20 @@
-import { Database, Eye, Plus, Server, SquareFunction, Table2 } from "lucide-react";
+import { Database, Eye, Plus, Search, Server, SquareFunction, Star, Table2, X } from "lucide-react";
 import { useState } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import { EnvBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
 import { ContextMenuArea } from "@/components/ui/Menu";
+import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { Spinner } from "@/components/ui/Spinner";
 import { TreeRow } from "@/components/ui/TreeRow";
-import { cn } from "@/lib/cn";
-import { isMac, modKey } from "@/lib/platform";
+import { modKey } from "@/lib/platform";
 import { type ConnNode, useApp } from "@/store/app";
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
+
+type Pane = "connections" | "favorites";
 
 export function Sidebar() {
   const connections = useApp((s) => s.connections);
@@ -19,22 +22,15 @@ export function Sidebar() {
   const version = useApp((s) => s.engineVersion);
   const openDialog = useApp((s) => s.openDialog);
   const [selected, setSelected] = useState<string | null>(null);
+  const [pane, setPane] = useState<Pane>("connections");
+  // Search is not wired up yet; the box only holds text.
+  const [query, setQuery] = useState("");
 
   return (
     <aside className="flex h-full flex-col bg-sidebar">
-      <header
-        data-tauri-drag-region
-        className={cn(
-          "flex shrink-0 items-center justify-between pr-2",
-          isMac ? "h-13 pl-20" : "h-10 pl-3",
-        )}
-      >
-        <span
-          data-tauri-drag-region
-          className="font-semibold text-sm text-muted uppercase tracking-wide"
-        >
-          Connections
-        </span>
+      {/* Same height as the tab bar, so the top edge lines up across the window. The left of this
+          row stays empty: the window buttons (macOS) and the sidebar toggle are drawn over it. */}
+      <header data-tauri-drag-region className="flex h-9 shrink-0 items-center justify-end pr-2">
         <IconButton
           label="New connection"
           shortcut={`${modKey} N`}
@@ -44,24 +40,76 @@ export function Sidebar() {
         </IconButton>
       </header>
 
-      <div role="tree" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {ready && connections.length === 0 && (
-          <EmptyState onAdd={() => openDialog({ mode: "new" })} />
-        )}
-        {connections.map((config) => (
-          <ConnectionBranch
-            key={config.id}
-            config={config}
-            selected={selected}
-            onSelect={setSelected}
+      <div className="flex shrink-0 flex-col gap-2 px-2 pb-2">
+        <SegmentedTabs
+          label="Sidebar"
+          value={pane}
+          onChange={setPane}
+          tabs={[
+            { value: "connections", label: "Connections" },
+            { value: "favorites", label: "Favorites" },
+          ]}
+        />
+        <div className="relative">
+          <Search
+            size={13}
+            strokeWidth={1.75}
+            className="pointer-events-none absolute top-2.5 left-3 text-faint"
           />
-        ))}
+          <Input
+            type="search"
+            aria-label="Search"
+            value={query}
+            inputSize="lg"
+            placeholder="Filter"
+            onChange={(e) => setQuery(e.target.value)}
+            className="pr-8 pl-8 [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setQuery("")}
+              className="absolute top-1.5 right-1.5 inline-flex size-5 items-center justify-center rounded-sm text-faint transition-colors-fast hover:bg-hover hover:text-fg"
+            >
+              <X size={12} strokeWidth={2} />
+            </button>
+          )}
+        </div>
       </div>
+
+      {pane === "connections" ? (
+        <div role="tree" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+          {ready && connections.length === 0 && (
+            <EmptyState onAdd={() => openDialog({ mode: "new" })} />
+          )}
+          {connections.map((config) => (
+            <ConnectionBranch
+              key={config.id}
+              config={config}
+              selected={selected}
+              onSelect={setSelected}
+            />
+          ))}
+        </div>
+      ) : (
+        <FavoritesEmpty />
+      )}
 
       <footer className="shrink-0 px-3 pb-2 text-xs text-faint">
         {version ? `Quarry ${version}` : ""}
       </footer>
     </aside>
+  );
+}
+
+function FavoritesEmpty() {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center gap-2 px-4 pt-16 text-center">
+      <Star size={28} strokeWidth={1.5} className="text-faint" />
+      <p className="font-semibold text-base text-fg">No favorites yet</p>
+      <p className="text-sm text-muted">Pin tables and queries here for quick access.</p>
+    </div>
   );
 }
 

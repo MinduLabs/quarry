@@ -70,7 +70,7 @@ async fn wrong_password_is_auth_error() {
     let Err(err) = MysqlDriver::default().connect(&cfg).await else {
         panic!("expected error")
     };
-    assert!(matches!(err, DriverError::Auth), "{err:?}");
+    assert!(matches!(err, DriverError::Auth(_)), "{err:?}");
 }
 
 #[tokio::test]

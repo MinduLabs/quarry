@@ -15,10 +15,11 @@ pub type Result<T, E = DriverError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
-    #[error("connection failed: {0}")]
+    /// A ready-to-show, multi-line message (see the MySQL driver's `diagnose` module).
+    #[error("{0}")]
     Connect(String),
-    #[error("authentication failed")]
-    Auth,
+    #[error("{0}")]
+    Auth(String),
     #[error("query failed: {message}")]
     Query {
         message: String,

@@ -69,7 +69,7 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 
 - Spacing scale: 4px steps (`1` = 4px). Common: 4, 6, 8, 12, 16, 24.
 - Control height: 28px (`h-7`); small 24px (`h-6`). Icon buttons are square.
-- Bars: tab bar 36px, toolbar 36px, status bar 24px, sidebar header 40px (macOS: 52px to clear the traffic lights).
+- Bars: tab bar 36px, toolbar 36px, status bar 24px. The sidebar's top row has the same height as the tab bar (36px on both platforms, which also keeps the macOS window buttons, centred about 16px from the top, level with it).
 - Grid: row 26px, header 28px, cell padding 0 × 8px, row-number gutter 48px.
 - Radius: 4px (`rounded-sm`) inside dense rows, 6px (`rounded-md`) controls, 8px (`rounded-lg`) popovers/cards, 12px (`rounded-xl`) dialogs.
 - Shadows: `shadow-popover` for menus/tooltips, `shadow-dialog` for dialogs. Nothing else casts a shadow.
@@ -90,7 +90,9 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 └─────────────┴────────────────────────────────────────────────┘
 ```
 
-- The sidebar header is a window drag region (`data-tauri-drag-region`). On macOS it reserves 72px on the left for the traffic lights.
+- The sidebar's top row is a window drag region (`data-tauri-drag-region`). On macOS the window buttons sit at the left of that row, so it holds nothing there; on Linux the row shows the app name and the window buttons are drawn at the right of the tab bar.
+- Below it: a two-way switch (Connections / Favorites) and a Filter box (32px, 8px radius).
+- The sidebar hides and shows with the toggle next to the window buttons (`Ctrl/⌘ B`). It slides with a `transform`; the content area resizes at once. The toggle is drawn at the window level so it stays reachable while the sidebar is hidden.
 - No tabs open → centered empty state in the content area.
 
 ## Motion
@@ -115,6 +117,8 @@ Patterns (utility classes in `base.css`):
 ## Components
 
 **Buttons** — `primary` (accent fill, one per view), `secondary` (surface fill + hairline), `ghost` (transparent, toolbars), `danger` (destructive confirmations only). Text in sentence case: "New connection", "Run".
+
+**Shortcuts** — always drawn with `Kbd` (one key cap per key: `⌘ N`, `Ctrl ↵`), in tooltips and in the welcome screen; never as plain text.
 
 **Inputs** — 28px, `bg-app`, 1px `border-line-strong`, 6px radius, focus: accent border + 3px `accent-soft` ring. Labels above inputs, 12px muted.
 

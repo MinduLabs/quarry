@@ -1,6 +1,7 @@
 //! MySQL / MariaDB driver, built on `mysql_async` (TLS via rustls).
 
 mod convert;
+mod diagnose;
 
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,7 @@ use quarry_model::{Capabilities, DriverId, ObjectKind, SchemaObject, SslMode, Ta
 
 pub const DRIVER_ID: &str = "mysql";
 pub const DEFAULT_PORT: u16 = 3306;
+const DEFAULT_HOST: &str = "127.0.0.1";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Default)]
@@ -53,10 +55,15 @@ impl Driver for MysqlDriver {
 
     async fn connect(&self, config: &ResolvedConfig) -> Result<Box<dyn Session>> {
         let opts = build_opts(config);
+        let c = &config.config;
+        let target = diagnose::Target {
+            host: c.host.as_deref().unwrap_or(DEFAULT_HOST),
+            port: c.port.unwrap_or(DEFAULT_PORT),
+        };
         let mut conn = tokio::time::timeout(CONNECT_TIMEOUT, Conn::new(opts.clone()))
             .await
-            .map_err(|_| DriverError::Connect("timed out".to_owned()))?
-            .map_err(map_connect_err)?;
+            .map_err(|_| diagnose::timed_out(&target, CONNECT_TIMEOUT))?
+            .map_err(|err| diagnose::connect_error(&target, err))?;
         let version: Option<String> = conn
             .query_first("SELECT VERSION()")
             .await
@@ -85,7 +92,7 @@ fn build_opts(config: &ResolvedConfig) -> Opts {
         SslMode::VerifyFull => Some(SslOpts::default()),
     };
     OptsBuilder::default()
-        .ip_or_hostname(c.host.clone().unwrap_or_else(|| "127.0.0.1".to_owned()))
+        .ip_or_hostname(c.host.clone().unwrap_or_else(|| DEFAULT_HOST.to_owned()))
         .tcp_port(c.port.unwrap_or(DEFAULT_PORT))
         .user(c.user.clone())
         .pass(config.password.clone())
@@ -317,15 +324,6 @@ impl Dialect for MysqlDialect {
         } else {
             format!("SELECT * FROM {name} LIMIT {limit} OFFSET {offset}")
         }
-    }
-}
-
-fn map_connect_err(err: mysql_async::Error) -> DriverError {
-    match err {
-        mysql_async::Error::Server(ref e) if e.code == 1045 => DriverError::Auth,
-        mysql_async::Error::Server(e) => DriverError::Connect(e.message),
-        mysql_async::Error::Io(e) => DriverError::Connect(e.to_string()),
-        other => DriverError::Connect(other.to_string()),
     }
 }
 

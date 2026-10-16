@@ -1,5 +1,6 @@
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import type { ReactNode } from "react";
+import { Kbd } from "./Kbd";
 
 export function TooltipProvider({ children }: { children: ReactNode }) {
   return (
@@ -28,7 +29,7 @@ export function Tooltip({
           className="animate-pop z-50 flex items-center gap-2 rounded-md bg-elevated px-2 py-1 text-sm text-fg shadow-popover"
         >
           {content}
-          {shortcut && <kbd className="font-sans text-xs text-muted">{shortcut}</kbd>}
+          {shortcut && <Kbd keys={shortcut} />}
         </RadixTooltip.Content>
       </RadixTooltip.Portal>
     </RadixTooltip.Root>

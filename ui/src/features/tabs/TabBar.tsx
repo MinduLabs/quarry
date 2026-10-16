@@ -2,19 +2,27 @@ import { Plus, X } from "lucide-react";
 import { IconButton } from "@/components/ui/IconButton";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/cn";
-import { modKey } from "@/lib/platform";
+import { isMac, modKey } from "@/lib/platform";
 import { useApp } from "@/store/app";
 
 export function TabBar() {
   const tabs = useApp((s) => s.tabs);
   const activeId = useApp((s) => s.activeTabId);
+  const sidebarOpen = useApp((s) => s.sidebarOpen);
   const { selectTab, closeTab, newQuery } = useApp.getState();
 
   return (
     <div
       data-tauri-drag-region
       role="tablist"
-      className="flex h-9 shrink-0 items-center gap-1 border-line border-b bg-surface px-2"
+      className={cn(
+        // Same height as the sidebar's top row.
+        "flex h-9 shrink-0 items-center gap-1 border-line border-b bg-surface",
+        // Hidden sidebar: the window buttons (macOS) and the toggle now sit over the tab bar.
+        sidebarOpen ? "pl-2" : isMac ? "pl-32" : "pl-12",
+        // Leave room for the window controls drawn over the right edge.
+        isMac ? "pr-2" : "pr-36",
+      )}
     >
       {tabs.map((tab) => {
         const active = tab.id === activeId;
