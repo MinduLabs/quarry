@@ -29,7 +29,7 @@ jobs:
           curl -sSfL -o /tmp/flatpak-cargo-generator.py \
             https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
           python3 /tmp/flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ui-dist
           path: |
@@ -54,7 +54,7 @@ jobs:
           manifest-path: packaging/flatpak/io.github.mindulabs.Quarry.json
           cache-key: flatpak-builder-${{ github.sha }}
           upload-artifact: false
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-flatpak
           path: quarry-${{ github.ref_name }}.flatpak
@@ -75,7 +75,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
       - run: pnpm tauri build --bundles appimage,deb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux
           path: |
@@ -96,7 +96,7 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - run: pnpm install --frozen-lockfile
       - run: pnpm tauri build --target universal-apple-darwin --bundles dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos
           path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
