@@ -49,7 +49,7 @@ dmg:
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     pnpm tauri build --target universal-apple-darwin --bundles dmg
 
-# macOS from Linux: dist/macos/Quarry.app + .dmg (universal, ad-hoc signed, not notarized).
+# macOS from Linux: dist/macos/Quarry.app + .app.zip (universal, ad-hoc signed, not notarized; no .dmg, use `just dmg` on a Mac).
 # Fast build by default (~40 s warm); `just mac-cross 1` for the full-LTO release profile.
 mac-cross release="0":
     pnpm build
