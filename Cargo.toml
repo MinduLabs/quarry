@@ -1,0 +1,70 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/model",
+    "crates/driver-api",
+    "crates/sql",
+    "crates/store",
+    "crates/tunnel",
+    "crates/drivers/mysql",
+    "crates/engine",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.92"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/MinduLabs/quarry"
+authors = ["Quarry contributors"]
+
+[workspace.dependencies]
+# Internal crates
+quarry-model = { path = "crates/model" }
+quarry-driver-api = { path = "crates/driver-api" }
+quarry-sql = { path = "crates/sql" }
+quarry-store = { path = "crates/store" }
+quarry-tunnel = { path = "crates/tunnel" }
+quarry-engine = { path = "crates/engine" }
+quarry-driver-mysql = { path = "crates/drivers/mysql" }
+
+# Core
+async-channel = "2.5"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+mysql_async = { version = "0.37", default-features = false, features = ["default-rustls-ring"] }
+oo7 = { version = "0.6", default-features = false, features = ["tokio", "native_crypto"] }
+directories = "6"
+toml = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# UI — API giới hạn ở GTK 4.14 / libadwaita 1.5 (ADR 0004)
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+sourceview5 = "0.11"
+relm4 = { version = "0.11", features = ["libadwaita"] }
+gettext-rs = { version = "0.8", features = ["gettext-system"] }
+glib-build-tools = "0.22"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

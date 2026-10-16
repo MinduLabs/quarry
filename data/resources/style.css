@@ -1,0 +1,132 @@
+/*
+ * Quarry — base stylesheet.
+ * Quy tắc: xem docs/design/STYLE-GUIDE.md.
+ *
+ * - Màu nền/chữ/accent: CHỈ dùng named color của libadwaita (@window_bg_color, @accent_color, …).
+ * - Màu ngữ nghĩa riêng của Quarry khai báo ở đây bằng @define-color, tiền tố quarry_.
+ *   (Không dùng CSS variables vì baseline là GTK 4.14 — ADR 0004.)
+ * - Class riêng có tiền tố .quarry-
+ * - AdwApplication tự nạp file này; style-dark.css (nếu có) chỉ chứa phần override cho chế độ tối.
+ */
+
+/* ---------- Màu ngữ nghĩa ---------- */
+
+/* Môi trường connection (lấy từ bảng màu GNOME) */
+@define-color quarry_env_local #2ec27e;      /* green 4 */
+@define-color quarry_env_staging #e5a50a;    /* yellow 5 */
+@define-color quarry_env_production #e01b24; /* red 3 */
+
+/* Trạng thái cell trong data grid (trộn nhẹ trên nền view) */
+@define-color quarry_cell_modified alpha(@warning_color, 0.18);
+@define-color quarry_cell_inserted alpha(@success_color, 0.18);
+@define-color quarry_cell_deleted alpha(@error_color, 0.18);
+@define-color quarry_cell_null alpha(@view_fg_color, 0.45);
+@define-color quarry_grid_line alpha(@view_fg_color, 0.07);
+@define-color quarry_row_alt alpha(@view_fg_color, 0.025);
+
+/* ---------- Chrome ---------- */
+
+.quarry-sidebar-footer {
+  padding: 6px 12px;
+}
+
+/* Viền màu môi trường quanh vùng nội dung */
+.quarry-env-staging {
+  box-shadow: inset 0 2px @quarry_env_staging;
+}
+
+.quarry-env-production {
+  box-shadow: inset 0 2px @quarry_env_production;
+}
+
+/* Badge môi trường: luôn có chữ, không chỉ màu (accessibility) */
+.quarry-env-badge {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: white;
+}
+
+.quarry-env-badge.local {
+  background-color: @quarry_env_local;
+}
+
+.quarry-env-badge.staging {
+  background-color: @quarry_env_staging;
+  color: rgba(0, 0, 0, 0.8);
+}
+
+.quarry-env-badge.production {
+  background-color: @quarry_env_production;
+}
+
+/* ---------- Vùng dữ liệu ---------- */
+
+.quarry-monospace,
+.quarry-grid,
+.quarry-editor {
+  font-family: monospace;
+  font-feature-settings: "tnum";
+}
+
+.quarry-null {
+  color: @quarry_cell_null;
+  font-style: italic;
+}
+
+/* ---------- Chuyển động ---------- */
+
+/* Thời lượng chuẩn: 150ms (hover/nhỏ), 200ms (xuất hiện), 250ms (panel). Ease-out. */
+.quarry-fade {
+  transition: opacity 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* ---------- Empty states ---------- */
+
+.quarry-empty {
+  padding: 24px 18px;
+}
+
+.quarry-empty .pill {
+  padding: 6px 18px;
+  min-height: 0;
+}
+
+/* ---------- Sidebar ---------- */
+
+.quarry-connected-dot {
+  min-width: 6px;
+  min-height: 6px;
+  border-radius: 3px;
+  background-color: @quarry_env_local;
+}
+
+/* ---------- Query tab ---------- */
+
+.quarry-tab-toolbar {
+  padding: 3px 6px;
+}
+
+.quarry-status-bar {
+  padding: 3px 12px;
+  min-height: 24px;
+}
+
+.quarry-status-bar stackswitcher button {
+  padding: 0 8px;
+  min-height: 20px;
+}
+
+.quarry-status-bar .error {
+  color: @error_color;
+}
+
+.quarry-editor {
+  font-size: 0.95em;
+}
+
+.quarry-grid {
+  font-size: 0.9em;
+}

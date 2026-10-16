@@ -1,0 +1,21 @@
+# Database dùng cho integration test và chạy thử app.
+#   docker compose -f tests/docker-compose.yml up -d
+# MySQL: 127.0.0.1:13306, user quarry / password quarry (giá trị test, không dùng cho môi trường thật)
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: quarry-test-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: quarry-root
+      MYSQL_USER: quarry
+      MYSQL_PASSWORD: quarry
+      MYSQL_DATABASE: shop
+    ports:
+      - "127.0.0.1:13306:3306"
+    volumes:
+      - ./fixtures/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uquarry", "-pquarry"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

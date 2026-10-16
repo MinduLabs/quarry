@@ -1,0 +1,50 @@
+# cargo-deny: chặn advisory bảo mật và license không tương thích.
+# Lý do chặn GPL/AGPL của bên thứ ba: xem docs/architecture/adr/0002-agpl-single-repo-license-key.md
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Danh sách allow là chính sách chung, không phải crate nào cũng dùng hết.
+unused-allowed-license = "allow"
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "LGPL-2.1-or-later",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CDLA-Permissive-2.0",
+]
+# Crate của chính Quarry dùng AGPL.
+exceptions = [
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-model" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-driver-api" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-sql" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-store" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-tunnel" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-engine" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-driver-mysql" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

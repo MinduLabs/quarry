@@ -1,0 +1,34 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Steps to reproduce, what you expected and what you saw.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Quarry version
+      placeholder: "0.0.1 (About dialog)"
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and desktop
+      placeholder: "Ubuntu 24.04, GNOME 46, Wayland"
+  - type: input
+    id: database
+    attributes:
+      label: Database and version
+      placeholder: "PostgreSQL 16"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `QUARRY_LOG=debug` (Flatpak — `flatpak run --env=QUARRY_LOG=debug io.github.mindulabs.Quarry`). Remove passwords and hostnames.
+      render: text

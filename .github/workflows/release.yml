@@ -1,0 +1,33 @@
+name: Release
+
+# Push tag dạng v0.1.0 → build Flatpak → tạo GitHub Release kèm file .flatpak
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: quarry-${{ github.ref_name }}.flatpak
+          manifest-path: build-aux/flatpak/io.github.mindulabs.Quarry.json
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+      - name: Checksums
+        run: sha256sum quarry-${{ github.ref_name }}.flatpak > SHA256SUMS
+      - uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            quarry-${{ github.ref_name }}.flatpak
+            SHA256SUMS

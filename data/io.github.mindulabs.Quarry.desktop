@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Quarry
+GenericName=Database Client
+Comment=Query and edit PostgreSQL, MySQL and SQLite databases
+Exec=quarry
+Icon=io.github.mindulabs.Quarry
+Terminal=false
+Type=Application
+Categories=Development;Database;GTK;
+Keywords=sql;database;postgres;postgresql;mysql;mariadb;sqlite;query;
+StartupNotify=true
+DBusActivatable=false

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mindulabs.Quarry</id>
+  <name>Quarry</name>
+  <summary>Query and edit your databases</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="io.github.mindulabs">
+    <name>Quarry contributors</name>
+  </developer>
+  <description>
+    <p>Quarry is a fast, native database client for Linux. Browse schemas, run SQL and edit data safely in PostgreSQL, MySQL, MariaDB and SQLite.</p>
+    <p>Quarry is in early development.</p>
+  </description>
+  <launchable type="desktop-id">io.github.mindulabs.Quarry.desktop</launchable>
+  <url type="homepage">https://github.com/MinduLabs/quarry</url>
+  <url type="bugtracker">https://github.com/MinduLabs/quarry/issues</url>
+  <url type="vcs-browser">https://github.com/MinduLabs/quarry</url>
+  <content_rating type="oars-1.1"/>
+  <branding>
+    <color type="primary" scheme_preference="light">#d9dee4</color>
+    <color type="primary" scheme_preference="dark">#3d4a57</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <releases>
+    <release version="0.0.1" date="2026-10-16">
+      <description>
+        <p>First development build: application skeleton.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Đường dẫn file tính từ thư mục data/. AdwApplication tự nạp style.css và icons/ dưới resource base path. -->
+<gresources>
+  <gresource prefix="/io/github/mindulabs/Quarry">
+    <file alias="style.css">resources/style.css</file>
+    <file alias="icons/scalable/apps/io.github.mindulabs.Quarry.svg">icons/hicolor/scalable/apps/io.github.mindulabs.Quarry.svg</file>
+    <file alias="icons/symbolic/apps/io.github.mindulabs.Quarry-symbolic.svg">icons/hicolor/symbolic/apps/io.github.mindulabs.Quarry-symbolic.svg</file>
+  </gresource>
+</gresources>

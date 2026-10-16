@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Concept A: khối đá 3/4, mặt trước là lưới bảng, một ô hổ phách (ô dữ liệu được "đào" ra) -->
+  <g stroke-linejoin="round" stroke-width="8">
+    <path d="M100 42 118 22v68l-18 20z" fill="#3D4A57" stroke="#3D4A57"/>
+    <path d="M14 42 32 22h86l-18 20z" fill="#9AA7B4" stroke="#9AA7B4"/>
+    <path d="M14 42h86v68H14z" fill="#5E6C7A" stroke="#5E6C7A"/>
+  </g>
+  <path d="M46 34l10-5 8 3 14-6" fill="none" stroke="#E8A33D" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#8E9CAA">
+    <rect x="20" y="50" width="22" height="10" rx="3"/>
+    <rect x="46" y="50" width="22" height="10" rx="3"/>
+    <rect x="72" y="50" width="22" height="10" rx="3"/>
+  </g>
+  <g fill="#70808F">
+    <rect x="20" y="66" width="22" height="10" rx="3"/>
+    <rect x="72" y="66" width="22" height="10" rx="3"/>
+    <rect x="20" y="82" width="22" height="10" rx="3"/>
+    <rect x="46" y="82" width="22" height="10" rx="3"/>
+    <rect x="72" y="82" width="22" height="10" rx="3"/>
+    <rect x="20" y="98" width="22" height="8" rx="3"/>
+    <rect x="46" y="98" width="22" height="8" rx="3"/>
+    <rect x="72" y="98" width="22" height="8" rx="3"/>
+  </g>
+  <rect x="46" y="66" width="22" height="10" rx="3" fill="#E8A33D"/>
+</svg>

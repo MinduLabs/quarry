@@ -1,0 +1,27 @@
+[package]
+name = "quarry-engine"
+description = "Headless application core: connection manager, query execution, change sets, safety."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+quarry-model.workspace = true
+quarry-driver-api.workspace = true
+quarry-driver-mysql.workspace = true
+quarry-store.workspace = true
+quarry-sql.workspace = true
+async-channel.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+uuid.workspace = true
+
+[lints]
+workspace = true

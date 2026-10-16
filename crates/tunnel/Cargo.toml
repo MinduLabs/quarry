@@ -1,0 +1,15 @@
+[package]
+name = "quarry-tunnel"
+description = "SSH local port forwarding for database connections."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+quarry-model.workspace = true
+
+[lints]
+workspace = true
