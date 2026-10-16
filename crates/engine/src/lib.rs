@@ -67,19 +67,23 @@ impl EngineHandle {
             .enable_all()
             .build()?;
 
-        thread::Builder::new().name("quarry-engine-main".into()).spawn(move || {
-            runtime.block_on(async move {
-                let engine = Arc::new(Engine::new(options, event_tx));
-                run(engine, cmd_rx).await;
-            });
-        })?;
+        thread::Builder::new()
+            .name("quarry-engine-main".into())
+            .spawn(move || {
+                runtime.block_on(async move {
+                    let engine = Arc::new(Engine::new(options, event_tx));
+                    run(engine, cmd_rx).await;
+                });
+            })?;
 
         Ok((Self { commands: cmd_tx }, event_rx))
     }
 
     /// Queue a command. Results arrive later as [`Event`]s.
     pub fn send(&self, command: Command) -> Result<(), EngineError> {
-        self.commands.try_send(command).map_err(|_| EngineError::Stopped)
+        self.commands
+            .try_send(command)
+            .map_err(|_| EngineError::Stopped)
     }
 }
 
@@ -118,7 +122,9 @@ struct Engine {
 
 /// These `std` mutexes are only held briefly; a poisoned lock still holds valid data.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Engine {
@@ -126,7 +132,11 @@ impl Engine {
         let mut registry = DriverRegistry::default();
         registry.register(Box::new(quarry_driver_mysql::MysqlDriver::default()));
 
-        let config = match options.config_dir.map(Ok).unwrap_or_else(quarry_store::default_config_dir) {
+        let config = match options
+            .config_dir
+            .map(Ok)
+            .unwrap_or_else(quarry_store::default_config_dir)
+        {
             Ok(dir) => Some(ConfigStore::new(dir)),
             Err(err) => {
                 tracing::error!(%err, "no config directory; connections will not be saved");
@@ -153,33 +163,65 @@ impl Engine {
     }
 
     fn notice(&self, kind: NoticeKind, message: impl Into<String>) {
-        self.emit(Event::Notice { kind, message: message.into() });
+        self.emit(Event::Notice {
+            kind,
+            message: message.into(),
+        });
     }
 
     async fn handle(self: Arc<Self>, command: Command) {
         match command {
-            Command::Ping { id } => self.emit(Event::Pong { id, version: VERSION.to_owned() }),
+            Command::Ping { id } => self.emit(Event::Pong {
+                id,
+                version: VERSION.to_owned(),
+            }),
             Command::LoadConnections => self.load_connections(),
-            Command::SaveConnection { config, password, remember_password } => {
-                self.save_connection(config, password, remember_password).await;
+            Command::SaveConnection {
+                config,
+                password,
+                remember_password,
+            } => {
+                self.save_connection(config, password, remember_password)
+                    .await;
             }
             Command::DeleteConnection { id } => self.delete_connection(id).await,
-            Command::TestConnection { request, config, password } => {
+            Command::TestConnection {
+                request,
+                config,
+                password,
+            } => {
                 let (server_version, error) = match self.test_connection(config, password).await {
                     Ok(version) => (Some(version), None),
                     Err(err) => (None, Some(err)),
                 };
-                self.emit(Event::TestResult { request, server_version, error });
+                self.emit(Event::TestResult {
+                    request,
+                    server_version,
+                    error,
+                });
             }
             Command::Connect { id } => self.connect(id).await,
             Command::Disconnect { id } => self.disconnect(id).await,
             Command::LoadObjects { id, database } => self.load_objects(id, database).await,
-            Command::Run { tab, conn, database, sql, confirmed } => {
+            Command::Run {
+                tab,
+                conn,
+                database,
+                sql,
+                confirmed,
+            } => {
                 if !confirmed
-                    && let Some(message) =
-                        self.config_of(conn).and_then(|c| safety_check(c.environment, &sql))
+                    && let Some(message) = self
+                        .config_of(conn)
+                        .and_then(|c| safety_check(c.environment, &sql))
                 {
-                    self.emit(Event::ConfirmRequired { tab, conn, database, sql, message });
+                    self.emit(Event::ConfirmRequired {
+                        tab,
+                        conn,
+                        database,
+                        sql,
+                        message,
+                    });
                     return;
                 }
                 self.run_query(tab, conn, database, sql).await;
@@ -193,7 +235,9 @@ impl Engine {
 
     fn load_connections(&self) {
         let Some(store) = &self.config else {
-            self.emit(Event::Connections { connections: Vec::new() });
+            self.emit(Event::Connections {
+                connections: Vec::new(),
+            });
             return;
         };
         match store.load_connections() {
@@ -201,7 +245,10 @@ impl Engine {
                 *lock(&self.connections) = list.clone();
                 self.emit(Event::Connections { connections: list });
             }
-            Err(err) => self.notice(NoticeKind::Error, format!("Couldn't read saved connections: {err}")),
+            Err(err) => self.notice(
+                NoticeKind::Error,
+                format!("Couldn't read saved connections: {err}"),
+            ),
         }
     }
 
@@ -210,7 +257,10 @@ impl Engine {
         if let Some(store) = &self.config
             && let Err(err) = store.save_connections(&list)
         {
-            self.notice(NoticeKind::Error, format!("Couldn't save connections: {err}"));
+            self.notice(
+                NoticeKind::Error,
+                format!("Couldn't save connections: {err}"),
+            );
         }
         list
     }
@@ -246,7 +296,9 @@ impl Engine {
                     if remember_password {
                         self.notice(
                             NoticeKind::Warning,
-                            format!("Password kept for this session only — keyring unavailable: {err}"),
+                            format!(
+                                "Password kept for this session only — keyring unavailable: {err}"
+                            ),
                         );
                     }
                 }
@@ -275,7 +327,11 @@ impl Engine {
 
     // ---------- Sessions ----------
 
-    async fn resolve(&self, config: ConnectionConfig, password: Option<Password>) -> ResolvedConfig {
+    async fn resolve(
+        &self,
+        config: ConnectionConfig,
+        password: Option<Password>,
+    ) -> ResolvedConfig {
         let password = match password {
             Some(Password(p)) => Some(p),
             None => self.stored_password(config.id).await,
@@ -308,7 +364,10 @@ impl Engine {
             .ok_or_else(|| format!("No driver for “{}”", resolved.config.driver.0))?;
         let mut session = driver.connect(resolved).await.map_err(|e| describe(&e))?;
         if resolved.config.read_only {
-            session.set_read_only(true).await.map_err(|e| describe(&e))?;
+            session
+                .set_read_only(true)
+                .await
+                .map_err(|e| describe(&e))?;
         }
         Ok(session)
     }
@@ -330,10 +389,18 @@ impl Engine {
     }
 
     async fn connect(&self, id: ConnId) {
-        let Some(config) = self.config_of(id) else { return };
-        self.emit(Event::ConnState { id, state: ConnState::Connecting });
+        let Some(config) = self.config_of(id) else {
+            return;
+        };
+        self.emit(Event::ConnState {
+            id,
+            state: ConnState::Connecting,
+        });
 
-        let failed = |error: String| Event::ConnState { id, state: ConnState::Failed { error } };
+        let failed = |error: String| Event::ConnState {
+            id,
+            state: ConnState::Failed { error },
+        };
         let resolved = self.resolve(config, None).await;
         let mut session = match self.open_session(&resolved).await {
             Ok(session) => session,
@@ -345,7 +412,10 @@ impl Engine {
         };
         let server_version = session.server_version();
         lock(&self.meta).insert(id, Arc::new(tokio::sync::Mutex::new(session)));
-        self.emit(Event::ConnState { id, state: ConnState::Connected { server_version } });
+        self.emit(Event::ConnState {
+            id,
+            state: ConnState::Connected { server_version },
+        });
         self.emit(Event::Databases { id, databases });
     }
 
@@ -353,9 +423,15 @@ impl Engine {
         // Cancel running queries on this connection first, otherwise we would wait for them.
         let running: Vec<SharedCancel> = {
             let mut cancels = lock(&self.cancels);
-            let ids: Vec<TabId> =
-                cancels.iter().filter(|(_, (c, _))| *c == id).map(|(t, _)| *t).collect();
-            ids.iter().filter_map(|t| cancels.remove(t)).map(|(_, c)| c).collect()
+            let ids: Vec<TabId> = cancels
+                .iter()
+                .filter(|(_, (c, _))| *c == id)
+                .map(|(t, _)| *t)
+                .collect();
+            ids.iter()
+                .filter_map(|t| cancels.remove(t))
+                .map(|(_, c)| c)
+                .collect()
         };
         for cancel in running {
             cancel.cancel();
@@ -376,21 +452,34 @@ impl Engine {
             close_shared(session).await;
         }
         if had_sessions {
-            self.emit(Event::ConnState { id, state: ConnState::Disconnected });
+            self.emit(Event::ConnState {
+                id,
+                state: ConnState::Disconnected,
+            });
         }
     }
 
     async fn load_objects(&self, id: ConnId, database: String) {
         let Some(meta) = lock(&self.meta).get(&id).cloned() else {
             let error = Some("Not connected".to_owned());
-            return self.emit(Event::Objects { id, database, objects: None, error });
+            return self.emit(Event::Objects {
+                id,
+                database,
+                objects: None,
+                error,
+            });
         };
         let result = meta.lock().await.list_objects(&database).await;
         let (objects, error) = match result {
             Ok(objects) => (Some(objects), None),
             Err(err) => (None, Some(describe(&err))),
         };
-        self.emit(Event::Objects { id, database, objects, error });
+        self.emit(Event::Objects {
+            id,
+            database,
+            objects,
+            error,
+        });
     }
 
     // ---------- Queries ----------
@@ -401,7 +490,11 @@ impl Engine {
 
     async fn run_query(&self, tab: TabId, conn: ConnId, database: Option<String>, sql: String) {
         self.emit(Event::QueryStarted { tab });
-        let failed = |error: String| Event::QueryFailed { tab, error, cancelled: false };
+        let failed = |error: String| Event::QueryFailed {
+            tab,
+            error,
+            cancelled: false,
+        };
         let slot = self.tab_slot(tab);
         let mut slot = slot.lock().await;
 
@@ -428,7 +521,9 @@ impl Engine {
                 Err(error) => return self.emit(failed(error)),
             }
         }
-        let Some(tab_session) = slot.as_mut() else { return };
+        let Some(tab_session) = slot.as_mut() else {
+            return;
+        };
         let mut session = tab_session.session.lock().await;
 
         if let Some(db) = database.filter(|db| tab_session.database.as_ref() != Some(db)) {
@@ -445,12 +540,25 @@ impl Engine {
             let event = match item {
                 ExecItem::Columns(columns) => Event::ResultColumns { tab, set, columns },
                 ExecItem::Rows(rows) => Event::ResultRows { tab, set, rows },
-                ExecItem::SetDone { affected, rows, truncated } => {
-                    let event = Event::ResultDone { tab, set, affected, rows, truncated };
+                ExecItem::SetDone {
+                    affected,
+                    rows,
+                    truncated,
+                } => {
+                    let event = Event::ResultDone {
+                        tab,
+                        set,
+                        affected,
+                        rows,
+                        truncated,
+                    };
                     set += 1;
                     event
                 }
-                ExecItem::Notice(message) => Event::Notice { kind: NoticeKind::Info, message },
+                ExecItem::Notice(message) => Event::Notice {
+                    kind: NoticeKind::Info,
+                    message,
+                },
                 ExecItem::Done { elapsed: e } => {
                     elapsed = e;
                     return;
@@ -505,7 +613,10 @@ async fn close_shared(session: SharedSession) {
 /// - production: any statement that is not a read
 fn safety_check(environment: Environment, sql: &str) -> Option<String> {
     use quarry_sql::StatementKind;
-    let worst = quarry_sql::split(sql).into_iter().map(|r| quarry_sql::classify(&sql[r])).max()?;
+    let worst = quarry_sql::split(sql)
+        .into_iter()
+        .map(|r| quarry_sql::classify(&sql[r]))
+        .max()?;
     match (environment, worst) {
         (Environment::Local, _) | (_, StatementKind::Read) => None,
         (_, StatementKind::Destructive) => Some(
@@ -538,14 +649,21 @@ mod tests {
 
     fn test_engine() -> (EngineHandle, EngineEvents) {
         let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-        EngineHandle::spawn_with(EngineOptions { config_dir: Some(dir), disable_keyring: true }).unwrap()
+        EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir),
+            disable_keyring: true,
+        })
+        .unwrap()
     }
 
     #[test]
     fn safe_mode_rules() {
         use Environment::*;
         assert_eq!(safety_check(Local, "DROP TABLE t"), None);
-        assert_eq!(safety_check(Staging, "UPDATE t SET a = 1 WHERE id = 1"), None);
+        assert_eq!(
+            safety_check(Staging, "UPDATE t SET a = 1 WHERE id = 1"),
+            None
+        );
         assert!(safety_check(Staging, "SELECT 1; DELETE FROM t").is_some());
         assert_eq!(safety_check(Production, "SELECT 1; SHOW TABLES"), None);
         assert!(safety_check(Production, "INSERT INTO t VALUES (1)").is_some());
@@ -612,7 +730,9 @@ mod mysql_tests {
                 }
             }
         };
-        tokio::time::timeout(Duration::from_secs(20), wait).await.unwrap()
+        tokio::time::timeout(Duration::from_secs(20), wait)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -620,9 +740,11 @@ mod mysql_tests {
         let Some(config) = config() else { return };
         let id = config.id;
         let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-        let (engine, events) =
-            EngineHandle::spawn_with(EngineOptions { config_dir: Some(dir.clone()), disable_keyring: true })
-                .unwrap();
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir.clone()),
+            disable_keyring: true,
+        })
+        .unwrap();
 
         engine
             .send(Command::SaveConnection {
@@ -638,7 +760,10 @@ mod mysql_tests {
         };
         assert_eq!(connections.len(), 1);
         let saved = std::fs::read_to_string(dir.join("connections.toml")).unwrap();
-        assert!(!saved.contains("password"), "passwords must never be written to disk");
+        assert!(
+            !saved.contains("password"),
+            "passwords must never be written to disk"
+        );
 
         engine.send(Command::Connect { id }).unwrap();
         let Event::Databases { databases, .. } =
@@ -648,7 +773,12 @@ mod mysql_tests {
         };
         assert!(databases.contains(&"shop".to_owned()));
 
-        engine.send(Command::LoadObjects { id, database: "shop".into() }).unwrap();
+        engine
+            .send(Command::LoadObjects {
+                id,
+                database: "shop".into(),
+            })
+            .unwrap();
         let Event::Objects { objects, .. } =
             next_matching(&events, |e| matches!(e, Event::Objects { .. })).await
         else {
@@ -671,7 +801,10 @@ mod mysql_tests {
             unreachable!()
         };
         assert_eq!(rows[0][0], quarry_model::Value::Int(5000));
-        next_matching(&events, |e| matches!(e, Event::QueryFinished { tab: 1, .. })).await;
+        next_matching(&events, |e| {
+            matches!(e, Event::QueryFinished { tab: 1, .. })
+        })
+        .await;
 
         // Cancel a long query.
         engine
@@ -688,7 +821,10 @@ mod mysql_tests {
         engine.send(Command::Cancel { tab: 1 }).unwrap();
         let started = std::time::Instant::now();
         next_matching(&events, |e| {
-            matches!(e, Event::QueryFinished { tab: 1, .. } | Event::QueryFailed { tab: 1, .. })
+            matches!(
+                e,
+                Event::QueryFinished { tab: 1, .. } | Event::QueryFailed { tab: 1, .. }
+            )
         })
         .await;
         assert!(started.elapsed() < Duration::from_secs(5));

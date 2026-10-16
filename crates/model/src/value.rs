@@ -16,13 +16,25 @@ use uuid::Uuid;
 pub enum Value {
     Null,
     Bool(bool),
-    Int(#[serde(with = "as_string")] #[ts(type = "string")] i64),
-    UInt(#[serde(with = "as_string")] #[ts(type = "string")] u64),
+    Int(
+        #[serde(with = "as_string")]
+        #[ts(type = "string")]
+        i64,
+    ),
+    UInt(
+        #[serde(with = "as_string")]
+        #[ts(type = "string")]
+        u64,
+    ),
     Float(f64),
     /// Kept as text to avoid losing precision.
     Decimal(String),
     Text(String),
-    Bytes(#[serde(with = "as_hex")] #[ts(type = "string")] Vec<u8>),
+    Bytes(
+        #[serde(with = "as_hex")]
+        #[ts(type = "string")]
+        Vec<u8>,
+    ),
     Date(NaiveDate),
     Time(NaiveTime),
     Timestamp(NaiveDateTime),
@@ -30,7 +42,10 @@ pub enum Value {
     Uuid(Uuid),
     Json(String),
     Array(Vec<Value>),
-    Other { type_name: String, text: String },
+    Other {
+        type_name: String,
+        text: String,
+    },
 }
 
 /// Serialize integers as decimal strings.

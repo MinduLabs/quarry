@@ -28,25 +28,54 @@ impl fmt::Debug for Password {
 #[ts(export)]
 pub enum Command {
     /// Liveness check → `Event::Pong`.
-    Ping { id: u32 },
+    Ping {
+        id: u32,
+    },
     /// Read saved connections → `Event::Connections`.
     LoadConnections,
     /// Insert or update a connection (matched by `config.id`).
     /// `password: null` keeps the current password.
-    SaveConnection { config: ConnectionConfig, password: Option<Password>, remember_password: bool },
-    DeleteConnection { id: ConnId },
+    SaveConnection {
+        config: ConnectionConfig,
+        password: Option<Password>,
+        remember_password: bool,
+    },
+    DeleteConnection {
+        id: ConnId,
+    },
     /// Try an unsaved configuration → `Event::TestResult`.
-    TestConnection { request: RequestId, config: ConnectionConfig, password: Option<Password> },
+    TestConnection {
+        request: RequestId,
+        config: ConnectionConfig,
+        password: Option<Password>,
+    },
     /// Open the metadata session and list databases.
-    Connect { id: ConnId },
-    Disconnect { id: ConnId },
+    Connect {
+        id: ConnId,
+    },
+    Disconnect {
+        id: ConnId,
+    },
     /// List tables, views and routines of a database → `Event::Objects`.
-    LoadObjects { id: ConnId, database: String },
+    LoadObjects {
+        id: ConnId,
+        database: String,
+    },
     /// Run SQL on the tab's session (opened on first use).
     /// On staging/production the engine may answer `Event::ConfirmRequired` instead;
     /// the client asks the user and resends with `confirmed: true`.
-    Run { tab: TabId, conn: ConnId, database: Option<String>, sql: String, confirmed: bool },
-    Cancel { tab: TabId },
+    Run {
+        tab: TabId,
+        conn: ConnId,
+        database: Option<String>,
+        sql: String,
+        confirmed: bool,
+    },
+    Cancel {
+        tab: TabId,
+    },
     /// Close the tab's session.
-    CloseTab { tab: TabId },
+    CloseTab {
+        tab: TabId,
+    },
 }

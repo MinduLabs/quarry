@@ -14,28 +14,46 @@ pub struct SecretStore;
 #[cfg(target_os = "linux")]
 impl SecretStore {
     fn attributes(id: ConnId) -> [(&'static str, String); 2] {
-        [("application", SERVICE.to_owned()), ("connection", id.0.to_string())]
+        [
+            ("application", SERVICE.to_owned()),
+            ("connection", id.0.to_string()),
+        ]
     }
 
     pub async fn get_password(&self, id: ConnId) -> Result<Option<String>> {
         let keyring = oo7::Keyring::new().await.map_err(keyring_err)?;
-        let items = keyring.search_items(&Self::attributes(id)).await.map_err(keyring_err)?;
-        let Some(item) = items.first() else { return Ok(None) };
+        let items = keyring
+            .search_items(&Self::attributes(id))
+            .await
+            .map_err(keyring_err)?;
+        let Some(item) = items.first() else {
+            return Ok(None);
+        };
         let secret = item.secret().await.map_err(keyring_err)?;
-        Ok(Some(String::from_utf8_lossy(secret.as_bytes()).into_owned()))
+        Ok(Some(
+            String::from_utf8_lossy(secret.as_bytes()).into_owned(),
+        ))
     }
 
     pub async fn set_password(&self, id: ConnId, label: &str, password: &str) -> Result<()> {
         let keyring = oo7::Keyring::new().await.map_err(keyring_err)?;
         keyring
-            .create_item(&format!("Quarry: {label}"), &Self::attributes(id), oo7::Secret::text(password), true)
+            .create_item(
+                &format!("Quarry: {label}"),
+                &Self::attributes(id),
+                oo7::Secret::text(password),
+                true,
+            )
             .await
             .map_err(keyring_err)
     }
 
     pub async fn delete_password(&self, id: ConnId) -> Result<()> {
         let keyring = oo7::Keyring::new().await.map_err(keyring_err)?;
-        keyring.delete(&Self::attributes(id)).await.map_err(keyring_err)
+        keyring
+            .delete(&Self::attributes(id))
+            .await
+            .map_err(keyring_err)
     }
 }
 
@@ -54,8 +72,12 @@ impl SecretStore {
     }
 
     pub async fn set_password(&self, id: ConnId, _label: &str, password: &str) -> Result<()> {
-        security_framework::passwords::set_generic_password(SERVICE, &id.0.to_string(), password.as_bytes())
-            .map_err(keyring_err)
+        security_framework::passwords::set_generic_password(
+            SERVICE,
+            &id.0.to_string(),
+            password.as_bytes(),
+        )
+        .map_err(keyring_err)
     }
 
     pub async fn delete_password(&self, id: ConnId) -> Result<()> {
@@ -73,7 +95,9 @@ impl SecretStore {
     }
 
     pub async fn set_password(&self, _id: ConnId, _label: &str, _password: &str) -> Result<()> {
-        Err(StoreError::Keyring("not supported on this platform".to_owned()))
+        Err(StoreError::Keyring(
+            "not supported on this platform".to_owned(),
+        ))
     }
 
     pub async fn delete_password(&self, _id: ConnId) -> Result<()> {

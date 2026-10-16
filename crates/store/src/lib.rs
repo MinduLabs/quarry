@@ -25,9 +25,15 @@ pub enum StoreError {
     #[error("cannot determine the user's config directory")]
     NoConfigDir,
     #[error("{path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("{path}: invalid file: {source}")]
-    Parse { path: PathBuf, source: Box<toml::de::Error> },
+    Parse {
+        path: PathBuf,
+        source: Box<toml::de::Error>,
+    },
     #[error("cannot serialize config: {0}")]
     Serialize(#[from] toml::ser::Error),
     #[error("{path}: written by a newer version of Quarry (format {found})")]
@@ -76,16 +82,24 @@ impl ConfigStore {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(source) => return Err(StoreError::Io { path, source }),
         };
-        let file: ConnectionsFile = toml::from_str(&text)
-            .map_err(|source| StoreError::Parse { path: path.clone(), source: Box::new(source) })?;
+        let file: ConnectionsFile = toml::from_str(&text).map_err(|source| StoreError::Parse {
+            path: path.clone(),
+            source: Box::new(source),
+        })?;
         if file.version > SCHEMA_VERSION {
-            return Err(StoreError::TooNew { path, found: file.version });
+            return Err(StoreError::TooNew {
+                path,
+                found: file.version,
+            });
         }
         Ok(file.connections)
     }
 
     pub fn save_connections(&self, connections: &[ConnectionConfig]) -> Result<()> {
-        let file = ConnectionsFile { version: SCHEMA_VERSION, connections: connections.to_vec() };
+        let file = ConnectionsFile {
+            version: SCHEMA_VERSION,
+            connections: connections.to_vec(),
+        };
         let text = toml::to_string_pretty(&file)?;
         write_atomic(&self.connections_path(), text.as_bytes())
     }
@@ -93,7 +107,10 @@ impl ConfigStore {
 
 /// Write to a temp file, then rename, so a crash never leaves a half-written file.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let io_err = |source| StoreError::Io { path: path.to_owned(), source };
+    let io_err = |source| StoreError::Io {
+        path: path.to_owned(),
+        source,
+    };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(io_err)?;
     }
@@ -151,7 +168,10 @@ mod tests {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(CONNECTIONS_FILE), "version = 99\n").unwrap();
-        assert!(matches!(ConfigStore::new(&dir).load_connections(), Err(StoreError::TooNew { .. })));
+        assert!(matches!(
+            ConfigStore::new(&dir).load_connections(),
+            Err(StoreError::TooNew { .. })
+        ));
         fs::remove_dir_all(dir).unwrap();
     }
 }
