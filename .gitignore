@@ -1,12 +1,13 @@
 /target
 /dist
 /.flatpak-builder
-/build-aux/flatpak/build-dir
-/build-aux/flatpak/repo
 *.flatpak
 *.swp
 .DS_Store
 .idea/
 .vscode/
 /.flatpak-repo
-/build-aux/flatpak/local.json
+/node_modules
+/ui/dist
+/src-tauri/gen
+/packaging/flatpak/local.json

@@ -1,4 +1,4 @@
-//! Driver MySQL / MariaDB cho Quarry, dựa trên `mysql_async` (TLS bằng rustls).
+//! MySQL / MariaDB driver, built on `mysql_async` (TLS via rustls).
 
 mod convert;
 
@@ -75,7 +75,7 @@ fn build_opts(config: &ResolvedConfig) -> Opts {
     let c = &config.config;
     let ssl = match c.ssl {
         SslMode::Disable | SslMode::Prefer => None,
-        // Mã hoá nhưng không kiểm tra chứng chỉ (giống `sslmode=require` của libpq).
+        // Encrypt without verifying the certificate (like libpq's `sslmode=require`).
         SslMode::Require => Some(
             SslOpts::default()
                 .with_danger_accept_invalid_certs(true)
@@ -90,7 +90,7 @@ fn build_opts(config: &ResolvedConfig) -> Opts {
         .user(c.user.clone())
         .pass(config.password.clone())
         .db_name(c.database.clone().filter(|d| !d.is_empty()))
-        // Trong Flatpak không truy cập được unix socket của host.
+        // The host's unix socket is not reachable from a Flatpak sandbox.
         .prefer_socket(false)
         .ssl_opts(ssl)
         .init(vec!["SET NAMES utf8mb4"])
@@ -117,7 +117,7 @@ impl Session for MysqlSession {
         let limit = opts.row_limit.unwrap_or(u64::MAX);
         let batch_size = opts.batch_size.max(1);
 
-        // Mỗi vòng lặp là một result set. `next()` tự nhảy sang set tiếp theo khi set hiện tại hết dòng.
+        // One iteration per result set; `next()` moves to the next set when the current one ends.
         while let Some(columns) = result.columns() {
             if columns.is_empty() {
                 let affected = result.affected_rows();
@@ -138,7 +138,7 @@ impl Session for MysqlSession {
             let mut truncated = false;
             while let Some(row) = result.next().await.map_err(map_err)? {
                 if rows >= limit {
-                    // Vẫn đọc hết để giải phóng connection, nhưng không giữ dữ liệu.
+                    // Keep draining so the connection is freed, but drop the data.
                     truncated = true;
                     continue;
                 }
@@ -266,7 +266,7 @@ impl Session for MysqlSession {
     }
 }
 
-/// Huỷ query bằng `KILL QUERY <id>` trên một connection phụ.
+/// Cancels via `KILL QUERY <id>` on a second connection.
 #[derive(Debug)]
 struct MysqlCancel {
     opts: Opts,
@@ -331,7 +331,7 @@ fn map_connect_err(err: mysql_async::Error) -> DriverError {
 
 fn map_err(err: mysql_async::Error) -> DriverError {
     match err {
-        // 1317: query bị KILL QUERY huỷ
+        // 1317: query interrupted by KILL QUERY
         mysql_async::Error::Server(e) if e.code == 1317 => DriverError::Cancelled,
         mysql_async::Error::Server(e) => DriverError::Query {
             message: format!("{} (MySQL {}, SQLSTATE {})", e.message, e.code, e.state),

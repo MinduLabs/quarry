@@ -8,7 +8,7 @@ members = [
     "crates/tunnel",
     "crates/drivers/mysql",
     "crates/engine",
-    "crates/app",
+    "src-tauri",
 ]
 
 [workspace.package]
@@ -46,13 +46,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# UI — API giới hạn ở GTK 4.14 / libadwaita 1.5 (ADR 0004)
-gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
-sourceview5 = "0.11"
-relm4 = { version = "0.11", features = ["libadwaita"] }
-gettext-rs = { version = "0.8", features = ["gettext-system"] }
-glib-build-tools = "0.22"
+# Desktop shell
+tauri = { version = "2.12", features = [] }
+tauri-build = { version = "2.7", features = [] }
+ts-rs = { version = "12", features = ["chrono-impl", "uuid-impl", "no-serde-warnings"] }
+
+# macOS Keychain
+security-framework = "3"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -1,8 +1,8 @@
-//! Contract mà mọi driver database phải implement.
+//! The contract every database driver implements.
 //!
-//! Engine chỉ nói chuyện với `dyn Driver` / `dyn Session`; UI không bao giờ
-//! biết driver cụ thể. Mọi type đi qua ranh giới này đều serialize được để
-//! sau này chuyển driver ra plugin ngoài process.
+//! The engine only talks to `dyn Driver` / `dyn Session`; the UI never sees a concrete
+//! driver. Every type crossing this boundary is serializable, so drivers can later move
+//! out of process as plugins.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,14 +32,14 @@ pub enum DriverError {
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
-/// Cấu hình đã resolve: secret đã lấy từ keyring, host/port đã trỏ vào SSH tunnel nếu có.
+/// Settings ready to connect: secrets read from the keyring, host/port pointing at the SSH tunnel if any.
 #[derive(Clone)]
 pub struct ResolvedConfig {
     pub config: ConnectionConfig,
     pub password: Option<String>,
 }
 
-// Không bao giờ in password ra log.
+// Never print the password.
 impl std::fmt::Debug for ResolvedConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedConfig")
@@ -51,10 +51,10 @@ impl std::fmt::Debug for ResolvedConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecOpts {
-    /// Số dòng tối đa giữ lại cho mỗi result set (`None` = không giới hạn, chỉ dùng cho export).
-    /// Dòng vượt giới hạn vẫn được đọc hết khỏi socket nhưng không gửi đi.
+    /// Maximum rows kept per result set (`None` = unlimited, for export only).
+    /// Rows past the limit are still drained from the socket but not sent.
     pub row_limit: Option<u64>,
-    /// Số dòng mỗi batch gửi qua `sink`.
+    /// Rows per batch passed to the `sink`.
     pub batch_size: usize,
 }
 
@@ -67,14 +67,14 @@ impl Default for ExecOpts {
     }
 }
 
-/// Một phần tử kết quả, phát ra theo thứ tự qua `sink` của [`Session::execute`].
-/// Một script có thể sinh nhiều result set: mỗi set bắt đầu bằng `Columns`
-/// (hoặc chỉ có `Affected` với câu lệnh không trả dòng).
+/// One result item, emitted in order through the `sink` of [`Session::execute`].
+/// A script can produce several result sets; each starts with `Columns`
+/// (or is only a `SetDone` for statements that return no rows).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExecItem {
     Columns(Vec<ColumnMeta>),
     Rows(Vec<Vec<Value>>),
-    /// Kết thúc một result set.
+    /// End of a result set.
     SetDone {
         affected: u64,
         rows: u64,
@@ -86,20 +86,20 @@ pub enum ExecItem {
     },
 }
 
-/// Nơi nhận kết quả. Gọi đồng bộ, nên implementation phải nhanh (vd đẩy vào channel).
+/// Receives results. Called synchronously, so it must be fast (e.g. push into a channel).
 pub type ExecSink<'a> = &'a mut (dyn FnMut(ExecItem) + Send);
 
-/// Huỷ query đang chạy, gọi được từ task khác.
+/// Cancels the running query; callable from another task.
 pub trait CancelHandle: Send + Sync {
     fn cancel(&self);
 }
 
 pub type SharedCancel = Arc<dyn CancelHandle>;
 
-/// Khác biệt cú pháp giữa các DB.
+/// Syntax differences between databases.
 pub trait Dialect: Send + Sync {
     fn quote_ident(&self, ident: &str) -> String;
-    /// Placeholder cho tham số thứ `index` (bắt đầu từ 1): `$1` hoặc `?`.
+    /// Placeholder for parameter number `index` (from 1): `$1` or `?`.
     fn placeholder(&self, index: usize) -> String;
     /// `SELECT * FROM <table> LIMIT .. OFFSET ..`
     fn select_page(&self, table: &quarry_model::TableRef, limit: u64, offset: u64) -> String;
@@ -115,14 +115,14 @@ pub trait Driver: Send + Sync + 'static {
 
 #[async_trait]
 pub trait Session: Send {
-    /// Phiên bản server, vd `8.4.3`.
+    /// Server version, e.g. `8.4.3`.
     fn server_version(&self) -> String;
-    /// Chạy một hoặc nhiều câu lệnh, phát kết quả qua `sink`.
+    /// Run one or more statements, streaming results into `sink`.
     async fn execute(&mut self, sql: &str, opts: &ExecOpts, sink: ExecSink<'_>) -> Result<()>;
     async fn execute_params(&mut self, sql: &str, params: &[Value]) -> Result<u64>;
     async fn list_databases(&mut self) -> Result<Vec<String>>;
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>>;
-    /// Đổi database mặc định của session (`USE`).
+    /// Change the session's default database (`USE`).
     async fn use_database(&mut self, database: &str) -> Result<()>;
     async fn begin(&mut self) -> Result<()>;
     async fn commit(&mut self) -> Result<()>;
@@ -132,7 +132,7 @@ pub trait Session: Send {
     async fn close(self: Box<Self>) -> Result<()>;
 }
 
-/// Danh sách driver có sẵn trong binary.
+/// Drivers compiled into the binary.
 #[derive(Default)]
 pub struct DriverRegistry {
     drivers: Vec<Box<dyn Driver>>,

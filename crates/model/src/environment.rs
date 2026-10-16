@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-/// Môi trường của một connection — quyết định mức độ safe mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+/// Environment of a connection; drives safe mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum Environment {
     #[default]
     Local,
@@ -11,12 +13,12 @@ pub enum Environment {
 }
 
 impl Environment {
-    /// Câu lệnh ghi có cần người dùng xác nhận không.
+    /// Every write statement needs confirmation.
     pub fn confirms_every_write(self) -> bool {
         matches!(self, Environment::Production)
     }
 
-    /// Câu lệnh nguy hiểm (DELETE/UPDATE không WHERE, DROP, TRUNCATE) có cần xác nhận không.
+    /// Destructive statements (DROP, TRUNCATE, UPDATE/DELETE without WHERE) need confirmation.
     pub fn confirms_destructive(self) -> bool {
         !matches!(self, Environment::Local)
     }

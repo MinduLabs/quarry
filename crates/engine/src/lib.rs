@@ -1,10 +1,8 @@
-//! Lõi ứng dụng, chạy headless trên tokio runtime riêng.
+//! Headless application core, running on its own tokio runtime.
 //!
-//! UI (hoặc CLI/MCP sau này) gửi [`Command`] qua [`EngineHandle`] và nhận
-//! [`Event`] qua [`EngineEvents`]. Kênh dùng `async_channel` nên phía nhận
-//! chạy được trên glib main loop mà không cần tokio.
-//!
-//! Mỗi lệnh chạy trong task riêng, nên một query dài không chặn các lệnh khác.
+//! A client (the Tauri UI today, a CLI or MCP server later) sends [`Command`]s through an
+//! [`EngineHandle`] and receives [`Event`]s from [`EngineEvents`]. Every command runs in its
+//! own task, so a long query never blocks other commands.
 
 mod command;
 mod event;
@@ -23,7 +21,7 @@ use quarry_store::{ConfigStore, SecretStore};
 
 pub use command::{Command, Password, RequestId, TabId};
 pub use event::{ConnState, Event, NoticeKind};
-/// Tiện ích SQL thuần (tách statement…), dùng chung cho client.
+/// Pure SQL text helpers (statement splitting, …), shared with clients.
 pub use quarry_sql as sql;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -36,31 +34,29 @@ pub enum EngineError {
     Stopped,
 }
 
-/// Tuỳ chọn khởi động engine.
 #[derive(Debug, Clone, Default)]
 pub struct EngineOptions {
-    /// Thư mục config; `None` = `$XDG_CONFIG_HOME/quarry`.
+    /// Config directory; `None` = the platform default (see `quarry_store::default_config_dir`).
     pub config_dir: Option<PathBuf>,
-    /// Không dùng keyring hệ thống (test, môi trường không có Secret Service).
+    /// Do not touch the system keyring (tests, environments without one).
     pub disable_keyring: bool,
 }
 
-/// Đầu gửi lệnh tới engine. Clone thoải mái; engine dừng khi mọi handle bị drop.
+/// Sending side of the engine. Cheap to clone; the engine stops when every handle is dropped.
 #[derive(Debug, Clone)]
 pub struct EngineHandle {
     commands: async_channel::Sender<Command>,
 }
 
-/// Đầu nhận sự kiện từ engine.
+/// Receiving side for engine events.
 pub type EngineEvents = async_channel::Receiver<Event>;
 
 impl EngineHandle {
-    /// Khởi động engine với tuỳ chọn mặc định.
     pub fn spawn() -> Result<(Self, EngineEvents), EngineError> {
         Self::spawn_with(EngineOptions::default())
     }
 
-    /// Khởi động engine trên một thread riêng chạy tokio runtime.
+    /// Start the engine on a dedicated thread with its own tokio runtime.
     pub fn spawn_with(options: EngineOptions) -> Result<(Self, EngineEvents), EngineError> {
         let (cmd_tx, cmd_rx) = async_channel::unbounded::<Command>();
         let (event_tx, event_rx) = async_channel::unbounded::<Event>();
@@ -71,23 +67,19 @@ impl EngineHandle {
             .enable_all()
             .build()?;
 
-        thread::Builder::new()
-            .name("quarry-engine-main".into())
-            .spawn(move || {
-                runtime.block_on(async move {
-                    let engine = Arc::new(Engine::new(options, event_tx));
-                    run(engine, cmd_rx).await;
-                });
-            })?;
+        thread::Builder::new().name("quarry-engine-main".into()).spawn(move || {
+            runtime.block_on(async move {
+                let engine = Arc::new(Engine::new(options, event_tx));
+                run(engine, cmd_rx).await;
+            });
+        })?;
 
         Ok((Self { commands: cmd_tx }, event_rx))
     }
 
-    /// Gửi lệnh, không chờ kết quả (kết quả đến dưới dạng [`Event`]).
+    /// Queue a command. Results arrive later as [`Event`]s.
     pub fn send(&self, command: Command) -> Result<(), EngineError> {
-        self.commands
-            .try_send(command)
-            .map_err(|_| EngineError::Stopped)
+        self.commands.try_send(command).map_err(|_| EngineError::Stopped)
     }
 }
 
@@ -114,21 +106,19 @@ struct Engine {
     config: Option<ConfigStore>,
     secrets: Option<SecretStore>,
     connections: Mutex<Vec<ConnectionConfig>>,
-    /// Password đã nhập trong phiên này (kể cả khi không lưu vào keyring).
+    /// Passwords entered during this run (also when not saved to the keyring).
     passwords: Mutex<HashMap<ConnId, String>>,
-    /// Session dùng cho metadata (cây schema), mỗi connection một session.
+    /// One metadata session (schema tree) per connection.
     meta: Mutex<HashMap<ConnId, SharedSession>>,
-    /// Session của từng tab. Mutex async bị `run_query` giữ trong suốt thời gian query chạy.
+    /// Per-tab sessions. The async mutex is held by `run_query` while a query runs.
     tabs: Mutex<HashMap<TabId, Arc<tokio::sync::Mutex<Option<TabSession>>>>>,
-    /// Cancel handle của từng tab, tách riêng để huỷ được khi session đang bận.
+    /// Per-tab cancel handles, kept apart so a busy session can still be cancelled.
     cancels: Mutex<HashMap<TabId, (ConnId, SharedCancel)>>,
 }
 
-/// `std::sync::Mutex` chỉ giữ trong thời gian rất ngắn; poison = panic ở chỗ khác, cứ lấy dữ liệu.
+/// These `std` mutexes are only held briefly; a poisoned lock still holds valid data.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Engine {
@@ -136,11 +126,7 @@ impl Engine {
         let mut registry = DriverRegistry::default();
         registry.register(Box::new(quarry_driver_mysql::MysqlDriver::default()));
 
-        let config = match options
-            .config_dir
-            .map(Ok)
-            .unwrap_or_else(quarry_store::default_config_dir)
-        {
+        let config = match options.config_dir.map(Ok).unwrap_or_else(quarry_store::default_config_dir) {
             Ok(dir) => Some(ConfigStore::new(dir)),
             Err(err) => {
                 tracing::error!(%err, "no config directory; connections will not be saved");
@@ -162,68 +148,43 @@ impl Engine {
     }
 
     fn emit(&self, event: Event) {
-        // Unbounded: chỉ lỗi khi client đã đóng, lúc đó bỏ qua.
+        // Unbounded channel: only fails once the client is gone, which is fine to ignore.
         let _ = self.events.try_send(event);
     }
 
     fn notice(&self, kind: NoticeKind, message: impl Into<String>) {
-        self.emit(Event::Notice {
-            kind,
-            message: message.into(),
-        });
+        self.emit(Event::Notice { kind, message: message.into() });
     }
 
     async fn handle(self: Arc<Self>, command: Command) {
         match command {
-            Command::Ping { id } => self.emit(Event::Pong {
-                id,
-                version: VERSION.to_owned(),
-            }),
+            Command::Ping { id } => self.emit(Event::Pong { id, version: VERSION.to_owned() }),
             Command::LoadConnections => self.load_connections(),
-            Command::SaveConnection {
-                config,
-                password,
-                remember_password,
-            } => {
-                self.save_connection(config, password, remember_password)
-                    .await;
+            Command::SaveConnection { config, password, remember_password } => {
+                self.save_connection(config, password, remember_password).await;
             }
             Command::DeleteConnection { id } => self.delete_connection(id).await,
-            Command::TestConnection {
-                request,
-                config,
-                password,
-            } => {
-                let result = self.test_connection(config, password).await;
-                self.emit(Event::TestResult { request, result });
+            Command::TestConnection { request, config, password } => {
+                let (server_version, error) = match self.test_connection(config, password).await {
+                    Ok(version) => (Some(version), None),
+                    Err(err) => (None, Some(err)),
+                };
+                self.emit(Event::TestResult { request, server_version, error });
             }
             Command::Connect { id } => self.connect(id).await,
             Command::Disconnect { id } => self.disconnect(id).await,
             Command::LoadObjects { id, database } => self.load_objects(id, database).await,
-            Command::Run {
-                tab,
-                conn,
-                database,
-                sql,
-                confirmed,
-            } => {
+            Command::Run { tab, conn, database, sql, confirmed } => {
                 if !confirmed
-                    && let Some(message) = self
-                        .config_of(conn)
-                        .and_then(|c| safety_check(c.environment, &sql))
+                    && let Some(message) =
+                        self.config_of(conn).and_then(|c| safety_check(c.environment, &sql))
                 {
-                    self.emit(Event::ConfirmRequired {
-                        tab,
-                        conn,
-                        database,
-                        sql,
-                        message,
-                    });
+                    self.emit(Event::ConfirmRequired { tab, conn, database, sql, message });
                     return;
                 }
                 self.run_query(tab, conn, database, sql).await;
             }
-            Command::Cancel { tab } => self.cancel(tab).await,
+            Command::Cancel { tab } => self.cancel(tab),
             Command::CloseTab { tab } => self.close_tab(tab).await,
         }
     }
@@ -232,18 +193,15 @@ impl Engine {
 
     fn load_connections(&self) {
         let Some(store) = &self.config else {
-            self.emit(Event::Connections(Vec::new()));
+            self.emit(Event::Connections { connections: Vec::new() });
             return;
         };
         match store.load_connections() {
             Ok(list) => {
                 *lock(&self.connections) = list.clone();
-                self.emit(Event::Connections(list));
+                self.emit(Event::Connections { connections: list });
             }
-            Err(err) => self.notice(
-                NoticeKind::Error,
-                format!("Couldn't read saved connections: {err}"),
-            ),
+            Err(err) => self.notice(NoticeKind::Error, format!("Couldn't read saved connections: {err}")),
         }
     }
 
@@ -252,10 +210,7 @@ impl Engine {
         if let Some(store) = &self.config
             && let Err(err) = store.save_connections(&list)
         {
-            self.notice(
-                NoticeKind::Error,
-                format!("Couldn't save connections: {err}"),
-            );
+            self.notice(NoticeKind::Error, format!("Couldn't save connections: {err}"));
         }
         list
     }
@@ -291,17 +246,15 @@ impl Engine {
                     if remember_password {
                         self.notice(
                             NoticeKind::Warning,
-                            format!(
-                                "Password kept for this session only — keyring unavailable: {err}"
-                            ),
+                            format!("Password kept for this session only — keyring unavailable: {err}"),
                         );
                     }
                 }
             }
         }
-        self.emit(Event::Connections(list));
+        self.emit(Event::Connections { connections: list });
 
-        // Cấu hình thay đổi: đóng session cũ để lần sau kết nối bằng cấu hình mới.
+        // Settings changed: drop the old sessions so the next connect uses the new ones.
         if was_connected {
             self.disconnect(id).await;
         }
@@ -317,16 +270,12 @@ impl Engine {
         {
             tracing::warn!(%err, "keyring delete");
         }
-        self.emit(Event::Connections(list));
+        self.emit(Event::Connections { connections: list });
     }
 
     // ---------- Sessions ----------
 
-    async fn resolve(
-        &self,
-        config: ConnectionConfig,
-        password: Option<Password>,
-    ) -> ResolvedConfig {
+    async fn resolve(&self, config: ConnectionConfig, password: Option<Password>) -> ResolvedConfig {
         let password = match password {
             Some(Password(p)) => Some(p),
             None => self.stored_password(config.id).await,
@@ -359,10 +308,7 @@ impl Engine {
             .ok_or_else(|| format!("No driver for “{}”", resolved.config.driver.0))?;
         let mut session = driver.connect(resolved).await.map_err(|e| describe(&e))?;
         if resolved.config.read_only {
-            session
-                .set_read_only(true)
-                .await
-                .map_err(|e| describe(&e))?;
+            session.set_read_only(true).await.map_err(|e| describe(&e))?;
         }
         Ok(session)
     }
@@ -384,57 +330,32 @@ impl Engine {
     }
 
     async fn connect(&self, id: ConnId) {
-        let Some(config) = self.config_of(id) else {
-            return;
-        };
-        self.emit(Event::ConnState {
-            id,
-            state: ConnState::Connecting,
-        });
+        let Some(config) = self.config_of(id) else { return };
+        self.emit(Event::ConnState { id, state: ConnState::Connecting });
 
+        let failed = |error: String| Event::ConnState { id, state: ConnState::Failed { error } };
         let resolved = self.resolve(config, None).await;
         let mut session = match self.open_session(&resolved).await {
             Ok(session) => session,
-            Err(err) => {
-                self.emit(Event::ConnState {
-                    id,
-                    state: ConnState::Failed(err),
-                });
-                return;
-            }
+            Err(err) => return self.emit(failed(err)),
         };
         let databases = match session.list_databases().await {
             Ok(dbs) => dbs,
-            Err(err) => {
-                self.emit(Event::ConnState {
-                    id,
-                    state: ConnState::Failed(describe(&err)),
-                });
-                return;
-            }
+            Err(err) => return self.emit(failed(describe(&err))),
         };
         let server_version = session.server_version();
         lock(&self.meta).insert(id, Arc::new(tokio::sync::Mutex::new(session)));
-        self.emit(Event::ConnState {
-            id,
-            state: ConnState::Connected { server_version },
-        });
+        self.emit(Event::ConnState { id, state: ConnState::Connected { server_version } });
         self.emit(Event::Databases { id, databases });
     }
 
     async fn disconnect(&self, id: ConnId) {
-        // Huỷ query đang chạy trên connection này, nếu không phải chờ chúng chạy xong.
+        // Cancel running queries on this connection first, otherwise we would wait for them.
         let running: Vec<SharedCancel> = {
             let mut cancels = lock(&self.cancels);
-            let ids: Vec<TabId> = cancels
-                .iter()
-                .filter(|(_, (c, _))| *c == id)
-                .map(|(t, _)| *t)
-                .collect();
-            ids.iter()
-                .filter_map(|t| cancels.remove(t))
-                .map(|(_, c)| c)
-                .collect()
+            let ids: Vec<TabId> =
+                cancels.iter().filter(|(_, (c, _))| *c == id).map(|(t, _)| *t).collect();
+            ids.iter().filter_map(|t| cancels.remove(t)).map(|(_, c)| c).collect()
         };
         for cancel in running {
             cancel.cancel();
@@ -455,33 +376,21 @@ impl Engine {
             close_shared(session).await;
         }
         if had_sessions {
-            self.emit(Event::ConnState {
-                id,
-                state: ConnState::Disconnected,
-            });
+            self.emit(Event::ConnState { id, state: ConnState::Disconnected });
         }
     }
 
     async fn load_objects(&self, id: ConnId, database: String) {
         let Some(meta) = lock(&self.meta).get(&id).cloned() else {
-            self.emit(Event::Objects {
-                id,
-                database,
-                result: Err("Not connected".to_owned()),
-            });
-            return;
+            let error = Some("Not connected".to_owned());
+            return self.emit(Event::Objects { id, database, objects: None, error });
         };
-        let result = meta
-            .lock()
-            .await
-            .list_objects(&database)
-            .await
-            .map_err(|e| describe(&e));
-        self.emit(Event::Objects {
-            id,
-            database,
-            result,
-        });
+        let result = meta.lock().await.list_objects(&database).await;
+        let (objects, error) = match result {
+            Ok(objects) => (Some(objects), None),
+            Err(err) => (None, Some(describe(&err))),
+        };
+        self.emit(Event::Objects { id, database, objects, error });
     }
 
     // ---------- Queries ----------
@@ -492,10 +401,11 @@ impl Engine {
 
     async fn run_query(&self, tab: TabId, conn: ConnId, database: Option<String>, sql: String) {
         self.emit(Event::QueryStarted { tab });
+        let failed = |error: String| Event::QueryFailed { tab, error, cancelled: false };
         let slot = self.tab_slot(tab);
         let mut slot = slot.lock().await;
 
-        // Session của tab thuộc connection khác (tab đổi connection) → mở lại.
+        // The tab switched to another connection: reopen its session.
         if slot.as_ref().is_some_and(|t| t.conn != conn)
             && let Some(old) = slot.take()
         {
@@ -503,12 +413,7 @@ impl Engine {
         }
         if slot.is_none() {
             let Some(config) = self.config_of(conn) else {
-                self.emit(Event::QueryFailed {
-                    tab,
-                    error: "Connection not found".into(),
-                    cancelled: false,
-                });
-                return;
+                return self.emit(failed("Connection not found".into()));
             };
             let resolved = self.resolve(config, None).await;
             match self.open_session(&resolved).await {
@@ -520,59 +425,32 @@ impl Engine {
                         database: None,
                     });
                 }
-                Err(error) => {
-                    self.emit(Event::QueryFailed {
-                        tab,
-                        error,
-                        cancelled: false,
-                    });
-                    return;
-                }
+                Err(error) => return self.emit(failed(error)),
             }
         }
-        let Some(tab_session) = slot.as_mut() else {
-            return;
-        };
+        let Some(tab_session) = slot.as_mut() else { return };
         let mut session = tab_session.session.lock().await;
 
         if let Some(db) = database.filter(|db| tab_session.database.as_ref() != Some(db)) {
             if let Err(err) = session.use_database(&db).await {
-                self.emit(Event::QueryFailed {
-                    tab,
-                    error: describe(&err),
-                    cancelled: false,
-                });
-                return;
+                return self.emit(failed(describe(&err)));
             }
             tab_session.database = Some(db);
         }
 
         let events = self.events.clone();
-        let mut set = 0usize;
+        let mut set = 0u32;
         let mut elapsed = Duration::ZERO;
         let mut sink = |item: ExecItem| {
             let event = match item {
                 ExecItem::Columns(columns) => Event::ResultColumns { tab, set, columns },
                 ExecItem::Rows(rows) => Event::ResultRows { tab, set, rows },
-                ExecItem::SetDone {
-                    affected,
-                    rows,
-                    truncated,
-                } => {
-                    let event = Event::ResultDone {
-                        tab,
-                        set,
-                        affected,
-                        rows,
-                        truncated,
-                    };
+                ExecItem::SetDone { affected, rows, truncated } => {
+                    let event = Event::ResultDone { tab, set, affected, rows, truncated };
                     set += 1;
                     event
                 }
-                ExecItem::Notice(message) => Event::Notice {
-                    kind: NoticeKind::Info,
-                    message,
-                },
+                ExecItem::Notice(message) => Event::Notice { kind: NoticeKind::Info, message },
                 ExecItem::Done { elapsed: e } => {
                     elapsed = e;
                     return;
@@ -582,7 +460,10 @@ impl Engine {
         };
         let result = session.execute(&sql, &ExecOpts::default(), &mut sink).await;
         match result {
-            Ok(()) => self.emit(Event::QueryFinished { tab, elapsed }),
+            Ok(()) => {
+                let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+                self.emit(Event::QueryFinished { tab, elapsed_ms });
+            }
             Err(err) => self.emit(Event::QueryFailed {
                 tab,
                 cancelled: matches!(err, DriverError::Cancelled),
@@ -591,7 +472,7 @@ impl Engine {
         }
     }
 
-    async fn cancel(&self, tab: TabId) {
+    fn cancel(&self, tab: TabId) {
         let cancel = lock(&self.cancels).get(&tab).map(|(_, c)| c.clone());
         if let Some(cancel) = cancel {
             cancel.cancel();
@@ -610,7 +491,7 @@ impl Engine {
 }
 
 async fn close_shared(session: SharedSession) {
-    // Còn người giữ (query đang chạy) thì session tự đóng khi được thả ra.
+    // If someone still holds it (a running query), it closes when they drop it.
     if let Ok(mutex) = Arc::try_unwrap(session)
         && let Err(err) = mutex.into_inner().close().await
     {
@@ -618,16 +499,13 @@ async fn close_shared(session: SharedSession) {
     }
 }
 
-/// Safe mode: trả về lý do cần xác nhận, hoặc `None` nếu chạy luôn được.
+/// Safe mode: the reason the user must confirm, or `None` to run right away.
 ///
-/// - staging: hỏi với DROP / TRUNCATE / UPDATE·DELETE không có WHERE
-/// - production: hỏi với mọi câu lệnh không phải đọc
+/// - staging: DROP / TRUNCATE / UPDATE or DELETE without WHERE
+/// - production: any statement that is not a read
 fn safety_check(environment: Environment, sql: &str) -> Option<String> {
     use quarry_sql::StatementKind;
-    let worst = quarry_sql::split(sql)
-        .into_iter()
-        .map(|r| quarry_sql::classify(&sql[r]))
-        .max()?;
+    let worst = quarry_sql::split(sql).into_iter().map(|r| quarry_sql::classify(&sql[r])).max()?;
     match (environment, worst) {
         (Environment::Local, _) | (_, StatementKind::Read) => None,
         (_, StatementKind::Destructive) => Some(
@@ -644,7 +522,7 @@ fn safety_check(environment: Environment, sql: &str) -> Option<String> {
     }
 }
 
-/// Thông báo lỗi dễ hiểu cho người dùng.
+/// A user-facing error message.
 fn describe(err: &DriverError) -> String {
     match err {
         DriverError::Auth => "Access denied — check the user name and password".to_owned(),
@@ -660,25 +538,27 @@ mod tests {
 
     fn test_engine() -> (EngineHandle, EngineEvents) {
         let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-        EngineHandle::spawn_with(EngineOptions {
-            config_dir: Some(dir),
-            disable_keyring: true,
-        })
-        .unwrap()
+        EngineHandle::spawn_with(EngineOptions { config_dir: Some(dir), disable_keyring: true }).unwrap()
     }
 
     #[test]
     fn safe_mode_rules() {
         use Environment::*;
         assert_eq!(safety_check(Local, "DROP TABLE t"), None);
-        assert_eq!(
-            safety_check(Staging, "UPDATE t SET a = 1 WHERE id = 1"),
-            None
-        );
+        assert_eq!(safety_check(Staging, "UPDATE t SET a = 1 WHERE id = 1"), None);
         assert!(safety_check(Staging, "SELECT 1; DELETE FROM t").is_some());
         assert_eq!(safety_check(Production, "SELECT 1; SHOW TABLES"), None);
         assert!(safety_check(Production, "INSERT INTO t VALUES (1)").is_some());
         assert!(safety_check(Production, "ALTER TABLE t ADD c INT").is_some());
+    }
+
+    #[test]
+    fn commands_and_events_use_tagged_json() {
+        let command: Command =
+            serde_json::from_str(r#"{"type":"Cancel","tab":3}"#).expect("valid command");
+        assert!(matches!(command, Command::Cancel { tab: 3 }));
+        let json = serde_json::to_string(&Event::QueryStarted { tab: 3 }).expect("serializable");
+        assert_eq!(json, r#"{"type":"QueryStarted","tab":3}"#);
     }
 
     #[tokio::test]
@@ -695,7 +575,7 @@ mod tests {
     }
 }
 
-/// Integration test với MySQL thật (`QUARRY_TEST_MYSQL=127.0.0.1:13306`).
+/// Integration tests against a real MySQL (`QUARRY_TEST_MYSQL=127.0.0.1:13306`).
 #[cfg(test)]
 mod mysql_tests {
     use quarry_model::{ConnId, ConnectionConfig, DriverId, Environment, SslMode};
@@ -732,9 +612,7 @@ mod mysql_tests {
                 }
             }
         };
-        tokio::time::timeout(Duration::from_secs(20), wait)
-            .await
-            .unwrap()
+        tokio::time::timeout(Duration::from_secs(20), wait).await.unwrap()
     }
 
     #[tokio::test]
@@ -742,11 +620,9 @@ mod mysql_tests {
         let Some(config) = config() else { return };
         let id = config.id;
         let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-            config_dir: Some(dir.clone()),
-            disable_keyring: true,
-        })
-        .unwrap();
+        let (engine, events) =
+            EngineHandle::spawn_with(EngineOptions { config_dir: Some(dir.clone()), disable_keyring: true })
+                .unwrap();
 
         engine
             .send(Command::SaveConnection {
@@ -755,17 +631,14 @@ mod mysql_tests {
                 remember_password: false,
             })
             .unwrap();
-        let Event::Connections(list) =
-            next_matching(&events, |e| matches!(e, Event::Connections(_))).await
+        let Event::Connections { connections } =
+            next_matching(&events, |e| matches!(e, Event::Connections { .. })).await
         else {
             unreachable!()
         };
-        assert_eq!(list.len(), 1);
-        assert!(
-            !std::fs::read_to_string(dir.join("connections.toml"))
-                .unwrap()
-                .contains("quarry\"\npass")
-        );
+        assert_eq!(connections.len(), 1);
+        let saved = std::fs::read_to_string(dir.join("connections.toml")).unwrap();
+        assert!(!saved.contains("password"), "passwords must never be written to disk");
 
         engine.send(Command::Connect { id }).unwrap();
         let Event::Databases { databases, .. } =
@@ -775,18 +648,13 @@ mod mysql_tests {
         };
         assert!(databases.contains(&"shop".to_owned()));
 
-        engine
-            .send(Command::LoadObjects {
-                id,
-                database: "shop".into(),
-            })
-            .unwrap();
-        let Event::Objects { result, .. } =
+        engine.send(Command::LoadObjects { id, database: "shop".into() }).unwrap();
+        let Event::Objects { objects, .. } =
             next_matching(&events, |e| matches!(e, Event::Objects { .. })).await
         else {
             unreachable!()
         };
-        assert!(result.unwrap().iter().any(|o| o.name == "customers"));
+        assert!(objects.unwrap().iter().any(|o| o.name == "customers"));
 
         engine
             .send(Command::Run {
@@ -803,12 +671,9 @@ mod mysql_tests {
             unreachable!()
         };
         assert_eq!(rows[0][0], quarry_model::Value::Int(5000));
-        next_matching(&events, |e| {
-            matches!(e, Event::QueryFinished { tab: 1, .. })
-        })
-        .await;
+        next_matching(&events, |e| matches!(e, Event::QueryFinished { tab: 1, .. })).await;
 
-        // Cancel một query dài.
+        // Cancel a long query.
         engine
             .send(Command::Run {
                 tab: 1,
@@ -823,10 +688,7 @@ mod mysql_tests {
         engine.send(Command::Cancel { tab: 1 }).unwrap();
         let started = std::time::Instant::now();
         next_matching(&events, |e| {
-            matches!(
-                e,
-                Event::QueryFinished { tab: 1, .. } | Event::QueryFailed { tab: 1, .. }
-            )
+            matches!(e, Event::QueryFinished { tab: 1, .. } | Event::QueryFailed { tab: 1, .. })
         })
         .await;
         assert!(started.elapsed() < Duration::from_secs(5));

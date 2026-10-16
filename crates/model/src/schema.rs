@@ -1,16 +1,19 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::ObjectKind;
 
-/// Một object trong cây schema (bảng, view, …).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// An object in the schema tree (table, view, …).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SchemaObject {
     pub name: String,
     pub kind: ObjectKind,
 }
 
-/// Tham chiếu tới một bảng/view. `database` là database (MySQL) hoặc catalog.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Reference to a table or view. `database` is the MySQL database (or catalog).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TableRef {
     pub database: Option<String>,
     pub schema: Option<String>,

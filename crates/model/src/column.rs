@@ -1,13 +1,15 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-/// Metadata của một cột trong result set.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Metadata of a result-set column.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ColumnMeta {
     pub name: String,
-    /// Tên kiểu theo DB (`int4`, `varchar(255)`, …).
+    /// Database type name (`INT`, `VARCHAR`, …).
     pub type_name: String,
     pub nullable: Option<bool>,
-    /// Bảng/cột gốc nếu driver biết — dùng để quyết định cột có sửa được không.
+    /// Source table/column when the driver knows them; decides whether a column is editable.
     pub source_table: Option<String>,
     pub source_column: Option<String>,
 }

@@ -1,0 +1,31 @@
+[package]
+name = "quarry"
+description = "Quarry — a fast, open-source database client (Tauri shell)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "quarry"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+quarry-engine.workspace = true
+serde.workspace = true
+tauri.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[features]
+# Embed the built frontend instead of using the dev server. Enabled by `tauri build`
+# and by release/Flatpak builds (`cargo build --features custom-protocol`).
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

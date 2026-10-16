@@ -1,6 +1,6 @@
 [package]
 name = "quarry-engine"
-description = "Headless application core: connection manager, query execution, change sets, safety."
+description = "Headless application core: connections, query execution, safe mode."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,11 +15,14 @@ quarry-driver-mysql.workspace = true
 quarry-store.workspace = true
 quarry-sql.workspace = true
 async-channel.workspace = true
+serde.workspace = true
+ts-rs.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 uuid.workspace = true
 

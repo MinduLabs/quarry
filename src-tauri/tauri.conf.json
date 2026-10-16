@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Quarry",
+  "identifier": "io.github.mindulabs.Quarry",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../ui/dist",
+    "beforeDevCommand": { "script": "pnpm dev", "cwd": ".." },
+    "beforeBuildCommand": { "script": "pnpm build", "cwd": ".." }
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Quarry",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 480,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "DeveloperTool",
+    "shortDescription": "Fast, native-feeling database client",
+    "copyright": "Quarry contributors",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": { "minimumSystemVersion": "11.0" }
+  }
+}

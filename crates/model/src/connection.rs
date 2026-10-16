@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::Environment;
 
-/// ID ổn định của một connection (dùng làm khoá keyring, khoá sync).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Stable connection id (keyring key, future sync key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export, type = "string")]
 pub struct ConnId(pub Uuid);
 
 impl ConnId {
@@ -19,12 +21,14 @@ impl Default for ConnId {
     }
 }
 
-/// Định danh driver: `"postgres"`, `"mysql"`, `"sqlite"`, …
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Driver id: `"mysql"`, later `"postgres"`, `"sqlite"`, …
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export, type = "string")]
 pub struct DriverId(pub String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
+#[ts(export)]
 pub enum SslMode {
     Disable,
     #[default]
@@ -34,17 +38,19 @@ pub enum SslMode {
     VerifyFull,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SshConfig {
     pub host: String,
     pub port: u16,
     pub user: String,
-    /// Đường dẫn private key; `None` = dùng ssh-agent hoặc password.
+    /// Private key path; `None` = ssh-agent or password.
     pub key_path: Option<String>,
 }
 
-/// Cấu hình connection lưu trên đĩa. **Không chứa secret** — password nằm trong keyring.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Connection settings as stored on disk. **Never contains secrets** — passwords live in the keyring.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ConnectionConfig {
     pub id: ConnId,
     pub name: String,
@@ -53,7 +59,7 @@ pub struct ConnectionConfig {
     pub port: Option<u16>,
     pub database: Option<String>,
     pub user: Option<String>,
-    /// Với SQLite: đường dẫn file.
+    /// SQLite: file path.
     pub path: Option<String>,
     pub ssl: SslMode,
     pub ssh: Option<SshConfig>,

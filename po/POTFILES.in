@@ -1,4 +1,0 @@
-# Các file chứa chuỗi cần dịch
-crates/app/src/app.rs
-data/io.github.mindulabs.Quarry.desktop
-data/io.github.mindulabs.Quarry.metainfo.xml

@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! Integration test với MySQL thật. Bỏ qua nếu không đặt `QUARRY_TEST_MYSQL`.
+//! Integration tests against a real MySQL. Skipped unless `QUARRY_TEST_MYSQL` is set.
 //!
 //!   docker compose -f tests/docker-compose.yml up -d
 //!   QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test -p quarry-driver-mysql
@@ -97,7 +97,7 @@ async fn multi_statement_script_and_row_limit() {
         .iter()
         .filter(|i| matches!(i, ExecItem::Rows(_)))
         .count();
-    assert_eq!(batches, 4); // 500 + 500 + 200, rồi 1 dòng của SELECT 1
+    assert_eq!(batches, 4); // 500 + 500 + 200, then the single row of SELECT 1
     assert!(matches!(items.last(), Some(ExecItem::Done { .. })));
 }
 
@@ -158,6 +158,6 @@ async fn cancel_long_query() {
         .execute("SELECT SLEEP(10)", &ExecOpts::default(), &mut |_| {})
         .await;
     assert!(started.elapsed().as_secs() < 5);
-    // SLEEP() bị KILL QUERY trả về 1 thay vì lỗi; câu khác sẽ lỗi 1317.
+    // A killed SLEEP() returns 1 instead of an error; other statements fail with 1317.
     assert!(res.is_ok() || matches!(res, Err(DriverError::Cancelled)));
 }

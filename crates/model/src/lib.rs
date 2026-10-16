@@ -1,7 +1,7 @@
-//! Kiểu dữ liệu thuần dùng chung cho mọi crate của Quarry.
+//! Plain data types shared by every Quarry crate.
 //!
-//! Quy tắc: không IO, không async, mọi type đều `serde` được — để sau này
-//! driver chạy ngoài process (JSON-RPC) mà không phải đổi model.
+//! Rules: no IO, no async. Every type is `serde`-serializable and exported to TypeScript
+//! (`ts-rs`), because the same types travel to the UI and, later, to out-of-process drivers.
 
 mod capabilities;
 mod column;

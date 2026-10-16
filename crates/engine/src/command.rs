@@ -1,14 +1,18 @@
 use std::fmt;
 
 use quarry_model::{ConnId, ConnectionConfig};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-/// ID của một tab query do client cấp (mỗi tab có session riêng).
-pub type TabId = u64;
-/// ID do client cấp để ghép request với kết quả.
-pub type RequestId = u64;
+/// Query tab id, assigned by the client. Each tab owns its own database session.
+pub type TabId = u32;
+/// Client-assigned id used to match a request with its result event.
+pub type RequestId = u32;
 
-/// Password đi qua kênh lệnh. `Debug` không bao giờ in giá trị.
-#[derive(Clone, PartialEq, Eq)]
+/// A password travelling through the command channel. `Debug` never prints it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(transparent)]
+#[ts(export, type = "string")]
 pub struct Password(pub String);
 
 impl fmt::Debug for Password {
@@ -17,60 +21,32 @@ impl fmt::Debug for Password {
     }
 }
 
-/// Lệnh gửi từ client (UI, CLI, MCP) tới engine.
-///
-/// Danh sách đầy đủ dự kiến ở `docs/architecture/ARCHITECTURE.md` §4.
-#[derive(Debug, Clone)]
+/// A request from a client (the UI, later a CLI or MCP server) to the engine.
+/// Results arrive asynchronously as [`crate::Event`]s.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "type")]
+#[ts(export)]
 pub enum Command {
-    /// Kiểm tra kênh client ↔ engine còn sống.
-    Ping {
-        id: u64,
-    },
-    /// Đọc danh sách connection đã lưu → `Event::Connections`.
+    /// Liveness check → `Event::Pong`.
+    Ping { id: u32 },
+    /// Read saved connections → `Event::Connections`.
     LoadConnections,
-    /// Thêm hoặc cập nhật connection (theo `config.id`).
-    /// `password: None` = giữ password hiện có.
-    SaveConnection {
-        config: ConnectionConfig,
-        password: Option<Password>,
-        remember_password: bool,
-    },
-    DeleteConnection {
-        id: ConnId,
-    },
-    /// Thử kết nối với cấu hình chưa lưu → `Event::TestResult`.
-    TestConnection {
-        request: RequestId,
-        config: ConnectionConfig,
-        password: Option<Password>,
-    },
-    /// Mở session metadata, đọc danh sách database.
-    Connect {
-        id: ConnId,
-    },
-    Disconnect {
-        id: ConnId,
-    },
-    /// Đọc bảng/view/routine của một database → `Event::Objects`.
-    LoadObjects {
-        id: ConnId,
-        database: String,
-    },
-    /// Chạy SQL trên session của tab (tự mở session nếu chưa có).
-    /// Với môi trường staging/production, engine có thể trả `Event::ConfirmRequired`
-    /// thay vì chạy; client hỏi người dùng rồi gửi lại với `confirmed: true`.
-    Run {
-        tab: TabId,
-        conn: ConnId,
-        database: Option<String>,
-        sql: String,
-        confirmed: bool,
-    },
-    Cancel {
-        tab: TabId,
-    },
-    /// Đóng session của tab.
-    CloseTab {
-        tab: TabId,
-    },
+    /// Insert or update a connection (matched by `config.id`).
+    /// `password: null` keeps the current password.
+    SaveConnection { config: ConnectionConfig, password: Option<Password>, remember_password: bool },
+    DeleteConnection { id: ConnId },
+    /// Try an unsaved configuration → `Event::TestResult`.
+    TestConnection { request: RequestId, config: ConnectionConfig, password: Option<Password> },
+    /// Open the metadata session and list databases.
+    Connect { id: ConnId },
+    Disconnect { id: ConnId },
+    /// List tables, views and routines of a database → `Event::Objects`.
+    LoadObjects { id: ConnId, database: String },
+    /// Run SQL on the tab's session (opened on first use).
+    /// On staging/production the engine may answer `Event::ConfirmRequired` instead;
+    /// the client asks the user and resends with `confirmed: true`.
+    Run { tab: TabId, conn: ConnId, database: Option<String>, sql: String, confirmed: bool },
+    Cancel { tab: TabId },
+    /// Close the tab's session.
+    CloseTab { tab: TabId },
 }

@@ -1,45 +1,26 @@
 # CLAUDE.md
 
-Hướng dẫn cho AI agent (Claude Code, Codex, …) làm việc trong repo này. `AGENTS.md` là symlink tới file này.
+Guide for AI agents (Claude Code, Codex, …). `AGENTS.md` links here.
 
-## Dự án
+## Project
 
-Quarry: DB client native cho Linux. Rust + GTK4 + libadwaita (Relm4). Chỉ phát hành dạng Flatpak.
-Kiến trúc: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md). Mục lục tài liệu: [docs/README.md](docs/README.md).
+Quarry: an open-source database client for Linux and macOS. Tauri 2 shell, React + TypeScript UI, Rust core.
+Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). UI rules: [docs/STYLE-GUIDE.md](docs/STYLE-GUIDE.md) — read before touching `ui/`.
 
-## Lệnh
+## Layout
 
-| Việc | Lệnh |
-|---|---|
-| Chạy app | `just run` (host cần GTK ≥ 4.14, libadwaita ≥ 1.5) |
-| fmt + clippy + test | `just lint && just test`, hoặc `just check` (trong Docker Ubuntu 24.04) |
-| Chụp màn hình UI sáng/tối | `just screenshot` → `dist/screenshots/` |
-| Build Flatpak | `just flatpak` → `dist/quarry-<version>.flatpak` |
-| Sau khi đổi `Cargo.lock` | `just cargo-sources` (nếu không, build Flatpak sẽ lỗi) |
+- `crates/` — Rust core (model, driver-api, drivers/mysql, sql, store, engine). No UI code.
+- `src-tauri/` — thin bridge: `engine_send`, `engine_subscribe`, `statement_at`. No business logic.
+- `ui/` — React app. `ui/src/bindings/` is generated (`just bindings`); never edit it.
 
-Máy của maintainer chạy Ubuntu 22.04 (GTK quá cũ), nên build/test native phải chạy qua `just check` / `just screenshot`.
+## Commands
 
-## Quy tắc cứng
+`just dev` · `just check` (or `just check-docker` on hosts without webkit2gtk-4.1) · `just db-up` + `just test-db` · `just bindings` · `just flatpak` · `just dmg` (macOS only).
 
-- `crates/app` **chỉ** phụ thuộc `quarry-engine` (+ `model`). Không import driver, `store`, `tunnel` trực tiếp.
-- Hướng phụ thuộc: `app → engine → {driver-api, sql, store, tunnel} → model`. `model` không có IO/async.
-- Không `unwrap()`/`expect()` ngoài test (clippy deny). Không block UI thread; mọi IO đi qua engine (`Command` → `Event`).
-- Chỉ dùng API GTK 4.14 / libadwaita 1.5 (feature `v4_14`, `v1_5`). Không bật feature version cao hơn khi chưa có ADR.
-- Chuỗi hiển thị cho người dùng phải bọc `gettext(...)`; file mới có chuỗi thì thêm vào `po/POTFILES.in`.
-- App ID `io.github.mindulabs.Quarry` xuất hiện ở: `crates/app/src/config.rs`, `data/*`, `build-aux/flatpak/*`, `justfile`. Đổi thì đổi hết.
-- Dependency mới phải qua `cargo deny` (cấm GPL/AGPL của bên thứ ba, xem ADR 0002).
+## Rules
 
-## UI
-
-Trước khi đụng UI, đọc [docs/design/STYLE-GUIDE.md](docs/design/STYLE-GUIDE.md). Tóm tắt:
-- Màu: chỉ dùng named color của libadwaita, cộng các màu `quarry_*` trong `data/resources/style.css`. Không hard-code hex trong Rust.
-- Class CSS riêng có tiền tố `.quarry-`.
-- Animation 150–250 ms, ease-out; ưu tiên animation có sẵn của libadwaita.
-- Xong thì chạy `just screenshot` và tự xem ảnh sáng + tối.
-
-## Quy ước
-
-- Commit: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:`).
-- Comment/doc trong code: tiếng Việt hoặc tiếng Anh đều được. File public ở root (README, CONTRIBUTING…) viết tiếng Anh.
-- Quyết định kiến trúc mới → thêm ADR `docs/architecture/adr/NNNN-*.md`.
-- File sinh tự động, không sửa tay: `build-aux/flatpak/cargo-sources.json`, `data/icons/hicolor/<size>x<size>/`.
+- UI ↔ core only through `Command`/`Event` (crates/engine). Changing them → `just bindings`.
+- No `unwrap()`/`expect()` outside tests. Never log passwords.
+- UI: tokens only (no hex in components), primitives from `ui/src/components/ui/`, animate only opacity/transform.
+- Docs and comments in English.
+- Commits: Conventional Commits. **Never add `Co-Authored-By` or any AI attribution line to commits or PRs.**

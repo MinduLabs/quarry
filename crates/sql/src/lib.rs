@@ -1,17 +1,13 @@
-//! Tiện ích xử lý văn bản SQL.
-//!
-//! Đã có: [`split`] (tách script thành statement), [`statement_at`]
-//! (statement tại vị trí con trỏ) và [`classify`] (cho safe mode).
-//! Sẽ có: ngữ cảnh autocomplete, format. Xem `docs/architecture/ARCHITECTURE.md` §2.
+//! SQL text helpers: [`split`] (script into statements), [`statement_at`]
+//! (statement under the cursor) and [`classify`] (for safe mode).
 
 use std::ops::Range;
 
-/// Tách script thành các statement (theo `;`), bỏ qua `;` nằm trong chuỗi,
-/// identifier có quote và comment. Trả về byte range đã trim khoảng trắng;
-/// statement rỗng bị bỏ qua.
+/// Split a script into statements on `;`, ignoring `;` inside strings, quoted identifiers
+/// and comments. Returns trimmed byte ranges; empty statements are skipped.
 ///
-/// Hỗ trợ cú pháp MySQL/PostgreSQL/SQLite phổ biến: `'..'` (cả `\'` và `''`),
-/// `".."`, `` `..` ``, `-- `, `#`, `/* */`. Chưa hỗ trợ `DELIMITER` và `$$`.
+/// Handles common MySQL/PostgreSQL/SQLite syntax: `'..'` (with `\'` and `''`), `".."`,
+/// `` `..` ``, `-- `, `#`, `/* */`. `DELIMITER` and `$$` are not supported yet.
 pub fn split(sql: &str) -> Vec<Range<usize>> {
     segments(sql)
         .into_iter()
@@ -19,14 +15,14 @@ pub fn split(sql: &str) -> Vec<Range<usize>> {
         .collect()
 }
 
-/// Statement chứa vị trí `offset` (byte). Nếu con trỏ nằm sau dấu `;` cuối
-/// trên phần trống, trả về statement ngay trước đó.
+/// The statement containing byte `offset`. When the cursor sits in blank space after the
+/// last `;`, returns the statement just before it.
 pub fn statement_at(sql: &str, offset: usize) -> Option<Range<usize>> {
     let offset = offset.min(sql.len());
     let mut previous = None;
     for seg in segments(sql) {
         let trimmed = trim(sql, seg.clone());
-        // seg.end trỏ ngay sau `;` (nếu có) nên con trỏ đứng sát `;` vẫn thuộc statement này.
+        // seg.end is just past the `;`, so a cursor right after `;` still belongs to this statement.
         if offset <= seg.end {
             return trimmed.or(previous);
         }
@@ -37,21 +33,21 @@ pub fn statement_at(sql: &str, offset: usize) -> Option<Range<usize>> {
     previous
 }
 
-/// Mức độ ảnh hưởng của một statement, dùng cho safe mode.
+/// How much a statement can change, for safe mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatementKind {
-    /// SELECT, SHOW, EXPLAIN, … — không thay đổi dữ liệu.
+    /// SELECT, SHOW, EXPLAIN, … — changes nothing.
     Read,
-    /// INSERT, UPDATE/DELETE có WHERE, CALL, …
+    /// INSERT, UPDATE/DELETE with WHERE, CALL, …
     Write,
     /// CREATE, ALTER, GRANT, …
     Schema,
-    /// DROP, TRUNCATE, UPDATE/DELETE không có WHERE.
+    /// DROP, TRUNCATE, UPDATE/DELETE without WHERE.
     Destructive,
 }
 
-/// Phân loại một statement theo từ khoá đầu tiên (bỏ qua comment và dấu ngoặc).
-/// Từ khoá lạ được xếp vào `Write` để an toàn.
+/// Classify a statement by its first keyword (comments and parentheses are skipped).
+/// Unknown keywords count as `Write`, to stay on the safe side.
 pub fn classify(statement: &str) -> StatementKind {
     let words = keywords(statement);
     let Some(first) = words.first() else {
@@ -60,7 +56,7 @@ pub fn classify(statement: &str) -> StatementKind {
     match first.as_str() {
         "SELECT" | "SHOW" | "EXPLAIN" | "DESCRIBE" | "DESC" | "USE" | "HELP" | "VALUES"
         | "TABLE" => StatementKind::Read,
-        // CTE: xét câu lệnh chính phía sau.
+        // CTE: look at the main statement that follows.
         "WITH" => {
             if words
                 .iter()
@@ -78,7 +74,7 @@ pub fn classify(statement: &str) -> StatementKind {
     }
 }
 
-/// Các từ (viết hoa) ngoài chuỗi và comment.
+/// Upper-cased words outside strings and comments.
 fn keywords(statement: &str) -> Vec<String> {
     let bytes = statement.as_bytes();
     let mut words = Vec::new();
@@ -104,7 +100,7 @@ fn keywords(statement: &str) -> Vec<String> {
     words
 }
 
-/// Các đoạn thô giữa các `;` (bao gồm cả `;`).
+/// Raw segments between `;` (including the `;`).
 fn segments(sql: &str) -> Vec<Range<usize>> {
     let bytes = sql.as_bytes();
     let mut out = Vec::new();
@@ -138,7 +134,7 @@ fn skip_quoted(bytes: &[u8], open: usize, quote: u8) -> usize {
         match bytes[i] {
             b'\\' if quote != b'`' => i += 2,
             b if b == quote => {
-                // `''` / `""` / ``` `` ``` là quote được escape
+                // `''` / `""` / ``` `` ``` is an escaped quote
                 if bytes.get(i + 1) == Some(&quote) {
                     i += 2;
                 } else {
@@ -163,7 +159,7 @@ fn find(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|p| p + from)
 }
 
-/// Bỏ khoảng trắng và dấu `;` ở cuối; `None` nếu không còn gì ngoài comment/khoảng trắng.
+/// Trim whitespace and the trailing `;`; `None` when only comments/whitespace remain.
 fn trim(sql: &str, seg: Range<usize>) -> Option<Range<usize>> {
     let text = &sql[seg.clone()];
     let text_no_semi = text.trim_end().strip_suffix(';').unwrap_or(text);
@@ -175,7 +171,7 @@ fn trim(sql: &str, seg: Range<usize>) -> Option<Range<usize>> {
     Some(start..end)
 }
 
-/// Độ dài phần khoảng trắng và comment dòng (`--`, `#`) ở đầu đoạn.
+/// Length of the leading whitespace and line comments (`--`, `#`).
 fn leading_noise(text: &str) -> usize {
     let mut rest = text;
     loop {
@@ -265,10 +261,10 @@ mod tests {
         let sql = "SELECT 1;\nSELECT 2;\n\n";
         let at = |o| statement_at(sql, o).map(|r| &sql[r]);
         assert_eq!(at(0), Some("SELECT 1"));
-        assert_eq!(at(8), Some("SELECT 1")); // ngay trước `;`
+        assert_eq!(at(8), Some("SELECT 1")); // just before `;`
         assert_eq!(at(9), Some("SELECT 1")); // ngay sau `;`
         assert_eq!(at(12), Some("SELECT 2"));
-        assert_eq!(at(sql.len()), Some("SELECT 2")); // dòng trống cuối
+        assert_eq!(at(sql.len()), Some("SELECT 2")); // trailing blank line
         assert_eq!(statement_at("", 0), None);
     }
 }

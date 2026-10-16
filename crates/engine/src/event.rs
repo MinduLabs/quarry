@@ -1,92 +1,63 @@
-use std::time::Duration;
-
 use quarry_model::{ColumnMeta, ConnId, ConnectionConfig, SchemaObject, Value};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::command::{RequestId, TabId};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind")]
+#[ts(export)]
 pub enum ConnState {
     Connecting,
     Connected { server_version: String },
     Disconnected,
-    Failed(String),
+    Failed { error: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum NoticeKind {
     Info,
     Warning,
     Error,
 }
 
-/// Sự kiện engine gửi về client.
-#[derive(Debug, Clone)]
+/// Something the engine reports to its client.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "type")]
+#[ts(export)]
 pub enum Event {
-    Pong {
-        id: u64,
-        version: String,
-    },
-    /// Thông báo chung (hiện dạng toast).
-    Notice {
-        kind: NoticeKind,
-        message: String,
-    },
-    /// Danh sách connection hiện tại (gửi lại toàn bộ sau mỗi thay đổi).
-    Connections(Vec<ConnectionConfig>),
-    TestResult {
-        request: RequestId,
-        result: Result<String, String>,
-    },
-    ConnState {
-        id: ConnId,
-        state: ConnState,
-    },
-    Databases {
-        id: ConnId,
-        databases: Vec<String>,
-    },
-    Objects {
-        id: ConnId,
-        database: String,
-        result: Result<Vec<SchemaObject>, String>,
-    },
+    Pong { id: u32, version: String },
+    /// General message, shown as a toast.
+    Notice { kind: NoticeKind, message: String },
+    /// The full connection list, re-sent after every change.
+    Connections { connections: Vec<ConnectionConfig> },
+    /// `error: null` means the connection worked; `server_version` is then set.
+    TestResult { request: RequestId, server_version: Option<String>, error: Option<String> },
+    ConnState { id: ConnId, state: ConnState },
+    Databases { id: ConnId, databases: Vec<String> },
+    /// Either `objects` or `error` is set.
+    Objects { id: ConnId, database: String, objects: Option<Vec<SchemaObject>>, error: Option<String> },
 
-    /// Safe mode: cần người dùng xác nhận trước khi chạy `sql`.
-    ConfirmRequired {
-        tab: TabId,
-        conn: ConnId,
-        database: Option<String>,
-        sql: String,
-        message: String,
-    },
-    QueryStarted {
-        tab: TabId,
-    },
-    /// Bắt đầu result set thứ `set` (đếm từ 0) trong lần chạy hiện tại.
-    ResultColumns {
-        tab: TabId,
-        set: usize,
-        columns: Vec<ColumnMeta>,
-    },
-    ResultRows {
-        tab: TabId,
-        set: usize,
-        rows: Vec<Vec<Value>>,
-    },
+    /// Safe mode: the user must confirm before `sql` runs.
+    ConfirmRequired { tab: TabId, conn: ConnId, database: Option<String>, sql: String, message: String },
+    QueryStarted { tab: TabId },
+    /// Start of result set number `set` (from 0) in the current run.
+    ResultColumns { tab: TabId, set: u32, columns: Vec<ColumnMeta> },
+    ResultRows { tab: TabId, set: u32, rows: Vec<Vec<Value>> },
     ResultDone {
         tab: TabId,
-        set: usize,
+        set: u32,
+        #[ts(type = "number")]
         affected: u64,
+        #[ts(type = "number")]
         rows: u64,
         truncated: bool,
     },
     QueryFinished {
         tab: TabId,
-        elapsed: Duration,
+        #[ts(type = "number")]
+        elapsed_ms: u64,
     },
-    QueryFailed {
-        tab: TabId,
-        error: String,
-        cancelled: bool,
-    },
+    QueryFailed { tab: TabId, error: String, cancelled: bool },
 }

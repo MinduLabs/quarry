@@ -1,7 +1,7 @@
-//! Chuyển đổi giữa kiểu của `mysql_async` và [`quarry_model::Value`].
+//! Conversion between `mysql_async` values and [`quarry_model::Value`].
 //!
-//! Query thường chạy bằng text protocol nên mọi giá trị (trừ NULL) về dạng bytes;
-//! kiểu thật lấy từ metadata của cột.
+//! Plain queries use the text protocol, so every non-NULL value arrives as bytes;
+//! the real type comes from the column metadata.
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use mysql_async::consts::{ColumnFlags, ColumnType};
@@ -67,7 +67,7 @@ pub fn type_name(column: &Column) -> String {
             }
         }
         MYSQL_TYPE_STRING => {
-            // ENUM/SET được server báo là STRING kèm flag.
+            // The server reports ENUM/SET as STRING plus a flag.
             if column.flags().contains(ColumnFlags::ENUM_FLAG) {
                 "ENUM"
             } else if column.flags().contains(ColumnFlags::SET_FLAG) {
@@ -93,7 +93,7 @@ pub fn value(raw: MyValue, column: &Column) -> Value {
     let bytes = match raw {
         MyValue::NULL => return Value::Null,
         MyValue::Bytes(bytes) => bytes,
-        // Binary protocol (prepared statement) trả kiểu có sẵn.
+        // The binary protocol (prepared statements) returns typed values.
         MyValue::Int(v) => return Value::Int(v),
         MyValue::UInt(v) => return Value::UInt(v),
         MyValue::Float(v) => return Value::Float(f64::from(v)),
@@ -128,14 +128,14 @@ pub fn value(raw: MyValue, column: &Column) -> Value {
         | MYSQL_TYPE_TIMESTAMP
         | MYSQL_TYPE_TIMESTAMP2 => {
             let text = lossy(&bytes);
-            // '0000-00-00 00:00:00' không parse được → giữ nguyên dạng text.
+            // '0000-00-00 00:00:00' does not parse: keep it as text.
             NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M:%S%.f")
                 .map(Value::Timestamp)
                 .unwrap_or(Value::Text(text))
         }
         MYSQL_TYPE_TIME | MYSQL_TYPE_TIME2 => {
             let text = lossy(&bytes);
-            // TIME của MySQL có thể âm hoặc > 24h ('838:59:59').
+            // MySQL TIME can be negative or above 24h ('838:59:59').
             NaiveTime::parse_from_str(&text, "%H:%M:%S%.f")
                 .map(Value::Time)
                 .unwrap_or(Value::Text(text))
@@ -164,7 +164,7 @@ fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Chuyển [`Value`] thành tham số cho prepared statement.
+/// Convert a [`Value`] into a prepared-statement parameter.
 pub fn to_mysql(value: &Value) -> MyValue {
     match value {
         Value::Null => MyValue::NULL,

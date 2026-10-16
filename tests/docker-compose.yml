@@ -1,6 +1,6 @@
-# Database dùng cho integration test và chạy thử app.
+# Databases for integration tests and for trying the app.
 #   docker compose -f tests/docker-compose.yml up -d
-# MySQL: 127.0.0.1:13306, user quarry / password quarry (giá trị test, không dùng cho môi trường thật)
+# MySQL: 127.0.0.1:13306, user quarry / password quarry (test values only)
 services:
   mysql:
     image: mysql:8.4

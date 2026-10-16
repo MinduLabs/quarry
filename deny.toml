@@ -1,5 +1,5 @@
-# cargo-deny: chặn advisory bảo mật và license không tương thích.
-# Lý do chặn GPL/AGPL của bên thứ ba: xem docs/architecture/adr/0002-agpl-single-repo-license-key.md
+# cargo-deny: block security advisories and incompatible licenses.
+# Third-party GPL/AGPL is blocked so the project keeps the option to relicense (see CONTRIBUTING.md, CLA).
 
 [graph]
 all-features = true
@@ -11,7 +11,7 @@ yanked = "deny"
 [licenses]
 version = 2
 confidence-threshold = 0.9
-# Danh sách allow là chính sách chung, không phải crate nào cũng dùng hết.
+# The allow list is a policy; not every license is in use.
 unused-allowed-license = "allow"
 allow = [
     "MIT",
@@ -28,7 +28,7 @@ allow = [
     "Unicode-DFS-2016",
     "CDLA-Permissive-2.0",
 ]
-# Crate của chính Quarry dùng AGPL.
+# Quarry's own crates are AGPL.
 exceptions = [
     { allow = ["AGPL-3.0-or-later"], crate = "quarry" },
     { allow = ["AGPL-3.0-or-later"], crate = "quarry-model" },

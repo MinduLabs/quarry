@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-/// Loại object trong cây schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Kind of object in the schema tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum ObjectKind {
     Database,
     Schema,
@@ -16,9 +18,9 @@ pub enum ObjectKind {
     Index,
 }
 
-/// Driver khai báo nó làm được gì; UI bật/tắt tính năng theo đây
-/// thay vì `if driver == "postgres"`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// What a driver supports. Clients enable features from this instead of checking the driver id.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct Capabilities {
     pub schemas: bool,
     pub transactions: bool,

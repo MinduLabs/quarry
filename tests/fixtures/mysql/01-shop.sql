@@ -1,4 +1,4 @@
--- Dữ liệu mẫu cho test và demo.
+-- Sample data for tests and demos.
 SET NAMES utf8mb4;
 USE shop;
 
@@ -54,7 +54,7 @@ INSERT INTO products (sku, name, price, in_stock, attributes) VALUES
   ('MN-27', '27" Monitor', 249.00, FALSE, NULL),
   ('HB-07', 'USB-C Hub', 39.99, TRUE, '{"ports": 7}');
 
--- 5000 đơn hàng để thử phân trang
+-- 5000 orders to exercise paging
 SET SESSION cte_max_recursion_depth = 10000;
 INSERT INTO orders (customer_id, status, total, note, ordered_at)
 WITH RECURSIVE seq (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 5000)
@@ -76,7 +76,7 @@ CREATE TABLE inventory.warehouses (id INT PRIMARY KEY, name VARCHAR(100), city V
 INSERT INTO inventory.warehouses VALUES (1, 'Main', 'Hà Nội'), (2, 'South', 'TP.HCM');
 GRANT ALL PRIVILEGES ON inventory.* TO 'quarry'@'%';
 
--- User chỉ đọc, không password: dùng cho chạy thử UI trong môi trường không có keyring.
+-- Read-only user without a password, for trying the UI where no keyring exists.
 CREATE USER 'demo'@'%' IDENTIFIED BY '';
 GRANT SELECT, SHOW VIEW ON shop.* TO 'demo'@'%';
 GRANT SELECT ON inventory.* TO 'demo'@'%';
