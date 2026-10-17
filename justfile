@@ -4,7 +4,8 @@ app_id := "io.github.mindulabs.Quarry"
 version := `grep -m1 '^version' Cargo.toml | cut -d'"' -f2`
 uid := `id -u`
 gid := `id -g`
-docker_dev := "docker run --rm --network host -u " + uid + ":" + gid + " -v " + justfile_directory() + ":/src -e CARGO_HOME=/src/target/.cargo-home -e CARGO_TARGET_DIR=/src/target/docker quarry-tauri-dev"
+# Linux builds run in docker/linux.Dockerfile. Caches stay inside Docker (`docker builder prune`).
+docker_linux := "docker buildx build -f docker/linux.Dockerfile"
 
 default:
     @just --list
@@ -24,14 +25,10 @@ check:
 bindings:
     cargo test -q -p quarry-model -p quarry-engine
 
-# Build the Linux dev image (for hosts without webkit2gtk-4.1)
-dev-image:
-    docker build -t quarry-tauri-dev -f docker/dev.Dockerfile docker
-
-# Same as `check`, Rust part inside Docker
-check-docker: dev-image
+# Same as `check`, Rust part inside Docker (for hosts without webkit2gtk-4.1). Leaves no files.
+check-docker:
     pnpm check
-    {{docker_dev}} sh -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+    {{docker_linux}} --target check --output type=cacheonly .
 
 # Start / stop the test MySQL (127.0.0.1:13306)
 db-up:
@@ -44,35 +41,44 @@ db-down:
 test-db:
     QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test -p quarry-driver-mysql -p quarry-engine
 
-# macOS: build the universal .dmg (target/universal-apple-darwin/release/bundle/dmg). Run on a Mac.
+# macOS universal .dmg → dist/Quarry_<version>_universal.dmg. macOS only: Tauri cannot cross-build it.
+[macos]
 dmg:
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     pnpm tauri build --target universal-apple-darwin --bundles dmg
+    mkdir -p dist
+    cp target/universal-apple-darwin/release/bundle/dmg/Quarry_{{version}}_universal.dmg dist/
+    @echo "Built: {{justfile_directory()}}/dist/Quarry_{{version}}_universal.dmg"
 
-# macOS from Linux: dist/macos/Quarry.app + .app.zip (universal, ad-hoc signed, not notarized; no .dmg, use `just dmg` on a Mac).
-# Fast build by default (~40 s warm); `just mac-cross 1` for the full-LTO release profile.
-mac-cross release="0":
-    pnpm build
-    docker build -t quarry-mac-cross -f docker/mac-cross.Dockerfile docker
-    docker run --rm -u {{uid}}:{{gid}} -e HOME=/tmp -v {{justfile_directory()}}:/src -w /src \
-      -e CARGO_HOME=/src/target/.cargo-home-mac -e CARGO_TARGET_DIR=/src/target -e RELEASE={{release}} quarry-mac-cross packaging/macos/cross-build.sh
+# Linux AppImage → dist/Quarry_<version>_amd64.AppImage (Docker, Ubuntu 22.04)
+appimage:
+    {{docker_linux}} --target export --build-arg BUNDLE=appimage --output type=local,dest=dist .
+    @echo "Built: {{justfile_directory()}}/dist/Quarry_{{version}}_amd64.AppImage"
 
-# Linux: dist/linux/*.AppImage + *.deb, built inside Docker (Ubuntu 24.04).
-# Fast build by default; `just linux-bundles 1` for the full-LTO release profile.
-linux-bundles release="0": dev-image
-    pnpm build
-    {{docker_dev}} packaging/linux/bundle.sh {{release}}
+# Linux .deb → dist/Quarry_<version>_amd64.deb (Docker, Ubuntu 22.04)
+deb:
+    {{docker_linux}} --target export --build-arg BUNDLE=deb --output type=local,dest=dist .
+    @echo "Built: {{justfile_directory()}}/dist/Quarry_{{version}}_amd64.deb"
 
-# Linux: build dist/quarry-<version>.flatpak inside Docker
+# flatpak-builder state lives in the `quarry-flatpak-cache` volume, not in the repo.
+# Linux Flatpak → dist/quarry-<version>.flatpak (Docker)
 flatpak:
     pnpm build
     docker build -t quarry-flatpak -f docker/flatpak.Dockerfile docker
     docker run --rm -u {{uid}}:{{gid}} -v {{justfile_directory()}}:/src -w /src quarry-flatpak python3 /usr/local/bin/flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
     mkdir -p dist
-    docker run --rm --privileged -v {{justfile_directory()}}:/src -v quarry-flatpak-data:/root/.local/share/flatpak -w /src quarry-flatpak sh -c '\
+    docker run --rm --privileged -v {{justfile_directory()}}:/src -v quarry-flatpak-data:/root/.local/share/flatpak -v quarry-flatpak-cache:/cache -w /src quarry-flatpak sh -c '\
       set -e; \
+      trap "rm -f packaging/flatpak/local.json" EXIT; \
       sed "s/\"command\": \"quarry\",/\"command\": \"quarry\", \"appstream-compose\": false,/" packaging/flatpak/{{app_id}}.json > packaging/flatpak/local.json; \
       flatpak-builder --user --install-deps-from=flathub --disable-rofiles-fuse --force-clean \
-        --state-dir=/src/.flatpak-builder --repo=/src/.flatpak-repo /src/.flatpak-builder/build packaging/flatpak/local.json; \
-      flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo /src/.flatpak-repo dist/quarry-{{version}}.flatpak {{app_id}}; \
-      chown -R {{uid}}:{{gid}} /src/dist /src/.flatpak-builder /src/.flatpak-repo'
+        --state-dir=/cache/state --repo=/cache/repo /cache/build packaging/flatpak/local.json; \
+      flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo /cache/repo dist/quarry-{{version}}.flatpak {{app_id}}; \
+      chown {{uid}}:{{gid}} dist/quarry-{{version}}.flatpak'
+    @echo "Built: {{justfile_directory()}}/dist/quarry-{{version}}.flatpak"
+
+# BuildKit caches of the Linux builds are cleared with `docker builder prune`.
+# Delete target/, dist/, ui/dist and the Flatpak cache volumes
+clean:
+    rm -rf target dist ui/dist
+    -docker volume rm quarry-flatpak-cache quarry-flatpak-data

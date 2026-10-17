@@ -117,12 +117,25 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 | Platform | Output | How |
 |---|---|---|
 | Linux | Flatpak (GNOME 51 runtime, WebKitGTK 4.1) | `just flatpak` → `dist/quarry-<version>.flatpak` |
-| Linux | AppImage, `.deb` | `just linux-bundles` (inside Docker) → `dist/linux/` |
-| macOS | `.app` / `.dmg` (universal) | `just dmg` on a Mac (release, CI), or `just mac-cross` from Linux → `dist/macos/` (`.app` + `.app.zip` only, no `.dmg`; ad-hoc signed, not notarized) |
+| Linux | AppImage | `just appimage` (Docker, Ubuntu 22.04) → `dist/Quarry_<version>_amd64.AppImage` |
+| Linux | `.deb` | `just deb` (Docker, Ubuntu 22.04) → `dist/Quarry_<version>_amd64.deb` |
+| macOS | universal `.dmg` | `just dmg` on a Mac → `dist/Quarry_<version>_universal.dmg` |
 
-`just mac-cross` and `just linux-bundles` use a fast profile by default (no LTO, 16 codegen units,
-incremental, separate target dir) so a warm rebuild takes under a minute. Pass `1`
-(`just mac-cross 1`) for the full release profile; CI and Flatpak always use it.
+Every package lands flat in `dist/`, one file per command, nothing else. Each build prints the full path.
+
+- **Linux base: Ubuntu 22.04.** Tauri's guide says to build on the oldest distro you support that still
+  ships WebKitGTK 4.1; the binary needs the glibc it was built with.
+- **Caching.** `docker/linux.Dockerfile` is multi-stage. Apt packages, Rust, Node and npm packages are
+  cached layers; Cargo's registry and target dir are BuildKit cache mounts. Caches stay inside Docker,
+  not in the repo (`docker builder prune` to clear). The final `scratch` stage holds only the bundle,
+  and `--output type=local,dest=dist` writes just that file.
+- **`.dmg` only on macOS.** Tauri cannot cross-build macOS bundles. Release builds come from the
+  macOS runner in `release.yml`.
+- **Size.** The release profile follows Tauri's size guide (<https://v2.tauri.app/concept/size/>):
+  `lto = true`, `codegen-units = 1`, `opt-level = "s"`, `strip = true`. `panic = "abort"` is left out
+  so a panic in one engine task does not kill the app.
+- **Release.** Push a `v*` tag: `release.yml` runs CI, builds every package on GitHub runners and
+  publishes a public GitHub Release with the AppImage, `.deb`, Flatpak and `.dmg`.
 
 The desktop entry, AppStream metadata and icons live in `packaging/linux/` and `src-tauri/icons/`.
 On Wayland the dock takes the icon from the desktop entry named after the app ID, not from the window.

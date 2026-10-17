@@ -15,4 +15,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Click a table to browse it.
 - Safe mode: production asks before any write, staging asks before DROP / TRUNCATE / UPDATE·DELETE without WHERE; read-only connections.
 - Light and dark themes.
-- Packaging: Flatpak, AppImage and `.deb` on Linux; universal `.app` / `.dmg` on macOS.
+- Packaging: Flatpak, AppImage and `.deb` on Linux; universal `.dmg` on macOS. Linux packages are built on Ubuntu 22.04 so they also run on older distros; release builds are size-optimized.

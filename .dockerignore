@@ -1,0 +1,11 @@
+# Build context for docker/linux.Dockerfile: sources only, no build output or caches.
+.git
+target
+dist
+node_modules
+ui/dist
+src-tauri/gen
+.flatpak-builder
+.flatpak-repo
+packaging/flatpak/local.json
+*.flatpak

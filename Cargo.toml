@@ -64,7 +64,18 @@ expect_used = "deny"
 dbg_macro = "deny"
 todo = "warn"
 
+# Debug builds: line tables for our crates, no debug info for dependencies. Full debug info for
+# every dependency is what made target/debug many GB.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Size-first release profile, as recommended by https://v2.tauri.app/concept/size/.
+# `panic = "abort"` is left out on purpose: a panic in one engine task would then kill the whole app.
 [profile.release]
-lto = "thin"
 codegen-units = 1
+lto = true
+opt-level = "s"
 strip = true

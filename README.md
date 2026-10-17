@@ -39,7 +39,8 @@ just check      # lint + tests
 ```
 
 No WebKitGTK on your Linux host? `just check-docker` runs the Rust part in Docker. Packaging:
-`just flatpak`, `just linux-bundles`, `just dmg` (on a Mac) or `just mac-cross` (from Linux).
+`just appimage`, `just deb`, `just flatpak` (Docker) or `just dmg` (macOS only).
+Each writes one file to `dist/` and prints its path.
 
 ## Contributing
 
