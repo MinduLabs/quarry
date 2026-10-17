@@ -33,8 +33,9 @@ logic in a headless Rust core. App ID: `io.github.mindulabs.Quarry`.
 └───┬───────────┬───────────┬───────────┬──────┘
     ▼           ▼           ▼           ▼
  driver-api    sql        store       tunnel
-    │        (split,    (config,     (SSH, planned)
-    ▼        classify)   keyring)
+    │        (split,    (config,     (SSH port
+    ▼        classify)   keyring,    forwarding)
+                         history)
  drivers/mysql
     └───────────┴───────────┴───────────┘
                        ▼
@@ -44,11 +45,11 @@ logic in a headless Rust core. App ID: `io.github.mindulabs.Quarry`.
 | Crate | Responsibility |
 |---|---|
 | `model` | `Value`, `ColumnMeta`, `SchemaObject`, `ConnectionConfig`, `Capabilities`, `Environment`. Exports TypeScript types (ts-rs). |
-| `driver-api` | `Driver` / `Session` traits, `ExecItem`, shared error type. |
+| `driver-api` | `Driver` / `Session` traits (including `table_info`), `Dialect` (quoting, placeholders, paging), `ExecItem`, shared error type. |
 | `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls: connect, SSL modes, multi-statement scripts, cancel with `KILL QUERY` on a side connection, introspection through `information_schema`. |
 | `sql` | Statement splitting, statement at cursor, classification (read / write / DDL / destructive). |
-| `store` | Saved connections (TOML, no secrets) and passwords in the OS keyring. |
-| `tunnel` | SSH port forwarding (planned). |
+| `store` | Saved connections and favorites (TOML, no secrets), open tabs (`workspace.json`), query history (`history.jsonl`), secrets in the OS keyring. |
+| `tunnel` | SSH local port forwarding via `russh`: ssh-agent, key file or password; the host key must be in `known_hosts`. |
 | `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Exports TypeScript types. |
 | `src-tauri` | Window, bundling, and the three bridge commands. |
 
@@ -70,9 +71,16 @@ Main flows:
 
 ```
 Connect      Connect{id} → ConnState(Connecting) → ConnState(Connected) → Databases
-Browse       LoadObjects{id, database} → Objects
-Query        Run{tab, sql} → QueryStarted → (ResultColumns → ResultRows* → ResultDone)* → QueryFinished | QueryFailed
+Tree         LoadObjects{id, database} → Objects
+Query        Run{tab, sql} → QueryStarted → (ResultColumns → ResultRows* → ResultDone)* → QueryFinished | QueryFailed → HistoryAdded
+Table page   Browse{tab, table, limit, offset} → same events as Query (the engine builds the SELECT for the dialect)
+Structure    LoadTableInfo{request, conn, table} → TableInfo
+Grid edits   ApplyChanges{tab, table, changes} → ChangesApplied | ChangesFailed (one transaction)
 Safe mode    Run{confirmed:false} → ConfirmRequired → user agrees → Run{confirmed:true}
+             ApplyChanges{confirmed:false} → ChangesConfirmRequired (production) → … {confirmed:true}
+Tabs         LoadWorkspace → Workspace;  SaveWorkspace{request} → WorkspaceSaved
+History      LoadHistory{request, query} → History;  ClearHistory
+Favorites    LoadFavorites / SaveFavorite / DeleteFavorite → Favorites (the full list)
 ```
 
 ## Runtime
@@ -82,6 +90,11 @@ Safe mode    Run{confirmed:false} → ConfirmRequired → user agrees → Run{co
   Each connection also has a metadata session for introspection.
 - Rows are sent in batches of about 500 and capped at 1000 per result set (`truncated: true` beyond that).
 - Cancel goes around the session (driver cancel handle), so it works while a query is running.
+- A connection over SSH has one tunnel, shared by its metadata session, its tabs and the cancel
+  connection. Disconnect closes it. Test Connection opens its own tunnel and drops it after.
+- Grid edits run on the tab's session in one transaction. They are parameterized (`?` per value),
+  keyed by the primary key, and every UPDATE/DELETE must hit exactly one row or the batch rolls
+  back. Only a page of a table with a primary key is editable; read-only connections refuse.
 
 ## Safe mode
 
@@ -89,7 +102,7 @@ Safe mode    Run{confirmed:false} → ConfirmRequired → user agrees → Run{co
 |---|---|
 | Local | Runs everything. |
 | Staging | Asks before `DROP`, `TRUNCATE`, and `UPDATE`/`DELETE` without `WHERE`. |
-| Production | Asks before every write; can be set read-only. The UI marks the connection in red. |
+| Production | Asks before every write, including grid edits; can be set read-only. The UI marks the connection in red. |
 
 Classification comes from `quarry-sql`; the decision is made by the engine.
 
@@ -98,11 +111,15 @@ Classification comes from `quarry-sql`; the decision is made by the engine.
 | Data | Location |
 |---|---|
 | Connections | `connections.toml` in the OS config dir (`~/.config/quarry`, `~/Library/Application Support/quarry`). Never contains secrets. Has a `version` field for migrations. |
-| Passwords | Linux: Secret Service / Secret portal via `oo7`. macOS: Keychain via `security-framework`. |
+| Favorites | `favorites.toml` in the same config dir. |
+| Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL and page per tab. Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
+| Query history | `history.jsonl` in the data dir: SQL, connection, database, time, duration, first error line. Newest 5,000 kept. Never passwords. |
+| Secrets | Linux: Secret Service / Secret portal via `oo7`. macOS: Keychain via `security-framework`. Account `<connection uuid>` for the database password, `<connection uuid>:ssh` for the SSH password or key passphrase. |
+| SSH host keys | Read from `~/.ssh/known_hosts`, never written. The Flatpak gets `~/.ssh` read-only and the ssh-agent socket. |
 
 ## UI
 
-`ui/src` is organized by feature: `features/{sidebar,connections,tabs,editor,query,grid,welcome}`,
+`ui/src` is organized by feature: `features/{sidebar,connections,tabs,editor,query,grid,structure,history,favorites,welcome,window}`,
 shared primitives in `components/ui`, global state in `store/app.ts` (zustand; it is also where engine
 events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 [STYLE-GUIDE.md](STYLE-GUIDE.md).
@@ -110,7 +127,11 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 - **Editor:** CodeMirror 6 with SQL highlighting and schema-aware completion; `Ctrl/⌘+Enter` runs the
   statement under the cursor (range computed in Rust by `statement_at`).
 - **Grid:** row virtualization (`@tanstack/react-virtual`), sticky header and row-number column,
-  resizable columns, cell selection and copy.
+  resizable columns, cell selection and copy. On an editable table page: double-click or Enter to
+  edit, Set NULL, add and delete rows, then Save (`Ctrl/⌘+S`) or Discard.
+- **Table tabs:** a Data | Structure switch (columns, indexes, foreign keys, DDL) and a pager of
+  1,000 rows without a total count.
+- **Sidebar:** Connections, Favorites (pinned tables, saved queries) and History, with one filter box.
 
 ## Packaging
 

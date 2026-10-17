@@ -31,7 +31,8 @@ paths:
 ## Store
 
 - `connections.toml` lives in the OS config dir (`~/.config/quarry`, `~/Library/Application Support/quarry`), has `version`, and never holds secrets.
-- Passwords: keyring service `quarry`, account `<connection uuid>`. Linux uses `oo7` (Secret Service); macOS uses `security-framework`. A missing item is not an error.
+- Secrets: keyring service `quarry`, account `<connection uuid>` (database password) or `<connection uuid>:ssh` (SSH password or key passphrase), chosen by `SecretKind`. Linux uses `oo7` (Secret Service); macOS uses `security-framework`. A missing item is not an error.
+- Other files: `favorites.toml` (config dir), `workspace.json` and `history.jsonl` (data dir). Writes go through `write_atomic`; a file another task may write at the same time takes a lock.
 - A format change bumps `SCHEMA_VERSION` and adds a migration with a test that loads an old file.
 
 ## Tests

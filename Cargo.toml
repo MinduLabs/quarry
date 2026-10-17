@@ -32,7 +32,7 @@ quarry-driver-mysql = { path = "crates/drivers/mysql" }
 # Core
 async-channel = "2.5"
 async-trait = "0.1"
-chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 mysql_async = { version = "0.37", default-features = false, features = ["default-rustls-ring"] }
 oo7 = { version = "0.6", default-features = false, features = ["tokio", "native_crypto"] }
@@ -45,6 +45,11 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "ti
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# SSH tunnels: ring for crypto (rustls already uses it), no compression. No `rsa` feature: the
+# `rsa` crate has an unfixed timing side channel (RUSTSEC-2023-0071). RSA keys still work through
+# ssh-agent, which signs outside Quarry.
+russh = { version = "0.63", default-features = false, features = ["ring"] }
 
 # Desktop shell
 tauri = { version = "2.12", features = [] }

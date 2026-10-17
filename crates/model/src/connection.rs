@@ -38,13 +38,29 @@ pub enum SslMode {
     VerifyFull,
 }
 
+/// How the SSH tunnel signs in. The password or key passphrase lives in the keyring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SshAuth {
+    /// Keys loaded in the running ssh-agent (`SSH_AUTH_SOCK`).
+    #[default]
+    Agent,
+    /// A private key file (`key_path`), optionally protected by a passphrase.
+    Key,
+    Password,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SshConfig {
     pub host: String,
     pub port: u16,
     pub user: String,
-    /// Private key path; `None` = ssh-agent or password.
+    /// Absent in files written before SSH tunnels existed.
+    #[serde(default)]
+    pub auth: SshAuth,
+    /// Private key path for `SshAuth::Key`; `~/` is the home directory.
     pub key_path: Option<String>,
 }
 

@@ -4,8 +4,14 @@
 //!   **Never contains secrets.**
 //! - [`SecretStore`]: passwords in the OS keyring — Secret Service / Secret portal on
 //!   Linux (works inside Flatpak), Keychain on macOS.
+//! - [`FavoritesStore`]: pinned tables and saved queries in `<config dir>/quarry/favorites.toml`.
+//! - [`WorkspaceStore`]: open tabs in `<data dir>/quarry/workspace.json`.
+//! - [`HistoryStore`]: queries the user ran, in `<data dir>/quarry/history.jsonl`.
 
+mod favorites;
+mod history;
 mod secrets;
+mod workspace;
 
 use std::fs;
 use std::io::Write;
@@ -14,7 +20,10 @@ use std::path::{Path, PathBuf};
 use quarry_model::ConnectionConfig;
 use serde::{Deserialize, Serialize};
 
-pub use secrets::SecretStore;
+pub use favorites::FavoritesStore;
+pub use history::HistoryStore;
+pub use secrets::{SecretKind, SecretStore};
+pub use workspace::WorkspaceStore;
 
 const APP_DIR: &str = "quarry";
 const CONNECTIONS_FILE: &str = "connections.toml";
@@ -40,6 +49,11 @@ pub enum StoreError {
     TooNew { path: PathBuf, found: u32 },
     #[error("keyring: {0}")]
     Keyring(String),
+    #[error("{path}: invalid file: {source}")]
+    Json {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
 }
 
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
@@ -49,6 +63,14 @@ pub type Result<T, E = StoreError> = std::result::Result<T, E>;
 pub fn default_config_dir() -> Result<PathBuf> {
     directories::BaseDirs::new()
         .map(|dirs| dirs.config_dir().join(APP_DIR))
+        .ok_or(StoreError::NoConfigDir)
+}
+
+/// Default data directory for state that is not configuration (open tabs, history):
+/// `$XDG_DATA_HOME/quarry` on Linux, `~/Library/Application Support/quarry` on macOS.
+pub fn default_data_dir() -> Result<PathBuf> {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.data_dir().join(APP_DIR))
         .ok_or(StoreError::NoConfigDir)
 }
 
@@ -68,6 +90,11 @@ pub struct ConfigStore {
 impl ConfigStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
+    }
+
+    /// The directory this store reads and writes; other config files live next to it.
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     fn connections_path(&self) -> PathBuf {
@@ -106,7 +133,7 @@ impl ConfigStore {
 }
 
 /// Write to a temp file, then rename, so a crash never leaves a half-written file.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let io_err = |source| StoreError::Io {
         path: path.to_owned(),
         source,
@@ -114,7 +141,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(io_err)?;
     }
-    let tmp = path.with_extension("toml.tmp");
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
     let mut file = fs::File::create(&tmp).map_err(io_err)?;
     file.write_all(bytes).map_err(io_err)?;
     file.sync_all().map_err(io_err)?;

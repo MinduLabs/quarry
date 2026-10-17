@@ -2,6 +2,7 @@
 
 mod convert;
 mod diagnose;
+mod introspect;
 
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,9 @@ use quarry_driver_api::{
     CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig,
     Result, Session, SharedCancel,
 };
-use quarry_model::{Capabilities, DriverId, ObjectKind, SchemaObject, SslMode, TableRef, Value};
+use quarry_model::{
+    Capabilities, DriverId, ObjectKind, SchemaObject, SslMode, TableInfo, TableRef, Value,
+};
 
 pub const DRIVER_ID: &str = "mysql";
 pub const DEFAULT_PORT: u16 = 3306;
@@ -99,6 +102,9 @@ fn build_opts(config: &ResolvedConfig) -> Opts {
         .db_name(c.database.clone().filter(|d| !d.is_empty()))
         // The host's unix socket is not reachable from a Flatpak sandbox.
         .prefer_socket(false)
+        // UPDATE reports matched rows, not changed rows, so a grid edit that keeps the old
+        // value still counts as one row (the edit check needs exactly one).
+        .client_found_rows(true)
         .ssl_opts(ssl)
         .init(vec!["SET NAMES utf8mb4"])
         .into()
@@ -231,6 +237,10 @@ impl Session for MysqlSession {
             }))
             .collect();
         Ok(objects)
+    }
+
+    async fn table_info(&mut self, table: &TableRef) -> Result<TableInfo> {
+        introspect::table_info(&mut self.conn, table).await
     }
 
     async fn use_database(&mut self, database: &str) -> Result<()> {

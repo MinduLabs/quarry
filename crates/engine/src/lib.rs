@@ -5,6 +5,7 @@
 //! own task, so a long query never blocks other commands.
 
 mod command;
+mod edit;
 mod event;
 
 use std::collections::HashMap;
@@ -16,8 +17,13 @@ use std::time::Duration;
 use quarry_driver_api::{
     DriverError, DriverRegistry, ExecItem, ExecOpts, ResolvedConfig, Session, SharedCancel,
 };
-use quarry_model::{ConnId, ConnectionConfig, Environment};
-use quarry_store::{ConfigStore, SecretStore};
+use quarry_model::{
+    ConnId, ConnectionConfig, Environment, Favorite, HistoryEntry, RowChange, TableRef, Workspace,
+};
+use quarry_store::{
+    ConfigStore, FavoritesStore, HistoryStore, SecretKind, SecretStore, WorkspaceStore,
+};
+use quarry_tunnel::{Tunnel, TunnelSpec};
 
 pub use command::{Command, Password, RequestId, TabId};
 pub use event::{ConnState, Event, NoticeKind};
@@ -25,6 +31,9 @@ pub use event::{ConnState, Event, NoticeKind};
 pub use quarry_sql as sql;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Rows kept per result set of a typed query; more are drained but not sent (`truncated`).
+const RUN_ROW_LIMIT: u64 = 1000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -38,6 +47,10 @@ pub enum EngineError {
 pub struct EngineOptions {
     /// Config directory; `None` = the platform default (see `quarry_store::default_config_dir`).
     pub config_dir: Option<PathBuf>,
+    /// Data directory (open tabs, history); `None` = `quarry_store::default_data_dir`.
+    pub data_dir: Option<PathBuf>,
+    /// `known_hosts` for SSH tunnels; `None` = `~/.ssh/known_hosts`.
+    pub known_hosts: Option<PathBuf>,
     /// Do not touch the system keyring (tests, environments without one).
     pub disable_keyring: bool,
 }
@@ -108,10 +121,17 @@ struct Engine {
     events: async_channel::Sender<Event>,
     registry: DriverRegistry,
     config: Option<ConfigStore>,
+    favorite_store: Option<FavoritesStore>,
+    favorites: Mutex<Vec<Favorite>>,
+    workspace: Option<WorkspaceStore>,
+    history: Option<HistoryStore>,
     secrets: Option<SecretStore>,
     connections: Mutex<Vec<ConnectionConfig>>,
-    /// Passwords entered during this run (also when not saved to the keyring).
-    passwords: Mutex<HashMap<ConnId, String>>,
+    /// Secrets entered during this run (also when not saved to the keyring).
+    passwords: Mutex<HashMap<(ConnId, SecretKind), String>>,
+    /// One SSH tunnel per connection that has one, shared by all its sessions.
+    tunnels: Mutex<HashMap<ConnId, Arc<Tunnel>>>,
+    known_hosts: Option<PathBuf>,
     /// One metadata session (schema tree) per connection.
     meta: Mutex<HashMap<ConnId, SharedSession>>,
     /// Per-tab sessions. The async mutex is held by `run_query` while a query runs.
@@ -144,13 +164,38 @@ impl Engine {
             }
         };
 
+        let data_dir = options
+            .data_dir
+            .map(Ok)
+            .unwrap_or_else(quarry_store::default_data_dir);
+        let (workspace, history) = match data_dir {
+            Ok(dir) => (
+                Some(WorkspaceStore::new(&dir)),
+                Some(HistoryStore::new(dir)),
+            ),
+            Err(err) => {
+                tracing::error!(%err, "no data directory; open tabs and history will not be saved");
+                (None, None)
+            }
+        };
+
+        let favorite_store = config.as_ref().map(|c| FavoritesStore::new(c.dir()));
+
         Self {
             events,
             registry,
             config,
+            favorite_store,
+            favorites: Mutex::new(Vec::new()),
+            workspace,
+            history,
             secrets: (!options.disable_keyring).then_some(SecretStore),
             connections: Mutex::new(Vec::new()),
             passwords: Mutex::new(HashMap::new()),
+            tunnels: Mutex::new(HashMap::new()),
+            known_hosts: options
+                .known_hosts
+                .or_else(quarry_tunnel::default_known_hosts),
             meta: Mutex::new(HashMap::new()),
             tabs: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
@@ -179,9 +224,10 @@ impl Engine {
             Command::SaveConnection {
                 config,
                 password,
+                ssh_secret,
                 remember_password,
             } => {
-                self.save_connection(config, password, remember_password)
+                self.save_connection(config, password, ssh_secret, remember_password)
                     .await;
             }
             Command::DeleteConnection { id } => self.delete_connection(id).await,
@@ -189,8 +235,10 @@ impl Engine {
                 request,
                 config,
                 password,
+                ssh_secret,
             } => {
-                let (server_version, error) = match self.test_connection(config, password).await {
+                let result = self.test_connection(config, password, ssh_secret).await;
+                let (server_version, error) = match result {
                     Ok(version) => (Some(version), None),
                     Err(err) => (None, Some(err)),
                 };
@@ -203,6 +251,11 @@ impl Engine {
             Command::Connect { id } => self.connect(id).await,
             Command::Disconnect { id } => self.disconnect(id).await,
             Command::LoadObjects { id, database } => self.load_objects(id, database).await,
+            Command::LoadTableInfo {
+                request,
+                conn,
+                table,
+            } => self.load_table_info(request, conn, table).await,
             Command::Run {
                 tab,
                 conn,
@@ -224,10 +277,71 @@ impl Engine {
                     });
                     return;
                 }
-                self.run_query(tab, conn, database, sql).await;
+                self.run_query(tab, conn, database, sql, RUN_ROW_LIMIT, true)
+                    .await;
+            }
+            Command::Browse {
+                tab,
+                conn,
+                table,
+                limit,
+                offset,
+            } => match self.page_sql(conn, &table, limit, offset) {
+                Ok(sql) => {
+                    self.run_query(tab, conn, table.database.clone(), sql, limit, false)
+                        .await;
+                }
+                Err(error) => self.emit(Event::QueryFailed {
+                    tab,
+                    error,
+                    cancelled: false,
+                }),
+            },
+            Command::ApplyChanges {
+                tab,
+                conn,
+                table,
+                changes,
+                confirmed,
+            } => {
+                self.apply_changes(tab, conn, table, changes, confirmed)
+                    .await;
             }
             Command::Cancel { tab } => self.cancel(tab),
             Command::CloseTab { tab } => self.close_tab(tab).await,
+            Command::LoadFavorites => self.load_favorites(),
+            Command::SaveFavorite { favorite } => {
+                {
+                    let mut list = lock(&self.favorites);
+                    match list.iter_mut().find(|f| f.id == favorite.id) {
+                        Some(existing) => *existing = favorite,
+                        None => list.push(favorite),
+                    }
+                }
+                self.persist_favorites();
+            }
+            Command::DeleteFavorite { id } => self.delete_favorites(|f| f.id == id),
+            Command::LoadHistory {
+                request,
+                query,
+                limit,
+            } => self.load_history(request, query.as_deref(), limit),
+            Command::ClearHistory { request } => {
+                if let Some(Err(err)) = self.history.as_ref().map(HistoryStore::clear) {
+                    self.notice(
+                        NoticeKind::Error,
+                        format!("Couldn't clear the history: {err}"),
+                    );
+                }
+                self.emit(Event::History {
+                    request,
+                    entries: Vec::new(),
+                });
+            }
+            Command::LoadWorkspace => self.load_workspace(),
+            Command::SaveWorkspace { request, workspace } => {
+                self.save_workspace(request, &workspace);
+            }
         }
     }
 
@@ -269,10 +383,12 @@ impl Engine {
         &self,
         config: ConnectionConfig,
         password: Option<Password>,
+        ssh_secret: Option<Password>,
         remember_password: bool,
     ) {
         let id = config.id;
         let label = config.name.clone();
+        let uses_ssh = config.ssh.is_some();
         let was_connected = lock(&self.meta).contains_key(&id);
         {
             let mut list = lock(&self.connections);
@@ -284,25 +400,21 @@ impl Engine {
         let list = self.persist();
 
         if let Some(Password(password)) = password {
-            lock(&self.passwords).insert(id, password.clone());
-            if let Some(secrets) = &self.secrets {
-                let result = if remember_password {
-                    secrets.set_password(id, &label, &password).await
-                } else {
-                    secrets.delete_password(id).await
-                };
-                if let Err(err) = result {
-                    tracing::warn!(%err, "keyring");
-                    if remember_password {
-                        self.notice(
-                            NoticeKind::Warning,
-                            format!(
-                                "Password kept for this session only — keyring unavailable: {err}"
-                            ),
-                        );
-                    }
-                }
-            }
+            self.store_secret(
+                id,
+                SecretKind::Database,
+                &label,
+                password,
+                remember_password,
+            )
+            .await;
+        }
+        if let Some(Password(secret)) = ssh_secret {
+            self.store_secret(id, SecretKind::Ssh, &label, secret, remember_password)
+                .await;
+        } else if !uses_ssh {
+            lock(&self.passwords).remove(&(id, SecretKind::Ssh));
+            self.forget_secret(id, SecretKind::Ssh).await;
         }
         self.emit(Event::Connections { connections: list });
 
@@ -315,38 +427,205 @@ impl Engine {
     async fn delete_connection(&self, id: ConnId) {
         self.disconnect(id).await;
         lock(&self.connections).retain(|c| c.id != id);
-        lock(&self.passwords).remove(&id);
+        lock(&self.passwords).retain(|(conn, _), _| *conn != id);
         let list = self.persist();
+        self.delete_favorites(|f| f.conn == id);
+        self.forget_secret(id, SecretKind::Database).await;
+        self.forget_secret(id, SecretKind::Ssh).await;
+        self.emit(Event::Connections { connections: list });
+    }
+
+    /// Keep a secret for this run, and in the keyring when `remember` is set.
+    async fn store_secret(
+        &self,
+        id: ConnId,
+        kind: SecretKind,
+        label: &str,
+        secret: String,
+        remember: bool,
+    ) {
+        lock(&self.passwords).insert((id, kind), secret.clone());
+        let Some(secrets) = &self.secrets else { return };
+        let result = if remember {
+            secrets.set_password(id, kind, label, &secret).await
+        } else {
+            secrets.delete_password(id, kind).await
+        };
+        if let Err(err) = result {
+            tracing::warn!(%err, "keyring");
+            if remember {
+                self.notice(
+                    NoticeKind::Warning,
+                    format!("Password kept for this session only — keyring unavailable: {err}"),
+                );
+            }
+        }
+    }
+
+    async fn forget_secret(&self, id: ConnId, kind: SecretKind) {
         if let Some(secrets) = &self.secrets
-            && let Err(err) = secrets.delete_password(id).await
+            && let Err(err) = secrets.delete_password(id, kind).await
         {
             tracing::warn!(%err, "keyring delete");
         }
-        self.emit(Event::Connections { connections: list });
+    }
+
+    // ---------- Favorites ----------
+
+    fn load_favorites(&self) {
+        let favorites = match self.favorite_store.as_ref().map(FavoritesStore::load) {
+            Some(Ok(list)) => list,
+            Some(Err(err)) => {
+                self.notice(NoticeKind::Error, format!("Couldn't read favorites: {err}"));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        *lock(&self.favorites) = favorites.clone();
+        self.emit(Event::Favorites { favorites });
+    }
+
+    fn persist_favorites(&self) {
+        let favorites = lock(&self.favorites).clone();
+        if let Some(store) = &self.favorite_store
+            && let Err(err) = store.save(&favorites)
+        {
+            self.notice(NoticeKind::Error, format!("Couldn't save favorites: {err}"));
+        }
+        self.emit(Event::Favorites { favorites });
+    }
+
+    fn delete_favorites(&self, matches: impl Fn(&Favorite) -> bool) {
+        let removed = {
+            let mut list = lock(&self.favorites);
+            let before = list.len();
+            list.retain(|f| !matches(f));
+            list.len() != before
+        };
+        if removed {
+            self.persist_favorites();
+        }
+    }
+
+    // ---------- History ----------
+
+    fn load_history(&self, request: RequestId, query: Option<&str>, limit: u32) {
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        let entries = match self.history.as_ref().map(|h| h.search(query, limit)) {
+            Some(Ok(entries)) => entries,
+            Some(Err(err)) => {
+                self.notice(
+                    NoticeKind::Error,
+                    format!("Couldn't read the history: {err}"),
+                );
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        self.emit(Event::History { request, entries });
+    }
+
+    fn record(&self, entry: HistoryEntry) {
+        let Some(history) = &self.history else { return };
+        match history.append(&entry) {
+            Ok(()) => self.emit(Event::HistoryAdded { entry }),
+            Err(err) => tracing::warn!(%err, "history append"),
+        }
+    }
+
+    // ---------- Workspace ----------
+
+    fn load_workspace(&self) {
+        let workspace = match self.workspace.as_ref().map(WorkspaceStore::load) {
+            Some(Ok(workspace)) => workspace,
+            Some(Err(err)) => {
+                self.notice(
+                    NoticeKind::Warning,
+                    format!("Couldn't restore the tabs from the last session: {err}"),
+                );
+                Workspace::default()
+            }
+            None => Workspace::default(),
+        };
+        self.emit(Event::Workspace { workspace });
+    }
+
+    fn save_workspace(&self, request: RequestId, workspace: &Workspace) {
+        let error = match &self.workspace {
+            Some(store) => store.save(workspace).err().map(|err| err.to_string()),
+            None => Some("No data directory".to_owned()),
+        };
+        if let Some(err) = &error {
+            tracing::warn!(%err, "workspace save");
+        }
+        self.emit(Event::WorkspaceSaved { request, error });
     }
 
     // ---------- Sessions ----------
 
+    /// Settings ready for the driver: secrets filled in and, for a connection over SSH, the
+    /// address pointed at the tunnel. `tunnel` decides which tunnel: the connection's shared one
+    /// (`Shared`, opened if needed; Disconnect drops it) or one owned by the caller
+    /// (`Temporary`, for Test connection).
     async fn resolve(
         &self,
-        config: ConnectionConfig,
+        mut config: ConnectionConfig,
         password: Option<Password>,
-    ) -> ResolvedConfig {
+        ssh_secret: Option<Password>,
+        tunnel: TunnelUse,
+    ) -> Result<(ResolvedConfig, Option<Arc<Tunnel>>), String> {
         let password = match password {
             Some(Password(p)) => Some(p),
-            None => self.stored_password(config.id).await,
+            None => self.stored_secret(config.id, SecretKind::Database).await,
         };
-        ResolvedConfig { config, password }
+        let Some(ssh) = config.ssh.clone() else {
+            return Ok((ResolvedConfig { config, password }, None));
+        };
+        let id = config.id;
+        let existing = match tunnel {
+            TunnelUse::Shared => lock(&self.tunnels).get(&id).cloned(),
+            TunnelUse::Temporary => None,
+        };
+        let tunnel = match existing {
+            Some(tunnel) => tunnel,
+            None => {
+                let secret = match ssh_secret {
+                    Some(Password(s)) => Some(s),
+                    None => self.stored_secret(id, SecretKind::Ssh).await,
+                };
+                let known_hosts = self
+                    .known_hosts
+                    .clone()
+                    .ok_or_else(|| "No home directory, so no ~/.ssh/known_hosts.".to_owned())?;
+                let spec = TunnelSpec {
+                    ssh,
+                    secret,
+                    target_host: config.host.clone().unwrap_or_else(|| "127.0.0.1".into()),
+                    target_port: config
+                        .port
+                        .ok_or_else(|| "Set the database port to connect over SSH.".to_owned())?,
+                    known_hosts,
+                };
+                let opened = Arc::new(quarry_tunnel::open(spec).await.map_err(|e| e.to_string())?);
+                if tunnel == TunnelUse::Shared {
+                    lock(&self.tunnels).insert(id, opened.clone());
+                }
+                opened
+            }
+        };
+        config.host = Some("127.0.0.1".into());
+        config.port = Some(tunnel.local_port());
+        Ok((ResolvedConfig { config, password }, Some(tunnel)))
     }
 
-    async fn stored_password(&self, id: ConnId) -> Option<String> {
-        if let Some(p) = lock(&self.passwords).get(&id) {
+    async fn stored_secret(&self, id: ConnId, kind: SecretKind) -> Option<String> {
+        if let Some(p) = lock(&self.passwords).get(&(id, kind)) {
             return Some(p.clone());
         }
         let secrets = self.secrets?;
-        match secrets.get_password(id).await {
+        match secrets.get_password(id, kind).await {
             Ok(Some(p)) => {
-                lock(&self.passwords).insert(id, p.clone());
+                lock(&self.passwords).insert((id, kind), p.clone());
                 Some(p)
             }
             Ok(None) => None,
@@ -380,8 +659,12 @@ impl Engine {
         &self,
         config: ConnectionConfig,
         password: Option<Password>,
+        ssh_secret: Option<Password>,
     ) -> Result<String, String> {
-        let resolved = self.resolve(config, password).await;
+        // The temporary tunnel lives until this function returns.
+        let (resolved, _tunnel) = self
+            .resolve(config, password, ssh_secret, TunnelUse::Temporary)
+            .await?;
         let session = self.open_session(&resolved).await?;
         let version = session.server_version();
         let _ = session.close().await;
@@ -401,7 +684,10 @@ impl Engine {
             id,
             state: ConnState::Failed { error },
         };
-        let resolved = self.resolve(config, None).await;
+        let resolved = match self.resolve(config, None, None, TunnelUse::Shared).await {
+            Ok((resolved, _)) => resolved,
+            Err(err) => return self.emit(failed(err)),
+        };
         let mut session = match self.open_session(&resolved).await {
             Ok(session) => session,
             Err(err) => return self.emit(failed(err)),
@@ -451,6 +737,8 @@ impl Engine {
         for session in sessions {
             close_shared(session).await;
         }
+        // Sessions are closed, so the tunnel can go.
+        lock(&self.tunnels).remove(&id);
         if had_sessions {
             self.emit(Event::ConnState {
                 id,
@@ -482,13 +770,83 @@ impl Engine {
         });
     }
 
+    /// The connection's metadata session, connecting first when needed.
+    async fn meta_session(&self, id: ConnId) -> Result<SharedSession, String> {
+        if let Some(meta) = lock(&self.meta).get(&id).cloned() {
+            return Ok(meta);
+        }
+        self.connect(id).await;
+        lock(&self.meta)
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "Not connected".to_owned())
+    }
+
+    async fn load_table_info(&self, request: RequestId, conn: ConnId, table: TableRef) {
+        let result = match self.meta_session(conn).await {
+            Ok(meta) => meta
+                .lock()
+                .await
+                .table_info(&table)
+                .await
+                .map_err(|e| describe(&e)),
+            Err(error) => Err(error),
+        };
+        let (info, error) = match result {
+            Ok(info) => (Some(info), None),
+            Err(error) => (None, Some(error)),
+        };
+        self.emit(Event::TableInfo {
+            request,
+            info,
+            error,
+        });
+    }
+
     // ---------- Queries ----------
 
     fn tab_slot(&self, tab: TabId) -> Arc<tokio::sync::Mutex<Option<TabSession>>> {
         lock(&self.tabs).entry(tab).or_default().clone()
     }
 
-    async fn run_query(&self, tab: TabId, conn: ConnId, database: Option<String>, sql: String) {
+    /// Open the tab's session on `conn`, replacing one on another connection.
+    async fn ensure_tab_session(
+        &self,
+        slot: &mut Option<TabSession>,
+        tab: TabId,
+        conn: ConnId,
+    ) -> Result<(), String> {
+        if slot.as_ref().is_some_and(|t| t.conn != conn)
+            && let Some(old) = slot.take()
+        {
+            close_shared(old.session).await;
+        }
+        if slot.is_some() {
+            return Ok(());
+        }
+        let config = self
+            .config_of(conn)
+            .ok_or_else(|| "Connection not found".to_owned())?;
+        let (resolved, _) = self.resolve(config, None, None, TunnelUse::Shared).await?;
+        let session = self.open_session(&resolved).await?;
+        lock(&self.cancels).insert(tab, (conn, session.cancel_handle()));
+        *slot = Some(TabSession {
+            conn,
+            session: Arc::new(tokio::sync::Mutex::new(session)),
+            database: None,
+        });
+        Ok(())
+    }
+
+    async fn run_query(
+        &self,
+        tab: TabId,
+        conn: ConnId,
+        database: Option<String>,
+        sql: String,
+        row_limit: u64,
+        record: bool,
+    ) {
         self.emit(Event::QueryStarted { tab });
         let failed = |error: String| Event::QueryFailed {
             tab,
@@ -497,29 +855,8 @@ impl Engine {
         };
         let slot = self.tab_slot(tab);
         let mut slot = slot.lock().await;
-
-        // The tab switched to another connection: reopen its session.
-        if slot.as_ref().is_some_and(|t| t.conn != conn)
-            && let Some(old) = slot.take()
-        {
-            close_shared(old.session).await;
-        }
-        if slot.is_none() {
-            let Some(config) = self.config_of(conn) else {
-                return self.emit(failed("Connection not found".into()));
-            };
-            let resolved = self.resolve(config, None).await;
-            match self.open_session(&resolved).await {
-                Ok(session) => {
-                    lock(&self.cancels).insert(tab, (conn, session.cancel_handle()));
-                    *slot = Some(TabSession {
-                        conn,
-                        session: Arc::new(tokio::sync::Mutex::new(session)),
-                        database: None,
-                    });
-                }
-                Err(error) => return self.emit(failed(error)),
-            }
+        if let Err(error) = self.ensure_tab_session(&mut slot, tab, conn).await {
+            return self.emit(failed(error));
         }
         let Some(tab_session) = slot.as_mut() else {
             return;
@@ -566,18 +903,141 @@ impl Engine {
             };
             let _ = events.try_send(event);
         };
-        let result = session.execute(&sql, &ExecOpts::default(), &mut sink).await;
-        match result {
+        let opts = ExecOpts {
+            row_limit: Some(row_limit),
+            ..ExecOpts::default()
+        };
+        let ran_at = chrono::Utc::now();
+        let result = session.execute(&sql, &opts, &mut sink).await;
+        drop(session);
+        let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        let error = match result {
             Ok(()) => {
-                let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
                 self.emit(Event::QueryFinished { tab, elapsed_ms });
+                None
             }
-            Err(err) => self.emit(Event::QueryFailed {
-                tab,
-                cancelled: matches!(err, DriverError::Cancelled),
-                error: describe(&err),
-            }),
+            Err(err) => {
+                let error = describe(&err);
+                self.emit(Event::QueryFailed {
+                    tab,
+                    cancelled: matches!(err, DriverError::Cancelled),
+                    error: error.clone(),
+                });
+                Some(error.lines().next().unwrap_or_default().to_owned())
+            }
+        };
+        if record {
+            self.record(HistoryEntry {
+                sql,
+                conn,
+                database: tab_session.database.clone(),
+                ran_at,
+                elapsed_ms,
+                error,
+            });
         }
+    }
+
+    async fn apply_changes(
+        &self,
+        tab: TabId,
+        conn: ConnId,
+        table: TableRef,
+        changes: Vec<RowChange>,
+        confirmed: bool,
+    ) {
+        let failed = |error: String| Event::ChangesFailed { tab, error };
+        let Some(config) = self.config_of(conn) else {
+            return self.emit(failed("Connection not found".into()));
+        };
+        if config.read_only {
+            return self.emit(failed("This connection is read-only.".into()));
+        }
+        let Some(driver) = self.registry.get(&config.driver) else {
+            return self.emit(failed(format!("No driver for “{}”", config.driver.0)));
+        };
+        let statements = match edit::statements(driver.dialect(), &table, &changes) {
+            Ok(statements) if statements.is_empty() => {
+                return self.emit(Event::ChangesApplied {
+                    tab,
+                    message: "Nothing to save".into(),
+                });
+            }
+            Ok(statements) => statements,
+            Err(error) => return self.emit(failed(error)),
+        };
+        let summary = edit::Summary::of(&changes).describe();
+        if !confirmed && config.environment.confirms_every_write() {
+            return self.emit(Event::ChangesConfirmRequired {
+                tab,
+                message: format!("This changes data in a production database: {summary}."),
+            });
+        }
+
+        let slot = self.tab_slot(tab);
+        let mut slot = slot.lock().await;
+        if let Err(error) = self.ensure_tab_session(&mut slot, tab, conn).await {
+            return self.emit(failed(error));
+        }
+        let Some(tab_session) = slot.as_mut() else {
+            return;
+        };
+        let mut session = tab_session.session.lock().await;
+        if let Err(err) = session.begin().await {
+            return self.emit(failed(describe(&err)));
+        }
+        for statement in &statements {
+            let result = session
+                .execute_params(&statement.sql, &statement.params)
+                .await;
+            let error = match result {
+                Ok(1) => None,
+                Ok(_) if !statement.one_row => None,
+                Ok(0) => Some(
+                    "A row was not found: it may have been changed or deleted since it was \
+                     loaded. Nothing was saved; reload and try again."
+                        .to_owned(),
+                ),
+                Ok(n) => Some(format!(
+                    "A change would affect {n} rows instead of one. Nothing was saved."
+                )),
+                Err(err) => Some(format!("{}\nNothing was saved.", describe(&err))),
+            };
+            if let Some(error) = error {
+                if let Err(err) = session.rollback().await {
+                    tracing::warn!(%err, "rollback after failed edit");
+                }
+                return self.emit(failed(error));
+            }
+        }
+        if let Err(err) = session.commit().await {
+            if let Err(err) = session.rollback().await {
+                tracing::warn!(%err, "rollback after failed commit");
+            }
+            return self.emit(failed(describe(&err)));
+        }
+        self.emit(Event::ChangesApplied {
+            tab,
+            message: summary,
+        });
+    }
+
+    /// `SELECT` for one page of `table`, in the dialect of the connection's driver.
+    fn page_sql(
+        &self,
+        conn: ConnId,
+        table: &TableRef,
+        limit: u64,
+        offset: u64,
+    ) -> Result<String, String> {
+        let config = self
+            .config_of(conn)
+            .ok_or_else(|| "Connection not found".to_owned())?;
+        let driver = self
+            .registry
+            .get(&config.driver)
+            .ok_or_else(|| format!("No driver for “{}”", config.driver.0))?;
+        Ok(driver.dialect().select_page(table, limit, offset))
     }
 
     fn cancel(&self, tab: TabId) {
@@ -596,6 +1056,13 @@ impl Engine {
             close_shared(tab_session.session).await;
         }
     }
+}
+
+/// Which SSH tunnel `Engine::resolve` uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TunnelUse {
+    Shared,
+    Temporary,
 }
 
 async fn close_shared(session: SharedSession) {
@@ -649,7 +1116,9 @@ mod tests {
     fn test_engine() -> (EngineHandle, EngineEvents) {
         let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
         EngineHandle::spawn_with(EngineOptions {
-            config_dir: Some(dir),
+            config_dir: Some(dir.clone()),
+            data_dir: Some(dir),
+            known_hosts: None,
             disable_keyring: true,
         })
         .unwrap()
@@ -687,6 +1156,162 @@ mod tests {
                 assert_eq!(id, 7);
                 assert_eq!(version, VERSION);
             }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn production_edits_ask_first_and_read_only_refuses() {
+        use quarry_model::{CellValue, DriverId, SslMode, Value};
+        let (engine, events) = test_engine();
+        let mut config = ConnectionConfig {
+            id: ConnId::new(),
+            name: "prod".into(),
+            driver: DriverId("mysql".into()),
+            host: Some("127.0.0.1".into()),
+            port: Some(1),
+            database: None,
+            user: None,
+            path: None,
+            ssl: SslMode::Disable,
+            ssh: None,
+            environment: Environment::Production,
+            read_only: false,
+            color: None,
+            group: None,
+        };
+        let change = || ApplyChangesFixture {
+            key: vec![CellValue {
+                column: "id".into(),
+                value: Value::Int(1),
+            }],
+        };
+        engine
+            .send(Command::SaveConnection {
+                config: config.clone(),
+                password: None,
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            Event::Connections { .. }
+        ));
+        engine.send(change().command(config.id)).unwrap();
+        match events.recv().await.unwrap() {
+            Event::ChangesConfirmRequired { tab, message } => {
+                assert_eq!(tab, 5);
+                assert!(message.contains("1 row deleted"), "{message}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        config.read_only = true;
+        engine
+            .send(Command::SaveConnection {
+                config: config.clone(),
+                password: None,
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            Event::Connections { .. }
+        ));
+        engine.send(change().command(config.id)).unwrap();
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            Event::ChangesFailed { tab: 5, .. }
+        ));
+    }
+
+    struct ApplyChangesFixture {
+        key: Vec<quarry_model::CellValue>,
+    }
+
+    impl ApplyChangesFixture {
+        fn command(self, conn: ConnId) -> Command {
+            Command::ApplyChanges {
+                tab: 5,
+                conn,
+                table: TableRef {
+                    database: Some("shop".into()),
+                    schema: None,
+                    name: "orders".into(),
+                },
+                changes: vec![RowChange::Delete { key: self.key }],
+                confirmed: false,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn favorites_are_saved_and_deleted() {
+        use quarry_model::{FavoriteId, FavoriteItem};
+        let (engine, events) = test_engine();
+        let favorite = Favorite {
+            id: FavoriteId::new(),
+            name: "orders".into(),
+            conn: ConnId::new(),
+            database: Some("shop".into()),
+            item: FavoriteItem::Table {
+                table: "orders".into(),
+            },
+        };
+        engine
+            .send(Command::SaveFavorite {
+                favorite: favorite.clone(),
+            })
+            .unwrap();
+        match events.recv().await.unwrap() {
+            Event::Favorites { favorites } => assert_eq!(favorites, vec![favorite.clone()]),
+            other => panic!("unexpected {other:?}"),
+        }
+        engine.send(Command::LoadFavorites).unwrap();
+        match events.recv().await.unwrap() {
+            Event::Favorites { favorites } => assert_eq!(favorites, vec![favorite.clone()]),
+            other => panic!("unexpected {other:?}"),
+        }
+        engine
+            .send(Command::DeleteFavorite { id: favorite.id })
+            .unwrap();
+        match events.recv().await.unwrap() {
+            Event::Favorites { favorites } => assert!(favorites.is_empty()),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_is_saved_and_restored() {
+        let (engine, events) = test_engine();
+        let workspace = Workspace {
+            tabs: vec![quarry_model::SavedTab {
+                title: "Query 1".into(),
+                conn: ConnId::new(),
+                database: None,
+                sql: "SELECT 1".into(),
+                browse: None,
+            }],
+            active: Some(0),
+        };
+        engine
+            .send(Command::SaveWorkspace {
+                request: 4,
+                workspace: workspace.clone(),
+            })
+            .unwrap();
+        match events.recv().await.unwrap() {
+            Event::WorkspaceSaved { request, error } => {
+                assert_eq!(request, 4);
+                assert_eq!(error, None);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        engine.send(Command::LoadWorkspace).unwrap();
+        match events.recv().await.unwrap() {
+            Event::Workspace { workspace: loaded } => assert_eq!(loaded, workspace),
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -741,6 +1366,8 @@ mod mysql_tests {
         let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
         let (engine, events) = EngineHandle::spawn_with(EngineOptions {
             config_dir: Some(dir.clone()),
+            data_dir: Some(dir.clone()),
+            known_hosts: None,
             disable_keyring: true,
         })
         .unwrap();
@@ -749,6 +1376,7 @@ mod mysql_tests {
             .send(Command::SaveConnection {
                 config,
                 password: Some(Password("quarry".into())),
+                ssh_secret: None,
                 remember_password: false,
             })
             .unwrap();
@@ -827,7 +1455,326 @@ mod mysql_tests {
         })
         .await;
         assert!(started.elapsed() < Duration::from_secs(5));
+        // The cancelled query is still written to the history; wait so cleanup does not race it.
+        next_matching(
+            &events,
+            |e| matches!(e, Event::HistoryAdded { entry } if entry.sql.contains("SLEEP")),
+        )
+        .await;
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn browse_pages_and_table_info() {
+        let Some(config) = config() else { return };
+        let id = config.id;
+        let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir.clone()),
+            data_dir: Some(dir.clone()),
+            known_hosts: None,
+            disable_keyring: true,
+        })
+        .unwrap();
+        engine
+            .send(Command::SaveConnection {
+                config,
+                password: Some(Password("quarry".into())),
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+
+        let table = TableRef {
+            database: Some("shop".into()),
+            schema: None,
+            name: "orders".into(),
+        };
+        engine
+            .send(Command::Browse {
+                tab: 2,
+                conn: id,
+                table: table.clone(),
+                limit: 100,
+                offset: 1000,
+            })
+            .unwrap();
+        let Event::ResultRows { rows, .. } =
+            next_matching(&events, |e| matches!(e, Event::ResultRows { tab: 2, .. })).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(rows.len(), 100);
+        assert_eq!(rows[0][0], quarry_model::Value::UInt(1001));
+        let Event::ResultDone {
+            rows, truncated, ..
+        } = next_matching(&events, |e| matches!(e, Event::ResultDone { tab: 2, .. })).await
+        else {
+            unreachable!()
+        };
+        assert_eq!((rows, truncated), (100, false));
+
+        // Table info connects on demand.
+        engine
+            .send(Command::LoadTableInfo {
+                request: 9,
+                conn: id,
+                table,
+            })
+            .unwrap();
+        let Event::TableInfo { info, error, .. } = next_matching(&events, |e| {
+            matches!(e, Event::TableInfo { request: 9, .. })
+        })
+        .await
+        else {
+            unreachable!()
+        };
+        assert_eq!(error, None);
+        assert_eq!(info.unwrap().primary_key, vec!["id".to_owned()]);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn grid_edits_commit_or_roll_back_together() {
+        use quarry_model::{CellValue, Value};
+        let Some(config) = config() else { return };
+        let id = config.id;
+        let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir.clone()),
+            data_dir: Some(dir.clone()),
+            known_hosts: None,
+            disable_keyring: true,
+        })
+        .unwrap();
+        engine
+            .send(Command::SaveConnection {
+                config,
+                password: Some(Password("quarry".into())),
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+
+        let run = |sql: &str| Command::Run {
+            tab: 3,
+            conn: id,
+            database: Some("shop".into()),
+            sql: sql.into(),
+            confirmed: false,
+        };
+        engine
+            .send(run("DROP TABLE IF EXISTS edit_scratch; \
+                 CREATE TABLE edit_scratch (id INT PRIMARY KEY, name VARCHAR(20) NULL); \
+                 INSERT INTO edit_scratch VALUES (1, 'one'), (2, 'two');"))
+            .unwrap();
+        next_matching(&events, |e| {
+            matches!(e, Event::QueryFinished { tab: 3, .. })
+        })
+        .await;
+        let Event::HistoryAdded { entry } =
+            next_matching(&events, |e| matches!(e, Event::HistoryAdded { .. })).await
+        else {
+            unreachable!()
+        };
+        assert!(entry.sql.contains("CREATE TABLE edit_scratch") && entry.error.is_none());
+
+        let cell = |column: &str, value: Value| CellValue {
+            column: column.into(),
+            value,
+        };
+        let table = TableRef {
+            database: Some("shop".into()),
+            schema: None,
+            name: "edit_scratch".into(),
+        };
+        let apply = |changes: Vec<RowChange>| Command::ApplyChanges {
+            tab: 3,
+            conn: id,
+            table: table.clone(),
+            changes,
+            confirmed: false,
+        };
+
+        // Update (to the same value too), insert and delete in one batch.
+        engine
+            .send(apply(vec![
+                RowChange::Update {
+                    key: vec![cell("id", Value::Int(1))],
+                    set: vec![cell("name", Value::Text("uno".into()))],
+                },
+                RowChange::Update {
+                    key: vec![cell("id", Value::Int(2))],
+                    set: vec![cell("name", Value::Text("two".into()))],
+                },
+                RowChange::Insert {
+                    values: vec![cell("id", Value::Int(3)), cell("name", Value::Null)],
+                },
+                RowChange::Delete {
+                    key: vec![cell("id", Value::Int(2))],
+                },
+            ]))
+            .unwrap();
+        let event = next_matching(&events, |e| {
+            matches!(
+                e,
+                Event::ChangesApplied { tab: 3, .. } | Event::ChangesFailed { tab: 3, .. }
+            )
+        })
+        .await;
+        assert!(
+            matches!(&event, Event::ChangesApplied { message, .. } if message == "2 rows updated, 1 row inserted, 1 row deleted"),
+            "{event:?}"
+        );
+
+        // A missing row rolls back the insert in the same batch.
+        engine
+            .send(apply(vec![
+                RowChange::Insert {
+                    values: vec![cell("id", Value::Int(4))],
+                },
+                RowChange::Delete {
+                    key: vec![cell("id", Value::Int(99))],
+                },
+            ]))
+            .unwrap();
+        next_matching(&events, |e| {
+            matches!(e, Event::ChangesFailed { tab: 3, .. })
+        })
+        .await;
+
+        engine
+            .send(run("SELECT id, name FROM edit_scratch ORDER BY id"))
+            .unwrap();
+        let Event::ResultRows { rows, .. } =
+            next_matching(&events, |e| matches!(e, Event::ResultRows { tab: 3, .. })).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1), Value::Text("uno".into())],
+                vec![Value::Int(3), Value::Null],
+            ]
+        );
+        next_matching(&events, |e| {
+            matches!(e, Event::QueryFinished { tab: 3, .. })
+        })
+        .await;
+        engine.send(run("DROP TABLE edit_scratch")).unwrap();
+        // The history entry is written after the query finishes; wait so cleanup does not race it.
+        next_matching(&events, |e| {
+            matches!(e, Event::HistoryAdded { entry } if entry.sql == "DROP TABLE edit_scratch")
+        })
+        .await;
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Over the SSH test server (`QUARRY_TEST_SSH`), which forwards to the `mysql` service.
+    #[tokio::test]
+    async fn connects_through_an_ssh_tunnel() {
+        use quarry_model::{SshAuth, SshConfig};
+        let (Some(mut config), Ok(ssh)) = (config(), std::env::var("QUARRY_TEST_SSH")) else {
+            return;
+        };
+        let Some((ssh_host, ssh_port)) = ssh.split_once(':') else {
+            return;
+        };
+        let ssh_port: u16 = ssh_port.parse().unwrap();
+        let Ok(scan) = std::process::Command::new("ssh-keyscan")
+            .args(["-p", &ssh_port.to_string(), ssh_host])
+            .output()
+        else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let known_hosts = dir.join("known_hosts");
+        let empty_known_hosts = dir.join("empty_known_hosts");
+        std::fs::write(&known_hosts, &scan.stdout).unwrap();
+        std::fs::write(&empty_known_hosts, "").unwrap();
+
+        // The database as seen from the SSH server.
+        config.host = Some("mysql".into());
+        config.port = Some(3306);
+        config.ssh = Some(SshConfig {
+            host: ssh_host.into(),
+            port: ssh_port,
+            user: "quarry".into(),
+            auth: SshAuth::Password,
+            key_path: None,
+        });
+        let id = config.id;
+
+        for (hosts, works) in [(&empty_known_hosts, false), (&known_hosts, true)] {
+            let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+                config_dir: Some(dir.clone()),
+                data_dir: Some(dir.clone()),
+                known_hosts: Some(hosts.clone()),
+                disable_keyring: true,
+            })
+            .unwrap();
+            engine
+                .send(Command::SaveConnection {
+                    config: config.clone(),
+                    password: Some(Password("quarry".into())),
+                    ssh_secret: Some(Password("quarry".into())),
+                    remember_password: false,
+                })
+                .unwrap();
+            next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+            engine.send(Command::Connect { id }).unwrap();
+            let event = next_matching(&events, |e| {
+                matches!(
+                    e,
+                    Event::Databases { .. }
+                        | Event::ConnState {
+                            state: ConnState::Failed { .. },
+                            ..
+                        }
+                )
+            })
+            .await;
+            if works {
+                let Event::Databases { databases, .. } = event else {
+                    panic!("expected databases, got {event:?}")
+                };
+                assert!(databases.contains(&"shop".to_owned()));
+
+                // A query tab shares the tunnel.
+                engine
+                    .send(Command::Run {
+                        tab: 1,
+                        conn: id,
+                        database: Some("shop".into()),
+                        sql: "SELECT COUNT(*) FROM customers".into(),
+                        confirmed: false,
+                    })
+                    .unwrap();
+                let Event::ResultRows { rows, .. } =
+                    next_matching(&events, |e| matches!(e, Event::ResultRows { tab: 1, .. })).await
+                else {
+                    unreachable!()
+                };
+                assert_eq!(rows[0][0], quarry_model::Value::Int(5));
+                next_matching(&events, |e| matches!(e, Event::HistoryAdded { .. })).await;
+            } else {
+                let Event::ConnState {
+                    state: ConnState::Failed { error },
+                    ..
+                } = event
+                else {
+                    panic!("expected a failure, got {event:?}")
+                };
+                assert!(error.contains("not a known host"), "{error}");
+            }
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

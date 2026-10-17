@@ -1,16 +1,21 @@
 import { closeCompletion } from "@codemirror/autocomplete";
 import type { EditorView } from "@codemirror/view";
-import { ListVideo, Play, Square } from "lucide-react";
+import { ListVideo, Play, Plus, Square, Star } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { EnvBadge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/cn";
 import { statementAt } from "@/lib/engine";
 import { modKey } from "@/lib/platform";
-import { type Tab, useApp } from "@/store/app";
+import { editableKey, editCount, type Tab, useApp } from "@/store/app";
 import { flashRange, SqlEditor } from "../editor/SqlEditor";
+import { SaveQueryDialog } from "../favorites/SaveQueryDialog";
 import { ResultGrid } from "../grid/ResultGrid";
+import { StructureView } from "../structure/StructureView";
+import { Pager } from "./Pager";
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -20,9 +25,23 @@ export function QueryView({ tab }: { tab: Tab }) {
   const objects = useApp(
     (s) => s.nodes[tab.connId]?.databases.find((d) => d.name === tab.database)?.objects,
   );
-  const { setSql, run, cancel } = useApp.getState();
+  const {
+    setSql,
+    run,
+    cancel,
+    setView,
+    editCell,
+    addRow,
+    toggleDeleteRow,
+    discardEdits,
+    saveEdits,
+  } = useApp.getState();
+  const structure = tab.browse !== null && tab.view === "structure";
+  const editKey = editableKey(tab, config?.read_only ?? true);
+  const pending = editCount(tab.edits);
   const editor = useRef<EditorView | null>(null);
   const [editorHeight, setEditorHeight] = useState(220);
+  const [saving, setSaving] = useState(false);
 
   const tables = useMemo(() => (objects ?? []).map((o) => o.name), [objects]);
 
@@ -61,7 +80,15 @@ export function QueryView({ tab }: { tab: Tab }) {
   const grids = tab.sets.map((set, index) => ({ set, index })).filter(({ set }) => set.columns);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      onKeyDown={(e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && pending > 0) {
+          e.preventDefault();
+          saveEdits(tab.id);
+        }
+      }}
+    >
       {/* Toolbar */}
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-line border-b bg-surface px-2">
         <IconButton
@@ -83,7 +110,52 @@ export function QueryView({ tab }: { tab: Tab }) {
         <IconButton label="Stop" disabled={!tab.running} onClick={() => cancel(tab.id)}>
           <Square {...ICON} size={14} />
         </IconButton>
+        {tab.browse && (
+          <SegmentedTabs
+            label="View"
+            value={tab.view}
+            onChange={(view) => setView(tab.id, view)}
+            className="ml-2 h-7 w-44"
+            tabs={[
+              { value: "data", label: "Data" },
+              { value: "structure", label: "Structure" },
+            ]}
+          />
+        )}
+        {editKey && !structure && (
+          <IconButton label="Add row" disabled={tab.running} onClick={() => addRow(tab.id)}>
+            <Plus {...ICON} />
+          </IconButton>
+        )}
+        {pending > 0 && !structure && (
+          <div className="ml-2 flex items-center gap-1.5">
+            <span className="text-sm text-muted">
+              {pending} {pending === 1 ? "change" : "changes"}
+            </span>
+            <Button size="sm" disabled={tab.saving} onClick={() => discardEdits(tab.id)}>
+              Discard
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={tab.saving}
+              title={`Save (${modKey} S)`}
+              onClick={() => saveEdits(tab.id)}
+            >
+              {tab.saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        )}
         <div className="flex-1" />
+        {!structure && (
+          <IconButton
+            label="Save query…"
+            disabled={!tab.sql.trim()}
+            onClick={() => setSaving(true)}
+          >
+            <Star {...ICON} />
+          </IconButton>
+        )}
         <div className="flex min-w-0 items-center gap-2 pr-1 text-sm text-muted">
           {config && <EnvBadge environment={config.environment} />}
           <span className="truncate">
@@ -93,8 +165,14 @@ export function QueryView({ tab }: { tab: Tab }) {
         </div>
       </div>
 
-      {/* Editor */}
-      <div style={{ height: editorHeight }} className="shrink-0">
+      {structure && (
+        <div className="min-h-0 flex-1">
+          <StructureView structure={tab.structure} />
+        </div>
+      )}
+
+      {/* Editor. Kept mounted in the Structure view so its text and undo history survive. */}
+      <div style={{ height: editorHeight }} className={cn("shrink-0", structure && "hidden")}>
         <SqlEditor
           initialValue={tab.sql}
           tables={tables}
@@ -111,13 +189,16 @@ export function QueryView({ tab }: { tab: Tab }) {
         role="separator"
         aria-orientation="horizontal"
         onPointerDown={startResize}
-        className="group relative h-px shrink-0 cursor-row-resize bg-line"
+        className={cn(
+          "group relative h-px shrink-0 cursor-row-resize bg-line",
+          structure && "hidden",
+        )}
       >
         <div className="absolute inset-x-0 -top-1 h-2 transition-colors-fast group-hover:bg-accent-soft" />
       </div>
 
       {/* Results */}
-      <div className="relative min-h-0 flex-1">
+      <div className={cn("relative min-h-0 flex-1", structure && "hidden")}>
         {tab.running && tab.sets.length === 0 && (
           <div className="animate-fade flex h-full items-center justify-center">
             <Spinner size={18} />
@@ -133,6 +214,15 @@ export function QueryView({ tab }: { tab: Tab }) {
             columns={active.columns}
             rows={active.rows}
             resetKey={tab.runId * 100 + tab.activeSet}
+            editing={
+              editKey && !tab.running
+                ? {
+                    edits: tab.edits ?? { updates: {}, inserts: [], deletes: [] },
+                    onEdit: (row, col, value) => editCell(tab.id, row, col, value),
+                    onToggleDelete: (row) => toggleDeleteRow(tab.id, row),
+                  }
+                : undefined
+            }
           />
         )}
         {!tab.running && !tab.error && tab.sets.length > 0 && grids.length === 0 && (
@@ -145,10 +235,20 @@ export function QueryView({ tab }: { tab: Tab }) {
             affected
           </p>
         )}
-        {!tab.running && !tab.error && tab.sets.length === 0 && (
+        {!tab.running && !tab.error && tab.sets.length === 0 && !tab.browse && (
           <p className="flex h-full items-center justify-center text-base text-faint">
             Run a query to see results
           </p>
+        )}
+        {!tab.running && !tab.error && tab.sets.length === 0 && tab.browse && (
+          <div className="flex h-full items-center justify-center">
+            <Button
+              size="sm"
+              onClick={() => useApp.getState().browse(tab.id, tab.browse?.offset ?? 0)}
+            >
+              Load rows
+            </Button>
+          </div>
         )}
       </div>
 
@@ -157,6 +257,7 @@ export function QueryView({ tab }: { tab: Tab }) {
         {tab.running && <Spinner size={11} />}
         <span className="truncate">{status(tab)}</span>
         <div className="flex-1" />
+        {!structure && <Pager tab={tab} />}
         {grids.length > 1 &&
           grids.map(({ index }, n) => (
             <button
@@ -172,6 +273,7 @@ export function QueryView({ tab }: { tab: Tab }) {
             </button>
           ))}
       </div>
+      <SaveQueryDialog tabId={tab.id} open={saving} onClose={() => setSaving(false)} />
     </div>
   );
 }
@@ -188,6 +290,7 @@ function status(tab: Tab): string {
     tab.elapsedMs >= 1000 ? `${(tab.elapsedMs / 1000).toFixed(2)} s` : `${tab.elapsedMs} ms`;
   const set = tab.sets[tab.activeSet];
   if (!set?.columns) return time;
+  if (tab.paged) return time;
   const more = set.truncated ? " (first rows only)" : "";
   return `${plural(set.rows.length, "row")}${more} · ${time}`;
 }

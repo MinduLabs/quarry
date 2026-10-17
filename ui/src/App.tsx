@@ -5,8 +5,9 @@ import { TooltipProvider } from "@/components/ui/Tooltip";
 import { cn } from "@/lib/cn";
 import { send, subscribe } from "@/lib/engine";
 import { isMac } from "@/lib/platform";
-import { pendingWork, useApp } from "@/store/app";
+import { pendingWork, saveWorkspace, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
+import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { QueryView } from "./features/query/QueryView";
 import { Sidebar } from "./features/sidebar/Sidebar";
@@ -36,13 +37,15 @@ export function App() {
       );
   }, []);
 
-  // Closing the window (button, Alt+F4, the macOS red button) asks first only if work would be lost.
+  // Closing the window (button, Alt+F4, the macOS red button) asks first only if a query is
+  // running. Otherwise it saves the open tabs, then closes.
   useEffect(() => {
-    const unlisten = getCurrentWindow().onCloseRequested((event) => {
-      const work = pendingWork(useApp.getState().tabs);
-      if (!work) return;
+    const appWindow = getCurrentWindow();
+    const unlisten = appWindow.onCloseRequested((event) => {
       event.preventDefault();
-      useApp.getState().askQuit(work);
+      const work = pendingWork(useApp.getState().tabs);
+      if (work) useApp.getState().askQuit(work);
+      else void saveWorkspace().then(() => appWindow.destroy());
     });
     return () => {
       unlisten.then((fn) => fn()).catch(() => {});
@@ -134,6 +137,7 @@ export function App() {
       <ConnectionDialog />
       <DeleteConnectionDialog />
       <ConfirmRunDialog />
+      <ConfirmChangesDialog />
       <QuitDialog />
       <Toaster />
     </TooltipProvider>

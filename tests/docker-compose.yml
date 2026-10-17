@@ -1,6 +1,7 @@
 # Databases for integration tests and for trying the app.
 #   docker compose -f tests/docker-compose.yml up -d
 # MySQL: 127.0.0.1:13306, user quarry / password quarry (test values only)
+# SSH:   127.0.0.1:12222, user quarry / password quarry; forwards to the `mysql` service
 services:
   mysql:
     image: mysql:8.4
@@ -16,6 +17,19 @@ services:
       - ./fixtures/mysql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uquarry", "-pquarry"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  ssh:
+    build: ./ssh
+    container_name: quarry-test-ssh
+    ports:
+      - "127.0.0.1:12222:22"
+    depends_on:
+      - mysql
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "22"]
       interval: 2s
       timeout: 2s
       retries: 30

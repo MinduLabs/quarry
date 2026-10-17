@@ -1,6 +1,8 @@
 use std::fmt;
 
-use quarry_model::{ConnId, ConnectionConfig};
+use quarry_model::{
+    ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, TableRef, Workspace,
+};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -34,10 +36,12 @@ pub enum Command {
     /// Read saved connections → `Event::Connections`.
     LoadConnections,
     /// Insert or update a connection (matched by `config.id`).
-    /// `password: null` keeps the current password.
+    /// `password: null` keeps the current password; same for `ssh_secret` (SSH password or key
+    /// passphrase). `remember_password` applies to both.
     SaveConnection {
         config: ConnectionConfig,
         password: Option<Password>,
+        ssh_secret: Option<Password>,
         remember_password: bool,
     },
     DeleteConnection {
@@ -48,6 +52,7 @@ pub enum Command {
         request: RequestId,
         config: ConnectionConfig,
         password: Option<Password>,
+        ssh_secret: Option<Password>,
     },
     /// Open the metadata session and list databases.
     Connect {
@@ -61,6 +66,13 @@ pub enum Command {
         id: ConnId,
         database: String,
     },
+    /// Columns, keys, indexes and DDL of a table → `Event::TableInfo`.
+    /// Connects first when the connection is not open yet.
+    LoadTableInfo {
+        request: RequestId,
+        conn: ConnId,
+        table: TableRef,
+    },
     /// Run SQL on the tab's session (opened on first use).
     /// On staging/production the engine may answer `Event::ConfirmRequired` instead;
     /// the client asks the user and resends with `confirmed: true`.
@@ -71,11 +83,58 @@ pub enum Command {
         sql: String,
         confirmed: bool,
     },
+    /// Show one page of a table in the tab: the engine builds the `SELECT` for the driver's
+    /// dialect, then runs it like `Run` (results arrive as the same events).
+    Browse {
+        tab: TabId,
+        conn: ConnId,
+        table: TableRef,
+        #[ts(type = "number")]
+        limit: u64,
+        #[ts(type = "number")]
+        offset: u64,
+    },
+    /// Write grid edits to `table` in one transaction on the tab's session → `ChangesApplied`
+    /// or `ChangesFailed`. On production the engine first answers `ChangesConfirmRequired`;
+    /// the client resends with `confirmed: true`.
+    ApplyChanges {
+        tab: TabId,
+        conn: ConnId,
+        table: TableRef,
+        changes: Vec<RowChange>,
+        confirmed: bool,
+    },
     Cancel {
         tab: TabId,
     },
     /// Close the tab's session.
     CloseTab {
         tab: TabId,
+    },
+    /// Read pinned tables and saved queries → `Event::Favorites`.
+    LoadFavorites,
+    /// Insert or replace a favorite (matched by `id`) → `Event::Favorites`.
+    SaveFavorite {
+        favorite: Favorite,
+    },
+    DeleteFavorite {
+        id: FavoriteId,
+    },
+    /// Newest queries first, optionally filtered by SQL text → `Event::History`.
+    LoadHistory {
+        request: RequestId,
+        query: Option<String>,
+        limit: u32,
+    },
+    /// Delete the whole query history → `Event::History` with no entries.
+    ClearHistory {
+        request: RequestId,
+    },
+    /// Read the tabs saved at the last quit → `Event::Workspace`.
+    LoadWorkspace,
+    /// Save the open tabs → `Event::WorkspaceSaved` with the same `request`.
+    SaveWorkspace {
+        request: RequestId,
+        workspace: Workspace,
     },
 }

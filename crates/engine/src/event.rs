@@ -1,4 +1,7 @@
-use quarry_model::{ColumnMeta, ConnId, ConnectionConfig, SchemaObject, Value};
+use quarry_model::{
+    ColumnMeta, ConnId, ConnectionConfig, Favorite, HistoryEntry, SchemaObject, TableInfo, Value,
+    Workspace,
+};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -61,6 +64,12 @@ pub enum Event {
         objects: Option<Vec<SchemaObject>>,
         error: Option<String>,
     },
+    /// Either `info` or `error` is set.
+    TableInfo {
+        request: RequestId,
+        info: Option<TableInfo>,
+        error: Option<String>,
+    },
 
     /// Safe mode: the user must confirm before `sql` runs.
     ConfirmRequired {
@@ -102,5 +111,44 @@ pub enum Event {
         tab: TabId,
         error: String,
         cancelled: bool,
+    },
+
+    /// Safe mode for grid edits: ask the user, then resend `ApplyChanges` with `confirmed: true`.
+    ChangesConfirmRequired {
+        tab: TabId,
+        message: String,
+    },
+    /// Grid edits were committed. `message` says what changed ("2 rows updated").
+    ChangesApplied {
+        tab: TabId,
+        message: String,
+    },
+    /// Grid edits were rolled back; nothing was written.
+    ChangesFailed {
+        tab: TabId,
+        error: String,
+    },
+
+    /// The full favorites list, re-sent after every change.
+    Favorites {
+        favorites: Vec<Favorite>,
+    },
+    History {
+        request: RequestId,
+        entries: Vec<HistoryEntry>,
+    },
+    /// A query finished and was added to the history.
+    HistoryAdded {
+        entry: HistoryEntry,
+    },
+
+    /// The tabs saved at the last quit (empty when none or unreadable).
+    Workspace {
+        workspace: Workspace,
+    },
+    /// The workspace was written (or the write failed, with `error` set).
+    WorkspaceSaved {
+        request: RequestId,
+        error: Option<String>,
     },
 }

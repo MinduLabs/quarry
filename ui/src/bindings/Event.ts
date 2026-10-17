@@ -3,11 +3,15 @@ import type { ColumnMeta } from "./ColumnMeta";
 import type { ConnId } from "./ConnId";
 import type { ConnState } from "./ConnState";
 import type { ConnectionConfig } from "./ConnectionConfig";
+import type { Favorite } from "./Favorite";
+import type { HistoryEntry } from "./HistoryEntry";
 import type { NoticeKind } from "./NoticeKind";
 import type { SchemaObject } from "./SchemaObject";
+import type { TableInfo } from "./TableInfo";
 import type { Value } from "./Value";
+import type { Workspace } from "./Workspace";
 
 /**
  * Something the engine reports to its client.
  */
-export type Event = { "type": "Pong", id: number, version: string, } | { "type": "Notice", kind: NoticeKind, message: string, } | { "type": "Connections", connections: Array<ConnectionConfig>, } | { "type": "TestResult", request: number, server_version: string | null, error: string | null, } | { "type": "ConnState", id: ConnId, state: ConnState, } | { "type": "Databases", id: ConnId, databases: Array<string>, } | { "type": "Objects", id: ConnId, database: string, objects: Array<SchemaObject> | null, error: string | null, } | { "type": "ConfirmRequired", tab: number, conn: ConnId, database: string | null, sql: string, message: string, } | { "type": "QueryStarted", tab: number, } | { "type": "ResultColumns", tab: number, set: number, columns: Array<ColumnMeta>, } | { "type": "ResultRows", tab: number, set: number, rows: Array<Array<Value>>, } | { "type": "ResultDone", tab: number, set: number, affected: number, rows: number, truncated: boolean, } | { "type": "QueryFinished", tab: number, elapsed_ms: number, } | { "type": "QueryFailed", tab: number, error: string, cancelled: boolean, };
+export type Event = { "type": "Pong", id: number, version: string, } | { "type": "Notice", kind: NoticeKind, message: string, } | { "type": "Connections", connections: Array<ConnectionConfig>, } | { "type": "TestResult", request: number, server_version: string | null, error: string | null, } | { "type": "ConnState", id: ConnId, state: ConnState, } | { "type": "Databases", id: ConnId, databases: Array<string>, } | { "type": "Objects", id: ConnId, database: string, objects: Array<SchemaObject> | null, error: string | null, } | { "type": "TableInfo", request: number, info: TableInfo | null, error: string | null, } | { "type": "ConfirmRequired", tab: number, conn: ConnId, database: string | null, sql: string, message: string, } | { "type": "QueryStarted", tab: number, } | { "type": "ResultColumns", tab: number, set: number, columns: Array<ColumnMeta>, } | { "type": "ResultRows", tab: number, set: number, rows: Array<Array<Value>>, } | { "type": "ResultDone", tab: number, set: number, affected: number, rows: number, truncated: boolean, } | { "type": "QueryFinished", tab: number, elapsed_ms: number, } | { "type": "QueryFailed", tab: number, error: string, cancelled: boolean, } | { "type": "ChangesConfirmRequired", tab: number, message: string, } | { "type": "ChangesApplied", tab: number, message: string, } | { "type": "ChangesFailed", tab: number, error: string, } | { "type": "Favorites", favorites: Array<Favorite>, } | { "type": "History", request: number, entries: Array<HistoryEntry>, } | { "type": "HistoryAdded", entry: HistoryEntry, } | { "type": "Workspace", workspace: Workspace, } | { "type": "WorkspaceSaved", request: number, error: string | null, };

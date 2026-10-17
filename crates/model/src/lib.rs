@@ -6,13 +6,21 @@
 mod capabilities;
 mod column;
 mod connection;
+mod edit;
 mod environment;
+mod favorite;
+mod history;
 mod schema;
 mod value;
+mod workspace;
 
 pub use capabilities::{Capabilities, ObjectKind};
 pub use column::ColumnMeta;
-pub use connection::{ConnId, ConnectionConfig, DriverId, SshConfig, SslMode};
+pub use connection::{ConnId, ConnectionConfig, DriverId, SshAuth, SshConfig, SslMode};
+pub use edit::{CellValue, RowChange};
 pub use environment::Environment;
-pub use schema::{SchemaObject, TableRef};
+pub use favorite::{Favorite, FavoriteId, FavoriteItem};
+pub use history::HistoryEntry;
+pub use schema::{ColumnInfo, ForeignKey, IndexInfo, SchemaObject, TableInfo, TableRef};
 pub use value::Value;
+pub use workspace::{BrowsePage, SavedTab, Workspace};

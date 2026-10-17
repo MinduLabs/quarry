@@ -22,8 +22,8 @@ Quarry is an open-source database client for Linux and macOS (AGPL-3.0-or-later,
 - `crates/driver-api`: `Driver` / `Session` traits, `ExecItem`, `DriverError`, `DriverRegistry`.
 - `crates/drivers/mysql`: MySQL / MariaDB via `mysql_async` + rustls. `convert.rs` (values), `diagnose.rs` (connect error messages).
 - `crates/sql`: `split`, `statement_at`, `classify` (read / write / DDL / destructive).
-- `crates/store`: `connections.toml` (no secrets) and `SecretStore` (keyring: `oo7` on Linux, `security-framework` on macOS).
-- `crates/tunnel`: SSH forwarding. A stub today.
+- `crates/store`: `connections.toml` and `favorites.toml` (config dir, no secrets), `workspace.json` and `history.jsonl` (data dir), `SecretStore` (keyring: `oo7` on Linux, `security-framework` on macOS).
+- `crates/tunnel`: SSH local port forwarding (`russh`): agent, key file or password; host key must be in `known_hosts`.
 - `crates/engine`: owns the tokio runtime and all state. `command.rs`, `event.rs`, `lib.rs` (`Engine`, `EngineHandle`). The only crate that knows a concrete driver (registered in `lib.rs`).
 - `src-tauri/`: thin bridge, no business logic. Commands `engine_send`, `engine_subscribe`, `statement_at`. `desktop.rs` installs the Linux desktop entry for unpackaged runs.
 - `ui/src/`: `features/{sidebar,connections,tabs,editor,query,grid,welcome,window}`, `components/ui/` (primitives), `store/app.ts` (zustand; engine events are reduced here), `lib/engine.ts` (bridge), `styles/tokens.css`. `bindings/` is generated.

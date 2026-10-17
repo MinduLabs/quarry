@@ -30,7 +30,8 @@ The UI and the engine share one contract. Rust owns it; TypeScript is generated.
 - `Password` is the only way a secret enters a `Command`. Its `Debug` prints `Password(***)`. A new secret-carrying field gets the same treatment.
 - `engine_subscribe` replaces the previous channel, so a reloaded webview just subscribes again. Do not assume one subscription per run.
 - `statement_at` takes and returns UTF-16 offsets (CodeMirror) and converts to bytes at the bridge. Keep the conversion in `src-tauri`.
-- Safe mode stays in the engine: `Run{confirmed:false}` may answer `ConfirmRequired`; the client resends with `confirmed:true`. No client may skip this by classifying SQL itself.
+- Safe mode stays in the engine: `Run{confirmed:false}` may answer `ConfirmRequired`, and `ApplyChanges{confirmed:false}` may answer `ChangesConfirmRequired`; the client resends with `confirmed:true`. No client may skip this by classifying SQL itself.
+- The UI never builds SQL for a driver. Table pages go through `Browse` (the engine uses `Dialect::select_page`), grid edits through `ApplyChanges` (parameterized, keyed by the primary key).
 
 ## Engine internals to respect
 

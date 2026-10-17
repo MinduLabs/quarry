@@ -161,3 +161,43 @@ async fn cancel_long_query() {
     // A killed SLEEP() returns 1 instead of an error; other statements fail with 1317.
     assert!(res.is_ok() || matches!(res, Err(DriverError::Cancelled)));
 }
+
+#[tokio::test]
+async fn table_info_reads_columns_keys_and_ddl() {
+    let Some(cfg) = config("quarry") else { return };
+    let mut session = MysqlDriver::default().connect(&cfg).await.unwrap();
+    let table = quarry_model::TableRef {
+        database: Some("shop".into()),
+        schema: None,
+        name: "orders".into(),
+    };
+    let info = session.table_info(&table).await.unwrap();
+    assert_eq!(info.primary_key, vec!["id".to_owned()]);
+    let id = &info.columns[0];
+    assert_eq!(id.name, "id");
+    assert_eq!(id.type_name, "bigint unsigned");
+    assert!(!id.nullable);
+    assert_eq!(id.extra.as_deref(), Some("auto_increment"));
+    let status = info.columns.iter().find(|c| c.name == "status").unwrap();
+    assert_eq!(status.default.as_deref(), Some("pending"));
+    assert!(
+        info.indexes
+            .iter()
+            .any(|i| i.name == "idx_orders_status" && !i.unique && i.columns == ["status"])
+    );
+    let fk = &info.foreign_keys[0];
+    assert_eq!(fk.name, "fk_orders_customer");
+    assert_eq!(fk.columns, ["customer_id"]);
+    assert_eq!(fk.references.name, "customers");
+    assert_eq!(fk.referenced_columns, ["id"]);
+    assert!(info.ddl.unwrap().starts_with("CREATE TABLE `orders`"));
+
+    let view = quarry_model::TableRef {
+        database: Some("shop".into()),
+        schema: None,
+        name: "paid_orders".into(),
+    };
+    let info = session.table_info(&view).await.unwrap();
+    assert!(info.primary_key.is_empty());
+    assert!(info.ddl.unwrap().contains("VIEW `paid_orders`"));
+}

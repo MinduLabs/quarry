@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use quarry_model::{Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaObject, Value};
+use quarry_model::{
+    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaObject, TableInfo, TableRef, Value,
+};
 use serde::{Deserialize, Serialize};
 
 pub type Result<T, E = DriverError> = std::result::Result<T, E>;
@@ -104,6 +106,15 @@ pub trait Dialect: Send + Sync {
     fn placeholder(&self, index: usize) -> String;
     /// `SELECT * FROM <table> LIMIT .. OFFSET ..`
     fn select_page(&self, table: &quarry_model::TableRef, limit: u64, offset: u64) -> String;
+    /// Quoted, qualified table name: `database.schema.name`, skipping the parts that are unset.
+    fn qualify(&self, table: &quarry_model::TableRef) -> String {
+        [&table.database, &table.schema, &Some(table.name.clone())]
+            .into_iter()
+            .flatten()
+            .map(|part| self.quote_ident(part))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
 }
 
 #[async_trait]
@@ -123,6 +134,10 @@ pub trait Session: Send {
     async fn execute_params(&mut self, sql: &str, params: &[Value]) -> Result<u64>;
     async fn list_databases(&mut self) -> Result<Vec<String>>;
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>>;
+    /// Columns, keys, indexes and DDL of one table or view.
+    async fn table_info(&mut self, _table: &TableRef) -> Result<TableInfo> {
+        Err(DriverError::Unsupported("table structure"))
+    }
     /// Change the session's default database (`USE`).
     async fn use_database(&mut self, database: &str) -> Result<()>;
     async fn begin(&mut self) -> Result<()>;

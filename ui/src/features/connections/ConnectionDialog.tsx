@@ -2,6 +2,7 @@ import { CircleCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { Environment } from "@/bindings/Environment";
+import type { SshAuth } from "@/bindings/SshAuth";
 import type { SslMode } from "@/bindings/SslMode";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -16,6 +17,12 @@ const ENVIRONMENTS: { value: Environment; label: string }[] = [
   { value: "local", label: "Local" },
   { value: "staging", label: "Staging" },
   { value: "production", label: "Production" },
+];
+
+const SSH_AUTH: { value: SshAuth; label: string }[] = [
+  { value: "agent", label: "SSH agent" },
+  { value: "key", label: "Key file" },
+  { value: "password", label: "Password" },
 ];
 
 const SSL_MODES: { value: SslMode; label: string }[] = [
@@ -37,6 +44,14 @@ interface Form {
   database: string;
   ssl: SslMode;
   readOnly: boolean;
+  ssh: boolean;
+  sshHost: string;
+  sshPort: string;
+  sshUser: string;
+  sshAuth: SshAuth;
+  sshKeyPath: string;
+  /** SSH password or key passphrase; empty keeps the saved one. */
+  sshSecret: string;
 }
 
 function toForm(config: ConnectionConfig | undefined): Form {
@@ -51,6 +66,13 @@ function toForm(config: ConnectionConfig | undefined): Form {
     database: config?.database ?? "",
     ssl: config?.ssl ?? "prefer",
     readOnly: config?.read_only ?? false,
+    ssh: Boolean(config?.ssh),
+    sshHost: config?.ssh?.host ?? "",
+    sshPort: String(config?.ssh?.port ?? 22),
+    sshUser: config?.ssh?.user ?? "",
+    sshAuth: config?.ssh?.auth ?? "agent",
+    sshKeyPath: config?.ssh?.key_path ?? "~/.ssh/id_ed25519",
+    sshSecret: "",
   };
 }
 
@@ -80,11 +102,12 @@ export function ConnectionDialog() {
 
   const build = (): ConnectionConfig | null => {
     const host = form.host.trim();
-    if (!host) {
+    if (!host || (form.ssh && (!form.sshHost.trim() || !form.sshUser.trim()))) {
       setInvalid(true);
       return null;
     }
     const port = Number.parseInt(form.port, 10);
+    const sshPort = Number.parseInt(form.sshPort, 10);
     return {
       id: existing?.id ?? crypto.randomUUID(),
       name: form.name.trim() || host,
@@ -95,7 +118,15 @@ export function ConnectionDialog() {
       user: form.user.trim() || null,
       path: null,
       ssl: form.ssl,
-      ssh: null,
+      ssh: form.ssh
+        ? {
+            host: form.sshHost.trim(),
+            port: Number.isFinite(sshPort) ? sshPort : 22,
+            user: form.sshUser.trim(),
+            auth: form.sshAuth,
+            key_path: form.sshAuth === "key" ? form.sshKeyPath.trim() || null : null,
+          }
+        : null,
       environment: form.environment,
       read_only: form.readOnly,
       color: existing?.color ?? null,
@@ -104,6 +135,7 @@ export function ConnectionDialog() {
   };
 
   const password = form.password ? form.password : null;
+  const sshSecret = form.ssh && form.sshAuth !== "agent" && form.sshSecret ? form.sshSecret : null;
 
   return (
     <Dialog
@@ -129,7 +161,7 @@ export function ConnectionDialog() {
             disabled={test?.pending}
             onClick={() => {
               const config = build();
-              if (config) testConnection(config, password);
+              if (config) testConnection(config, password, sshSecret);
             }}
           >
             Test
@@ -138,7 +170,7 @@ export function ConnectionDialog() {
             variant="primary"
             onClick={() => {
               const config = build();
-              if (config) saveConnection(config, password, form.remember);
+              if (config) saveConnection(config, password, sshSecret, form.remember);
             }}
           >
             Save
@@ -151,7 +183,7 @@ export function ConnectionDialog() {
         onSubmit={(e) => {
           e.preventDefault();
           const config = build();
-          if (config) saveConnection(config, password, form.remember);
+          if (config) saveConnection(config, password, sshSecret, form.remember);
         }}
       >
         {test && !test.pending && !test.ok && (
@@ -216,6 +248,74 @@ export function ConnectionDialog() {
         </Field>
 
         <div className="flex flex-col gap-3 border-line border-t pt-4">
+          <Switch
+            checked={form.ssh}
+            onChange={(v) => set("ssh", v)}
+            label="Connect over SSH"
+            description="Host and port above are then as seen from the SSH server"
+          />
+          {form.ssh && (
+            <>
+              <div className="grid grid-cols-[1fr_96px] gap-3">
+                <Field label="SSH host">
+                  <Input
+                    value={form.sshHost}
+                    placeholder="bastion.example.com"
+                    aria-invalid={invalid && !form.sshHost.trim()}
+                    onChange={(e) => set("sshHost", e.target.value)}
+                  />
+                </Field>
+                <Field label="SSH port">
+                  <Input
+                    inputMode="numeric"
+                    value={form.sshPort}
+                    onChange={(e) => set("sshPort", e.target.value.replace(/\D/g, ""))}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="SSH user">
+                  <Input
+                    value={form.sshUser}
+                    aria-invalid={invalid && !form.sshUser.trim()}
+                    onChange={(e) => set("sshUser", e.target.value)}
+                  />
+                </Field>
+                <Field label="Sign in with">
+                  <Select
+                    value={form.sshAuth}
+                    options={SSH_AUTH}
+                    onChange={(v) => set("sshAuth", v)}
+                  />
+                </Field>
+              </div>
+              {form.sshAuth === "key" && (
+                <Field label="Private key file">
+                  <Input
+                    value={form.sshKeyPath}
+                    onChange={(e) => set("sshKeyPath", e.target.value)}
+                  />
+                </Field>
+              )}
+              {form.sshAuth !== "agent" && (
+                <Field
+                  label={form.sshAuth === "key" ? "Key passphrase" : "SSH password"}
+                  hint={form.sshAuth === "key" ? "Leave empty if the key has none." : undefined}
+                >
+                  <Input
+                    type="password"
+                    value={form.sshSecret}
+                    placeholder={existing?.ssh ? "Unchanged" : ""}
+                    onChange={(e) => set("sshSecret", e.target.value)}
+                  />
+                </Field>
+              )}
+              <p className="text-sm text-muted">
+                The server must be in ~/.ssh/known_hosts. Connect once with ssh in a terminal to add
+                it.
+              </p>
+            </>
+          )}
           <Switch
             checked={form.remember}
             onChange={(v) => set("remember", v)}

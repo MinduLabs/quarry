@@ -10,7 +10,9 @@
     "--share=ipc",
     "--socket=wayland",
     "--socket=fallback-x11",
-    "--device=dri"
+    "--device=dri",
+    "--filesystem=~/.ssh:ro",
+    "--socket=ssh-auth"
   ],
   "build-options": {
     "append-path": "/usr/lib/sdk/rust-stable/bin",

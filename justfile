@@ -30,16 +30,16 @@ check-docker:
     pnpm check
     {{docker_linux}} --target check --output type=cacheonly .
 
-# Start / stop the test MySQL (127.0.0.1:13306)
+# Start / stop the test MySQL (127.0.0.1:13306) and SSH server (127.0.0.1:12222)
 db-up:
     docker compose -f tests/docker-compose.yml up -d --wait
 
 db-down:
     docker compose -f tests/docker-compose.yml down -v
 
-# Integration tests against the test database
+# Integration tests against the test database (and the SSH server for tunnels)
 test-db:
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test -p quarry-driver-mysql -p quarry-engine
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_SSH=127.0.0.1:12222 cargo test -p quarry-driver-mysql -p quarry-engine
 
 # macOS universal .dmg → dist/Quarry_<version>_universal.dmg. macOS only: Tauri cannot cross-build it.
 [macos]

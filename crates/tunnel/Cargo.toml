@@ -10,6 +10,14 @@ publish = false
 
 [dependencies]
 quarry-model.workspace = true
+directories.workspace = true
+russh.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true

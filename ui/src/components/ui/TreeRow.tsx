@@ -14,7 +14,7 @@ export interface TreeRowProps extends HTMLAttributes<HTMLDivElement> {
 
 /** One 28px row of the sidebar tree. */
 export const TreeRow = forwardRef<HTMLDivElement, TreeRowProps>(function TreeRow(
-  { depth, expanded, icon, label, active, trailing, className, ...props },
+  { depth, expanded, icon, label, active, trailing, className, style, ...props },
   ref,
 ) {
   return (
@@ -24,13 +24,14 @@ export const TreeRow = forwardRef<HTMLDivElement, TreeRowProps>(function TreeRow
       aria-expanded={expanded}
       aria-selected={active}
       tabIndex={-1}
-      style={{ paddingLeft: 6 + depth * 12 }}
       className={cn(
         "group flex h-7 items-center gap-1.5 rounded-md pr-2 text-base transition-colors-fast",
         active ? "bg-selected text-fg" : "text-fg hover:bg-hover",
         className,
       )}
       {...props}
+      // After the spread: a wrapper's style (e.g. a context menu trigger) must not drop the indent.
+      style={{ ...style, paddingLeft: 6 + depth * 12 }}
     >
       <span className="flex size-3 shrink-0 items-center justify-center text-faint">
         {expanded !== undefined && (

@@ -1,6 +1,6 @@
 [package]
 name = "quarry-store"
-description = "Local persistence: config (TOML, XDG), query history (SQLite + FTS5), secrets (keyring)."
+description = "Local persistence: config (TOML), workspace and history (JSON), secrets (keyring)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ publish = false
 quarry-model.workspace = true
 directories.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
@@ -23,6 +24,7 @@ oo7.workspace = true
 security-framework.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 uuid.workspace = true
 
 [lints]

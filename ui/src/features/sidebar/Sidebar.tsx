@@ -1,4 +1,4 @@
-import { Database, Eye, Plus, Search, Server, SquareFunction, Star, Table2, X } from "lucide-react";
+import { Database, Eye, Plus, Search, Server, SquareFunction, Table2, X } from "lucide-react";
 import { useState } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import { EnvBadge } from "@/components/ui/Badge";
@@ -11,10 +11,12 @@ import { Spinner } from "@/components/ui/Spinner";
 import { TreeRow } from "@/components/ui/TreeRow";
 import { modKey } from "@/lib/platform";
 import { type ConnNode, useApp } from "@/store/app";
+import { FavoritesList } from "../favorites/FavoritesList";
+import { HistoryList } from "../history/HistoryList";
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
 
-type Pane = "connections" | "favorites";
+type Pane = "connections" | "favorites" | "history";
 
 export function Sidebar() {
   const connections = useApp((s) => s.connections);
@@ -23,7 +25,7 @@ export function Sidebar() {
   const openDialog = useApp((s) => s.openDialog);
   const [selected, setSelected] = useState<string | null>(null);
   const [pane, setPane] = useState<Pane>("connections");
-  // Search is not wired up yet; the box only holds text.
+  // Filters the history (and favorites); the connection tree does not use it yet.
   const [query, setQuery] = useState("");
 
   return (
@@ -48,6 +50,7 @@ export function Sidebar() {
           tabs={[
             { value: "connections", label: "Connections" },
             { value: "favorites", label: "Favorites" },
+            { value: "history", label: "History" },
           ]}
         />
         <div className="relative">
@@ -92,24 +95,16 @@ export function Sidebar() {
             />
           ))}
         </div>
+      ) : pane === "favorites" ? (
+        <FavoritesList query={query} />
       ) : (
-        <FavoritesEmpty />
+        <HistoryList query={query} />
       )}
 
       <footer className="shrink-0 px-3 pb-2 text-xs text-faint">
         {version ? `Quarry ${version}` : ""}
       </footer>
     </aside>
-  );
-}
-
-function FavoritesEmpty() {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col items-center gap-2 px-4 pt-16 text-center">
-      <Star size={28} strokeWidth={1.5} className="text-faint" />
-      <p className="font-semibold text-base text-fg">No favorites yet</p>
-      <p className="text-sm text-muted">Pin tables and queries here for quick access.</p>
-    </div>
   );
 }
 
@@ -136,8 +131,15 @@ function ConnectionBranch({
   onSelect: (key: string) => void;
 }) {
   const node = useApp((s) => s.nodes[config.id]) as ConnNode | undefined;
-  const { toggleConnection, toggleDatabase, openObject, disconnect, newQuery, openDialog } =
-    useApp.getState();
+  const {
+    toggleConnection,
+    toggleDatabase,
+    openObject,
+    disconnect,
+    newQuery,
+    openDialog,
+    addTableFavorite,
+  } = useApp.getState();
   const status = node?.status.kind ?? "idle";
   const connected = status === "connected";
 
@@ -216,17 +218,34 @@ function ConnectionBranch({
                 sortObjects(db.objects ?? []).map((object) => {
                   const key = `${dbKey}/${object.name}`;
                   return (
-                    <TreeRow
+                    <ContextMenuArea
                       key={`${object.kind}:${object.name}`}
-                      depth={2}
-                      icon={objectIcon(object.kind)}
-                      label={object.name}
-                      active={selected === key}
-                      onClick={() => {
-                        onSelect(key);
-                        openObject(config.id, db.name, object.name, object.kind);
-                      }}
-                    />
+                      items={[
+                        {
+                          label: "Open",
+                          onSelect: () => openObject(config.id, db.name, object.name, object.kind),
+                        },
+                        ...(object.kind === "table" || object.kind === "view"
+                          ? [
+                              {
+                                label: "Add to favorites",
+                                onSelect: () => addTableFavorite(config.id, db.name, object.name),
+                              },
+                            ]
+                          : []),
+                      ]}
+                    >
+                      <TreeRow
+                        depth={2}
+                        icon={objectIcon(object.kind)}
+                        label={object.name}
+                        active={selected === key}
+                        onClick={() => {
+                          onSelect(key);
+                          openObject(config.id, db.name, object.name, object.kind);
+                        }}
+                      />
+                    </ContextMenuArea>
                   );
                 })}
             </div>
