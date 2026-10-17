@@ -212,15 +212,27 @@ mod tests {
         assert!(lines[2].starts_with("Code: "));
     }
 
+    /// errno values differ per OS: `ECONNREFUSED` is 111 on Linux and 61 on macOS.
+    #[cfg(target_os = "linux")]
+    const ECONNREFUSED: i32 = 111;
+    #[cfg(target_os = "macos")]
+    const ECONNREFUSED: i32 = 61;
+
     #[test]
     fn os_error_number_is_kept() {
-        let err = io::Error::from_raw_os_error(111);
+        let err = io::Error::from_raw_os_error(ECONNREFUSED);
         let msg = text(io_error(&TARGET, &err));
         assert_eq!(
             msg.lines().next(),
-            Some("Can't connect to MySQL server on '127.0.0.1:3306' (111)")
+            Some(
+                format!("Can't connect to MySQL server on '127.0.0.1:3306' ({ECONNREFUSED})")
+                    .as_str()
+            )
         );
-        assert!(msg.contains("Code: ECONNREFUSED (os error 111)"), "{msg}");
+        assert!(
+            msg.contains(&format!("Code: ECONNREFUSED (os error {ECONNREFUSED})")),
+            "{msg}"
+        );
     }
 
     #[test]

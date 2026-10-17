@@ -108,6 +108,7 @@ jobs:
       - run: cargo test -p quarry-driver-mysql -p quarry-engine --locked
         env:
           QUARRY_TEST_MYSQL: 127.0.0.1:13306
+          QUARRY_TEST_SSH: 127.0.0.1:12222
 
   deny:
     name: cargo-deny
@@ -125,4 +126,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends desktop-file-utils appstream
       - run: desktop-file-validate packaging/linux/io.github.mindulabs.Quarry.desktop
-      - run: appstreamcli validate --no-net --explain packaging/linux/io.github.mindulabs.Quarry.metainfo.xml
+      # appstreamcli 0.15 on Ubuntu 22.04 predates AppStream 1.0 and flags its
+      # <url type="vcs-browser"> as invalid. Fail on every error and every other warning.
+      - name: Validate metainfo
+        run: |
+          appstreamcli validate --no-net --format yaml \
+            packaging/linux/io.github.mindulabs.Quarry.metainfo.xml > appstream.yml || true
+          grep -q '^Validator:' appstream.yml
+          cat appstream.yml
+          awk '
+            function check() {
+              if (tag != "" && (sev == "error" || sev == "warning") \
+                  && !(tag == "url-invalid-type" && hint == "vcs-browser")) {
+                print "::error::" tag " (" sev "): " hint; bad = 1
+              }
+            }
+            /^- tag:/ { check(); tag = $3; sev = ""; hint = "" }
+            /^  severity:/ { sev = $2 }
+            /^  hint:/ { hint = $2 }
+            END { check(); exit bad }
+          ' appstream.yml

@@ -7,6 +7,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Each ignore names where the crate comes from and why we cannot drop it. Remove it once upstream does.
+ignore = [
+    # Unmaintained, not a vulnerability. Pulled in by tauri → gtk 0.18 → glib-macros (Linux only);
+    # Tauri ignores it too (tauri-apps/tauri .cargo/audit.toml).
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error via Tauri's GTK3 bindings; no fix available to us" },
+]
 
 [licenses]
 version = 2
