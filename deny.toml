@@ -12,6 +12,12 @@ ignore = [
     # Unmaintained, not a vulnerability. Pulled in by tauri → gtk 0.18 → glib-macros (Linux only);
     # Tauri ignores it too (tauri-apps/tauri .cargo/audit.toml).
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error via Tauri's GTK3 bindings; no fix available to us" },
+    # Unmaintained, not vulnerabilities: merged into zbus 6. Pulled in by oo7 0.6 (Linux keyring) →
+    # zbus 5. oo7 0.6 is the latest stable; 0.7 is a beta that needs Rust 1.95. Drop these when oo7
+    # ships a stable release on zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant via oo7 0.6 → zbus 5; no stable oo7 on zbus 6 yet" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names via oo7 0.6 → zbus 5; no stable oo7 on zbus 6 yet" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via oo7 0.6 → zbus 5; no stable oo7 on zbus 6 yet" },
 ]
 
 [licenses]
