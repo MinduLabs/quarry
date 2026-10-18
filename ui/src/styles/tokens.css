@@ -4,7 +4,7 @@
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   /* Surfaces */
   --app: #ffffff;
@@ -18,6 +18,12 @@
   /* Lines */
   --line: #e8e8ec;
   --line-strong: #d4d4da;
+
+  /* Key caps (Kbd): a raised key with a darker bottom edge, like macOS */
+  --kbd-bg: #ffffff;
+  --kbd-fg: #48484d;
+  --kbd-border: #d4d4d8;
+  --kbd-edge: #b8b8be;
 
   /* Text */
   --fg: #1d1d1f;
@@ -68,56 +74,65 @@
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --app: #1c1c1e;
-    --sidebar: #232326;
-    --surface: #212124;
-    --elevated: #2a2a2d;
-    --hover: rgb(255 255 255 / 0.06);
-    --pressed: rgb(255 255 255 / 0.1);
-    --selected: rgb(91 156 255 / 0.2);
+/* Dark theme. `lib/theme.ts` sets `data-theme` from the setting (System follows the OS). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --app: #1c1c1e;
+  --sidebar: #232326;
+  --surface: #212124;
+  --elevated: #2a2a2d;
+  --hover: rgb(255 255 255 / 0.06);
+  --pressed: rgb(255 255 255 / 0.1);
+  --selected: rgb(91 156 255 / 0.2);
 
-    --line: #2f2f33;
-    --line-strong: #3d3d42;
+  --line: #2f2f33;
+  --line-strong: #3d3d42;
 
-    --fg: #f2f2f7;
-    --muted: #a0a0a8;
-    --faint: #7c7c84;
+  --kbd-bg: #3a3a3e;
+  --kbd-fg: #d8d8de;
+  --kbd-border: #48484d;
+  --kbd-edge: #18181a;
 
-    --accent: #2563eb;
-    --accent-hover: #3b74f0;
-    --accent-fg: #ffffff;
-    --accent-text: #6ba3ff;
-    --accent-soft: rgb(91 156 255 / 0.22);
-    --danger: #ff6b61;
-    --warning: #f5b342;
-    --success: #4ade80;
-    --danger-solid: #dc2626;
+  --fg: #f2f2f7;
+  --muted: #a0a0a8;
+  --faint: #7c7c84;
 
-    --env-local: #22c55e;
-    --env-staging: #f59e0b;
-    --env-production: #dc2626;
+  --accent: #2563eb;
+  --accent-hover: #3b74f0;
+  --accent-fg: #ffffff;
+  --accent-text: #6ba3ff;
+  --accent-soft: rgb(91 156 255 / 0.22);
+  --danger: #ff6b61;
+  --warning: #f5b342;
+  --success: #4ade80;
+  --danger-solid: #dc2626;
 
-    --cell-modified: rgb(245 158 11 / 0.2);
-    --cell-inserted: rgb(34 197 94 / 0.18);
-    --cell-deleted: rgb(239 68 68 / 0.18);
+  --env-local: #22c55e;
+  --env-staging: #f59e0b;
+  --env-production: #dc2626;
 
-    --syntax-keyword: #c792ea;
-    --syntax-string: #e5b567;
-    --syntax-number: #5ccfe6;
-    --syntax-comment: #6f6f78;
-    --syntax-function: #82aaff;
-    --syntax-type: #7fdbca;
-    --syntax-literal: #f78c6c;
+  --cell-modified: rgb(245 158 11 / 0.2);
+  --cell-inserted: rgb(34 197 94 / 0.18);
+  --cell-deleted: rgb(239 68 68 / 0.18);
 
-    --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.08);
-    --shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.08);
-  }
+  --syntax-keyword: #c792ea;
+  --syntax-string: #e5b567;
+  --syntax-number: #5ccfe6;
+  --syntax-comment: #6f6f78;
+  --syntax-function: #82aaff;
+  --syntax-type: #7fdbca;
+  --syntax-literal: #f78c6c;
+
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.08);
 }
 
 /* Tailwind utilities mapped to the tokens (bg-app, text-muted, border-line, …). */
 @theme inline {
+  --color-kbd: var(--kbd-bg);
+  --color-kbd-fg: var(--kbd-fg);
+  --color-kbd-border: var(--kbd-border);
+  --color-kbd-edge: var(--kbd-edge);
   --color-app: var(--app);
   --color-sidebar: var(--sidebar);
   --color-surface: var(--surface);

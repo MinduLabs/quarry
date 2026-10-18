@@ -1,6 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
+import type { SortKey } from "@/bindings/SortKey";
 import type { Value } from "@/bindings/Value";
 import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
 import { cn } from "@/lib/cn";
@@ -31,6 +33,12 @@ export interface GridEditing {
   onToggleDelete: (row: number) => void;
 }
 
+/** Sorting by clicking a header, for table pages (the database sorts). */
+export interface GridSorting {
+  sort: SortKey[];
+  onSort: (column: string) => void;
+}
+
 type Pos = { row: number; col: number };
 
 /**
@@ -43,11 +51,13 @@ export function ResultGrid({
   rows,
   resetKey,
   editing,
+  sorting,
 }: {
   columns: ColumnMeta[];
   rows: Value[][];
   resetKey: number;
   editing?: GridEditing;
+  sorting?: GridSorting;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [widths, setWidths] = useState<number[]>([]);
@@ -203,24 +213,54 @@ export function ResultGrid({
           className="sticky top-0 z-20 grid border-line border-b bg-surface font-sans text-sm"
         >
           <div className="sticky left-0 z-10 border-line border-r bg-surface" />
-          {columns.map((column, i) => (
-            <div
-              // biome-ignore lint/suspicious/noArrayIndexKey: column names may repeat; position is the identity
-              key={`${column.name}:${i}`}
-              role="columnheader"
-              title={`${column.name} · ${column.type_name}`}
-              className={cn(
-                "relative flex items-center gap-1 border-line border-r px-2 font-semibold text-fg",
-                numeric[i] && "justify-end",
-              )}
-            >
-              <span className="truncate">{column.name}</span>
-              <span
-                onPointerDown={(e) => startResize(i, e)}
-                className="absolute top-0 right-[-3px] z-10 h-full w-1.5 cursor-col-resize hover:bg-accent-soft"
-              />
-            </div>
-          ))}
+          {columns.map((column, i) => {
+            const source = column.source_column ?? column.name;
+            const key = sorting?.sort.find((k) => k.column === source);
+            const Arrow = key?.descending ? ArrowDown : ArrowUp;
+            const label = (
+              <>
+                <span className="truncate">{column.name}</span>
+                {key && <Arrow size={12} strokeWidth={2} className="shrink-0 text-accent-text" />}
+              </>
+            );
+            return (
+              <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: column names may repeat; position is the identity
+                key={`${column.name}:${i}`}
+                role="columnheader"
+                aria-sort={key ? (key.descending ? "descending" : "ascending") : undefined}
+                title={`${column.name} · ${column.type_name}`}
+                className="relative flex border-line border-r font-semibold text-fg"
+              >
+                {sorting ? (
+                  <button
+                    type="button"
+                    onClick={() => sorting.onSort(source)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-1 px-2 text-left outline-none",
+                      "transition-colors-fast hover:bg-hover focus-visible:bg-hover",
+                      numeric[i] && "justify-end",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ) : (
+                  <div
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-1 px-2",
+                      numeric[i] && "justify-end",
+                    )}
+                  >
+                    {label}
+                  </div>
+                )}
+                <span
+                  onPointerDown={(e) => startResize(i, e)}
+                  className="absolute top-0 right-[-3px] z-10 h-full w-1.5 cursor-col-resize hover:bg-accent-soft"
+                />
+              </div>
+            );
+          })}
         </div>
 
         {/* Rows */}

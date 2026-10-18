@@ -1,4 +1,14 @@
-import { Database, Eye, Plus, Search, Server, SquareFunction, Table2, X } from "lucide-react";
+import {
+  Database,
+  Eye,
+  Plus,
+  Search,
+  Server,
+  Settings,
+  SquareFunction,
+  Table2,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import { EnvBadge } from "@/components/ui/Badge";
@@ -9,7 +19,7 @@ import { ContextMenuArea } from "@/components/ui/Menu";
 import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { Spinner } from "@/components/ui/Spinner";
 import { TreeRow } from "@/components/ui/TreeRow";
-import { modKey } from "@/lib/platform";
+import { keysOf } from "@/lib/shortcuts";
 import { type ConnNode, useApp } from "@/store/app";
 import { FavoritesList } from "../favorites/FavoritesList";
 import { HistoryList } from "../history/HistoryList";
@@ -35,7 +45,7 @@ export function Sidebar() {
       <header data-tauri-drag-region className="flex h-9 shrink-0 items-center justify-end pr-2">
         <IconButton
           label="New connection"
-          shortcut={`${modKey} N`}
+          shortcut={keysOf("newConnection")}
           onClick={() => openDialog({ mode: "new" })}
         >
           <Plus {...ICON} />
@@ -101,8 +111,16 @@ export function Sidebar() {
         <HistoryList query={query} />
       )}
 
-      <footer className="shrink-0 px-3 pb-2 text-xs text-faint">
-        {version ? `Quarry ${version}` : ""}
+      <footer className="flex h-8 shrink-0 items-center justify-between pr-1.5 pl-3 text-xs text-faint">
+        <span>{version ? `Quarry ${version}` : ""}</span>
+        <IconButton
+          label="Settings…"
+          shortcut={keysOf("settings")}
+          size="sm"
+          onClick={() => useApp.getState().setSettingsOpen(true)}
+        >
+          <Settings size={14} strokeWidth={1.75} />
+        </IconButton>
       </footer>
     </aside>
   );

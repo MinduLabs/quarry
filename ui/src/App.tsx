@@ -10,8 +10,10 @@ import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections
 import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { QueryView } from "./features/query/QueryView";
+import { SettingsDialog } from "./features/settings/SettingsDialog";
 import { Sidebar } from "./features/sidebar/Sidebar";
 import { SidebarToggle } from "./features/sidebar/SidebarToggle";
+import { CloseTabDialog } from "./features/tabs/CloseTabDialog";
 import { TabBar } from "./features/tabs/TabBar";
 import { Welcome } from "./features/welcome/Welcome";
 import { QuitDialog } from "./features/window/QuitDialog";
@@ -52,6 +54,38 @@ export function App() {
     };
   }, []);
 
+  // The webview's own right-click menu offers Reload, Back and Inspect, which restart the whole
+  // UI. Keep it only where it helps: text fields and the editor (cut, copy, paste). In
+  // development, Shift + right-click still opens it for the inspector.
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      if (import.meta.env.DEV && e.shiftKey) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      e.preventDefault();
+    };
+    // The webview would reload the whole UI, dropping running queries and unsaved edits.
+    // Instead, F5 and Ctrl/⌘+R refresh the active tab's results.
+    const onReloadKey = (e: KeyboardEvent) => {
+      const reload = e.key === "F5" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r");
+      if (!reload) return;
+      e.preventDefault();
+      // Shift reloads the webview, kept for development only.
+      if (e.shiftKey) {
+        if (import.meta.env.DEV) window.location.reload();
+        return;
+      }
+      const { activeTabId, dialog, refresh } = useApp.getState();
+      if (activeTabId !== null && !dialog) refresh(activeTabId);
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+    window.addEventListener("keydown", onReloadKey);
+    return () => {
+      window.removeEventListener("contextmenu", onContextMenu);
+      window.removeEventListener("keydown", onReloadKey);
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
@@ -59,9 +93,11 @@ export function App() {
       if (dialog) return;
       const key = e.key.toLowerCase();
       if (key === "n") openDialog({ mode: "new" });
+      else if (key === "t" && e.shiftKey) useApp.getState().reopenClosedTab();
       else if (key === "t") newQuery();
       else if (key === "w" && activeTabId !== null) closeTab(activeTabId);
       else if (key === "b") useApp.getState().toggleSidebar();
+      else if (key === ",") useApp.getState().setSettingsOpen(true);
       else return;
       e.preventDefault();
     };
@@ -138,6 +174,8 @@ export function App() {
       <DeleteConnectionDialog />
       <ConfirmRunDialog />
       <ConfirmChangesDialog />
+      <SettingsDialog />
+      <CloseTabDialog />
       <QuitDialog />
       <Toaster />
     </TooltipProvider>

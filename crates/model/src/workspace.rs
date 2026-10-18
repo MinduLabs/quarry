@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{ConnId, TableRef};
+use crate::{BrowseQuery, ConnId, TableRef};
 
 /// Open tabs, saved between launches. Results are never saved, only what the user typed.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
@@ -32,4 +32,7 @@ pub struct BrowsePage {
     /// First row of the page, from 0.
     #[ts(type = "number")]
     pub offset: u64,
+    /// Filters and sort. Missing in workspaces saved before filtering existed.
+    #[serde(default)]
+    pub query: BrowseQuery,
 }

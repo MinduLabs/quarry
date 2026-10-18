@@ -1,5 +1,7 @@
-import { forwardRef, type InputHTMLAttributes } from "react";
+import { Eye, EyeOff } from "lucide-react";
+import { forwardRef, type InputHTMLAttributes, useState } from "react";
 import { cn } from "@/lib/cn";
+import { IconButton } from "./IconButton";
 
 export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "size"> {
   /** `lg` is taller and rounder; used for search boxes. */
@@ -27,6 +29,29 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     />
   );
 });
+
+/** Password field with a button that shows what was typed (never a saved secret). */
+export function PasswordInput({ className, ...props }: Omit<InputProps, "type">) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative">
+      <Input
+        {...props}
+        type={visible ? "text" : "password"}
+        className={cn("pr-8", visible && "font-mono", className)}
+      />
+      <IconButton
+        label={visible ? "Hide password" : "Show password"}
+        size="sm"
+        aria-pressed={visible}
+        onClick={() => setVisible((v) => !v)}
+        className="absolute top-0.5 right-0.5"
+      >
+        {visible ? <EyeOff size={14} strokeWidth={1.75} /> : <Eye size={14} strokeWidth={1.75} />}
+      </IconButton>
+    </div>
+  );
+}
 
 export function Field({
   label,

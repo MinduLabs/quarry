@@ -1,6 +1,16 @@
 import { closeCompletion } from "@codemirror/autocomplete";
 import type { EditorView } from "@codemirror/view";
-import { ListVideo, Play, Plus, Square, Star } from "lucide-react";
+import {
+  AlignLeft,
+  Filter,
+  Layers,
+  ListTree,
+  ListVideo,
+  Play,
+  Plus,
+  Square,
+  Star,
+} from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { EnvBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -9,12 +19,15 @@ import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/cn";
 import { statementAt } from "@/lib/engine";
-import { modKey } from "@/lib/platform";
+import { keysOf, shortcutText } from "@/lib/shortcuts";
 import { editableKey, editCount, type Tab, useApp } from "@/store/app";
+import { formatSql } from "../editor/format";
 import { flashRange, SqlEditor } from "../editor/SqlEditor";
 import { SaveQueryDialog } from "../favorites/SaveQueryDialog";
 import { ResultGrid } from "../grid/ResultGrid";
 import { StructureView } from "../structure/StructureView";
+import { ExplainTree } from "./ExplainTree";
+import { FilterBar } from "./FilterBar";
 import { Pager } from "./Pager";
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -22,9 +35,7 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 /** Toolbar + SQL editor + results + status bar for one tab. */
 export function QueryView({ tab }: { tab: Tab }) {
   const config = useApp((s) => s.connections.find((c) => c.id === tab.connId));
-  const objects = useApp(
-    (s) => s.nodes[tab.connId]?.databases.find((d) => d.name === tab.database)?.objects,
-  );
+  const db = useApp((s) => s.nodes[tab.connId]?.databases.find((d) => d.name === tab.database));
   const {
     setSql,
     run,
@@ -35,32 +46,61 @@ export function QueryView({ tab }: { tab: Tab }) {
     toggleDeleteRow,
     discardEdits,
     saveEdits,
+    explain,
+    toggleSort,
+    beginTransaction,
+    endTransaction,
   } = useApp.getState();
+  const connStatus = useApp((s) => s.nodes[tab.connId]?.status);
+  const capabilities = connStatus?.kind === "connected" ? connStatus.capabilities : null;
   const structure = tab.browse !== null && tab.view === "structure";
   const editKey = editableKey(tab, config?.read_only ?? true);
   const pending = editCount(tab.edits);
   const editor = useRef<EditorView | null>(null);
   const [editorHeight, setEditorHeight] = useState(220);
   const [saving, setSaving] = useState(false);
+  const [filtering, setFiltering] = useState(false);
 
-  const tables = useMemo(() => (objects ?? []).map((o) => o.name), [objects]);
+  const objects = db?.objects;
+  const columns = db?.columns;
+  const schema = useMemo(() => {
+    const byTable: Record<string, string[]> = {};
+    for (const o of objects ?? []) {
+      if (o.kind === "table" || o.kind === "view") byTable[o.name] = [];
+    }
+    for (const t of columns ?? []) byTable[t.table] = t.columns;
+    return byTable;
+  }, [objects, columns]);
+
+  /** The selection, or the statement under the cursor (briefly highlighted). */
+  const currentStatement = useCallback(async (): Promise<string | null> => {
+    const view = editor.current;
+    if (!view) return null;
+    closeCompletion(view);
+    const selection = view.state.selection.main;
+    if (!selection.empty) return view.state.sliceDoc(selection.from, selection.to);
+    const text = view.state.doc.toString();
+    const range = await statementAt(text, selection.head);
+    if (!range) return null;
+    flashRange(view, range[0], range[1]);
+    return text.slice(range[0], range[1]);
+  }, []);
 
   const runFromEditor = useCallback(
     async (all: boolean) => {
       const view = editor.current;
       if (!view) return;
-      closeCompletion(view);
-      const text = view.state.doc.toString();
-      const selection = view.state.selection.main;
-      if (!selection.empty) return run(tab.id, view.state.sliceDoc(selection.from, selection.to));
-      if (all) return run(tab.id, text);
-      const range = await statementAt(text, selection.head);
-      if (!range) return;
-      flashRange(view, range[0], range[1]);
-      run(tab.id, text.slice(range[0], range[1]));
+      if (all && view.state.selection.main.empty) return run(tab.id, view.state.doc.toString());
+      const sql = await currentStatement();
+      if (sql) run(tab.id, sql);
     },
-    [tab.id, run],
+    [tab.id, run, currentStatement],
   );
+
+  const explainFromEditor = useCallback(async () => {
+    const sql = await currentStatement();
+    if (sql) explain(tab.id, sql, true);
+  }, [tab.id, explain, currentStatement]);
 
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
@@ -77,6 +117,17 @@ export function QueryView({ tab }: { tab: Tab }) {
   };
 
   const active = tab.sets[tab.activeSet];
+  const filters = tab.browse?.query.filters.length ?? 0;
+  const showFilters = Boolean(tab.browse) && !structure && (filtering || filters > 0);
+  const filterColumns =
+    tab.structure?.info?.columns.map((c) => c.name) ??
+    active?.columns?.map((c) => c.source_column ?? c.name) ??
+    [];
+  const planText = (() => {
+    if (!tab.explain?.json || tab.running) return null;
+    const cell = active?.rows[0]?.[0];
+    return cell && (cell.t === "text" || cell.t === "json") ? cell.v : null;
+  })();
   const grids = tab.sets.map((set, index) => ({ set, index })).filter(({ set }) => set.columns);
 
   return (
@@ -93,7 +144,7 @@ export function QueryView({ tab }: { tab: Tab }) {
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-line border-b bg-surface px-2">
         <IconButton
           label="Run statement"
-          shortcut={`${modKey} ↵`}
+          shortcut={keysOf("run")}
           disabled={tab.running}
           onClick={() => runFromEditor(false)}
         >
@@ -101,15 +152,72 @@ export function QueryView({ tab }: { tab: Tab }) {
         </IconButton>
         <IconButton
           label="Run all"
-          shortcut={`⇧ ${modKey} ↵`}
+          shortcut={keysOf("runAll")}
           disabled={tab.running}
           onClick={() => runFromEditor(true)}
         >
           <ListVideo {...ICON} />
         </IconButton>
-        <IconButton label="Stop" disabled={!tab.running} onClick={() => cancel(tab.id)}>
+        <IconButton
+          label="Stop"
+          disabled={!tab.running && !tab.counting}
+          onClick={() => cancel(tab.id)}
+        >
           <Square {...ICON} size={14} />
         </IconButton>
+        {!structure && (
+          <IconButton
+            label="Format SQL"
+            shortcut={keysOf("format")}
+            disabled={!tab.sql.trim()}
+            onClick={() => {
+              const view = editor.current;
+              if (!view) return;
+              formatSql(view);
+              view.focus();
+            }}
+          >
+            <AlignLeft {...ICON} />
+          </IconButton>
+        )}
+        {!structure && capabilities?.explain && (
+          <IconButton
+            label="Explain plan"
+            disabled={tab.running}
+            onClick={() => void explainFromEditor()}
+          >
+            <ListTree {...ICON} />
+          </IconButton>
+        )}
+        {capabilities?.transactions &&
+          (tab.txOpen ? (
+            <div className="ml-1 flex items-center gap-1.5">
+              <span className="font-medium text-sm text-warning">In transaction</span>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={tab.running}
+                onClick={() => endTransaction(tab.id, true)}
+              >
+                Commit
+              </Button>
+              <Button
+                size="sm"
+                disabled={tab.running}
+                onClick={() => endTransaction(tab.id, false)}
+              >
+                Roll back
+              </Button>
+            </div>
+          ) : (
+            <IconButton
+              label="Begin transaction"
+              disabled={tab.running}
+              onClick={() => beginTransaction(tab.id)}
+            >
+              <Layers {...ICON} />
+            </IconButton>
+          ))}
         {tab.browse && (
           <SegmentedTabs
             label="View"
@@ -121,6 +229,16 @@ export function QueryView({ tab }: { tab: Tab }) {
               { value: "structure", label: "Structure" },
             ]}
           />
+        )}
+        {tab.browse && !structure && (
+          <IconButton
+            label={filters > 0 ? `Filters (${filters})` : "Filter rows"}
+            aria-pressed={showFilters}
+            className={cn(filters > 0 && "text-accent-text")}
+            onClick={() => setFiltering((f) => !f)}
+          >
+            <Filter {...ICON} />
+          </IconButton>
         )}
         {editKey && !structure && (
           <IconButton label="Add row" disabled={tab.running} onClick={() => addRow(tab.id)}>
@@ -139,7 +257,7 @@ export function QueryView({ tab }: { tab: Tab }) {
               size="sm"
               variant="primary"
               disabled={tab.saving}
-              title={`Save (${modKey} S)`}
+              title={`Save (${shortcutText("saveChanges")})`}
               onClick={() => saveEdits(tab.id)}
             >
               {tab.saving ? "Saving…" : "Save"}
@@ -175,7 +293,7 @@ export function QueryView({ tab }: { tab: Tab }) {
       <div style={{ height: editorHeight }} className={cn("shrink-0", structure && "hidden")}>
         <SqlEditor
           initialValue={tab.sql}
-          tables={tables}
+          schema={schema}
           onChange={(sql) => setSql(tab.id, sql)}
           onRun={(all) => void runFromEditor(all)}
           onReady={(view) => {
@@ -197,8 +315,27 @@ export function QueryView({ tab }: { tab: Tab }) {
         <div className="absolute inset-x-0 -top-1 h-2 transition-colors-fast group-hover:bg-accent-soft" />
       </div>
 
+      {showFilters && <FilterBar tab={tab} columns={filterColumns} />}
+
+      {tab.explain && !structure && (
+        <div className="flex h-8 shrink-0 items-center gap-2 border-line border-b bg-surface px-2 text-sm text-muted">
+          <span>Query plan</span>
+          <SegmentedTabs
+            label="Plan view"
+            value={tab.explain.json ? "tree" : "table"}
+            onChange={(view) => tab.explain && explain(tab.id, tab.explain.sql, view === "tree")}
+            className="h-6 w-36"
+            tabs={[
+              { value: "tree", label: "Tree" },
+              { value: "table", label: "Table" },
+            ]}
+          />
+        </div>
+      )}
+
       {/* Results */}
       <div className={cn("relative min-h-0 flex-1", structure && "hidden")}>
+        {planText !== null && <ExplainTree text={planText} />}
         {tab.running && tab.sets.length === 0 && (
           <div className="animate-fade flex h-full items-center justify-center">
             <Spinner size={18} />
@@ -209,7 +346,7 @@ export function QueryView({ tab }: { tab: Tab }) {
             {tab.error}
           </pre>
         )}
-        {active?.columns && (
+        {active?.columns && planText === null && (
           <ResultGrid
             columns={active.columns}
             rows={active.rows}
@@ -220,6 +357,14 @@ export function QueryView({ tab }: { tab: Tab }) {
                     edits: tab.edits ?? { updates: {}, inserts: [], deletes: [] },
                     onEdit: (row, col, value) => editCell(tab.id, row, col, value),
                     onToggleDelete: (row) => toggleDeleteRow(tab.id, row),
+                  }
+                : undefined
+            }
+            sorting={
+              tab.browse && tab.paged
+                ? {
+                    sort: tab.browse.query.sort,
+                    onSort: (column) => toggleSort(tab.id, column),
                   }
                 : undefined
             }

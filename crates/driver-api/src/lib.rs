@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaObject, TableInfo, TableRef, Value,
+    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaObject, TableColumns, TableInfo,
+    TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -104,8 +105,34 @@ pub trait Dialect: Send + Sync {
     fn quote_ident(&self, ident: &str) -> String;
     /// Placeholder for parameter number `index` (from 1): `$1` or `?`.
     fn placeholder(&self, index: usize) -> String;
-    /// `SELECT * FROM <table> LIMIT .. OFFSET ..`
-    fn select_page(&self, table: &quarry_model::TableRef, limit: u64, offset: u64) -> String;
+    /// `SELECT * FROM <table> [WHERE ..] [ORDER BY ..] LIMIT .. OFFSET ..`. `filter` and `order`
+    /// are clauses built by the engine (identifiers quoted, values as placeholders), without
+    /// their keywords.
+    fn select_page(
+        &self,
+        table: &quarry_model::TableRef,
+        filter: Option<&str>,
+        order: Option<&str>,
+        limit: u64,
+        offset: u64,
+    ) -> String;
+
+    /// `SELECT COUNT(*)` of the rows of `table` that match `filter` (see [`Self::select_page`]).
+    fn count_rows(&self, table: &quarry_model::TableRef, filter: Option<&str>) -> String {
+        match filter {
+            Some(filter) => format!(
+                "SELECT COUNT(*) FROM {} WHERE {filter}",
+                self.qualify(table)
+            ),
+            None => format!("SELECT COUNT(*) FROM {}", self.qualify(table)),
+        }
+    }
+
+    /// The query plan statement for `statement` (as a table, or as JSON), or `None` when the
+    /// database has no such form.
+    fn explain(&self, _statement: &str, _json: bool) -> Option<String> {
+        None
+    }
     /// Quoted, qualified table name: `database.schema.name`, skipping the parts that are unset.
     fn qualify(&self, table: &quarry_model::TableRef) -> String {
         [&table.database, &table.schema, &Some(table.name.clone())]
@@ -132,8 +159,22 @@ pub trait Session: Send {
     /// Run one or more statements, streaming results into `sink`.
     async fn execute(&mut self, sql: &str, opts: &ExecOpts, sink: ExecSink<'_>) -> Result<()>;
     async fn execute_params(&mut self, sql: &str, params: &[Value]) -> Result<u64>;
+    /// Like [`Self::execute`] for one statement with parameters, streaming its rows.
+    async fn query(
+        &mut self,
+        _sql: &str,
+        _params: &[Value],
+        _opts: &ExecOpts,
+        _sink: ExecSink<'_>,
+    ) -> Result<()> {
+        Err(DriverError::Unsupported("parameterized queries"))
+    }
     async fn list_databases(&mut self) -> Result<Vec<String>>;
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>>;
+    /// Column names of every table and view in `database`, for completion.
+    async fn list_columns(&mut self, _database: &str) -> Result<Vec<TableColumns>> {
+        Err(DriverError::Unsupported("column list"))
+    }
     /// Columns, keys, indexes and DDL of one table or view.
     async fn table_info(&mut self, _table: &TableRef) -> Result<TableInfo> {
         Err(DriverError::Unsupported("table structure"))

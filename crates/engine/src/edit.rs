@@ -144,10 +144,11 @@ fn key_filter(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    struct Ansi;
+    /// Quotes with `"` and numbers placeholders, so tests catch dialect mix-ups.
+    pub(crate) struct Ansi;
 
     impl Dialect for Ansi {
         fn quote_ident(&self, ident: &str) -> String {
@@ -156,7 +157,14 @@ mod tests {
         fn placeholder(&self, index: usize) -> String {
             format!("${index}")
         }
-        fn select_page(&self, _: &TableRef, _: u64, _: u64) -> String {
+        fn select_page(
+            &self,
+            _: &TableRef,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: u64,
+            _: u64,
+        ) -> String {
             String::new()
         }
     }

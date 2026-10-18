@@ -47,7 +47,7 @@ logic in a headless Rust core. App ID: `io.github.mindulabs.Quarry`.
 | `model` | `Value`, `ColumnMeta`, `SchemaObject`, `ConnectionConfig`, `Capabilities`, `Environment`. Exports TypeScript types (ts-rs). |
 | `driver-api` | `Driver` / `Session` traits (including `table_info`), `Dialect` (quoting, placeholders, paging), `ExecItem`, shared error type. |
 | `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls: connect, SSL modes, multi-statement scripts, cancel with `KILL QUERY` on a side connection, introspection through `information_schema`. |
-| `sql` | Statement splitting, statement at cursor, classification (read / write / DDL / destructive). |
+| `sql` | Statement splitting, statement at cursor, classification (read / write / DDL / destructive), transaction effect (`BEGIN`, `COMMIT`, implicit commits). |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs (`workspace.json`), query history (`history.jsonl`), secrets in the OS keyring. |
 | `tunnel` | SSH local port forwarding via `russh`: ssh-agent, key file or password; the host key must be in `known_hosts`. |
 | `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Exports TypeScript types. |
@@ -70,10 +70,13 @@ logic in a headless Rust core. App ID: `io.github.mindulabs.Quarry`.
 Main flows:
 
 ```
-Connect      Connect{id} → ConnState(Connecting) → ConnState(Connected) → Databases
-Tree         LoadObjects{id, database} → Objects
+Connect      Connect{id} → ConnState(Connecting) → ConnState(Connected{capabilities}) → Databases
+Tree         LoadObjects{id, database} → Objects;  LoadColumns{id, database} → Columns (completion)
 Query        Run{tab, sql} → QueryStarted → (ResultColumns → ResultRows* → ResultDone)* → QueryFinished | QueryFailed → HistoryAdded
-Table page   Browse{tab, table, limit, offset} → same events as Query (the engine builds the SELECT for the dialect)
+Table page   Browse{tab, table, limit, offset, query} → same events as Query (the engine builds the SELECT for the dialect)
+Row count    CountRows{tab, table, query} → RowCount (on the tab's session, so Cancel stops it)
+Query plan   Explain{tab, sql, json} → same events as Query (one statement; it never runs)
+Transaction  BeginTransaction{tab} / EndTransaction{tab, commit} → TransactionState
 Structure    LoadTableInfo{request, conn, table} → TableInfo
 Grid edits   ApplyChanges{tab, table, changes} → ChangesApplied | ChangesFailed (one transaction)
 Safe mode    Run{confirmed:false} → ConfirmRequired → user agrees → Run{confirmed:true}
@@ -92,7 +95,19 @@ Favorites    LoadFavorites / SaveFavorite / DeleteFavorite → Favorites (the fu
 - Cancel goes around the session (driver cancel handle), so it works while a query is running.
 - A connection over SSH has one tunnel, shared by its metadata session, its tabs and the cancel
   connection. Disconnect closes it. Test Connection opens its own tunnel and drops it after.
-- Grid edits run on the tab's session in one transaction. They are parameterized (`?` per value),
+- Table pages can be filtered and sorted. `BrowseQuery` holds column filters (`AND`-ed) and sort
+  keys; the engine (`browse.rs`) quotes the column names through the dialect and sends every value
+  as a parameter, so the page runs as a prepared statement. `LIKE` wildcards in a value match
+  literally. Values are compared as text, which the database converts to the column type.
+- The tab tracks whether its session has a transaction open: `BeginTransaction` / `EndTransaction`,
+  and typed SQL (`BEGIN`, `START TRANSACTION`, `COMMIT`, `ROLLBACK`, statements that commit
+  implicitly). Closing the tab or disconnecting ends the session, which rolls the transaction back;
+  the UI asks first.
+- `Explain` accepts one statement that is not already `EXPLAIN` / `ANALYZE`, so it can never turn
+  into `EXPLAIN ANALYZE` (which runs the statement). Safe mode treats `EXPLAIN ANALYZE <stmt>` like
+  `<stmt>`.
+- Grid edits run on the tab's session in one transaction (a savepoint when the user has one open, so
+  their changes stay uncommitted). They are parameterized (`?` per value),
   keyed by the primary key, and every UPDATE/DELETE must hit exactly one row or the batch rolls
   back. Only a page of a table with a primary key is editable; read-only connections refuse.
 
@@ -112,17 +127,23 @@ Classification comes from `quarry-sql`; the decision is made by the engine.
 |---|---|
 | Connections | `connections.toml` in the OS config dir (`~/.config/quarry`, `~/Library/Application Support/quarry`). Never contains secrets. Has a `version` field for migrations. |
 | Favorites | `favorites.toml` in the same config dir. |
-| Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL and page per tab. Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
+| Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL, and page with its filters and sort per tab. Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
 | Query history | `history.jsonl` in the data dir: SQL, connection, database, time, duration, first error line. Newest 5,000 kept. Never passwords. |
 | Secrets | Linux: Secret Service / Secret portal via `oo7`. macOS: Keychain via `security-framework`. Account `<connection uuid>` for the database password, `<connection uuid>:ssh` for the SSH password or key passphrase. |
 | SSH host keys | Read from `~/.ssh/known_hosts`, never written. The Flatpak gets `~/.ssh` read-only and the ssh-agent socket. |
 
 ## UI
 
-`ui/src` is organized by feature: `features/{sidebar,connections,tabs,editor,query,grid,structure,history,favorites,welcome,window}`,
+`ui/src` is organized by feature: `features/{sidebar,connections,tabs,editor,query,grid,structure,history,favorites,settings,welcome,window}`,
 shared primitives in `components/ui`, global state in `store/app.ts` (zustand; it is also where engine
 events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 [STYLE-GUIDE.md](STYLE-GUIDE.md).
+
+- **View preferences** (theme, sidebar shown or hidden) are per machine and live in the webview's
+  `localStorage`, so they apply before the engine answers. Anything another client would need goes
+  through the engine instead.
+- **Shortcuts** are listed once in `ui/src/lib/shortcuts.ts`; Settings › Keyboard shows that list.
+  The webview's own reload is turned off: `F5` / `Ctrl/⌘+R` refresh the active tab instead.
 
 - **Editor:** CodeMirror 6 with SQL highlighting and schema-aware completion; `Ctrl/⌘+Enter` runs the
   statement under the cursor (range computed in Rust by `statement_at`).

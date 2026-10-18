@@ -20,6 +20,7 @@ import {
   placeholder,
 } from "@codemirror/view";
 import { useEffect, useRef } from "react";
+import { formatSql } from "./format";
 import { editorHighlight, editorTheme } from "./theme";
 
 const flashEffect = StateEffect.define<{ from: number; to: number } | null>();
@@ -49,14 +50,14 @@ export function flashRange(view: EditorView, from: number, to: number) {
 
 export function SqlEditor({
   initialValue,
-  tables,
+  schema,
   onChange,
   onRun,
   onReady,
 }: {
   initialValue: string;
-  /** Table names for autocompletion. */
-  tables: string[];
+  /** Table name → column names, for completion. A table whose columns are not loaded maps to []. */
+  schema: Record<string, string[]>;
   onChange: (value: string) => void;
   onRun: (all: boolean) => void;
   onReady: (view: EditorView) => void;
@@ -86,6 +87,7 @@ export function SqlEditor({
           return true;
         },
       },
+      { key: "Shift-Mod-f", run: formatSql },
     ]);
     view.current = new EditorView({
       parent: host.current,
@@ -102,7 +104,7 @@ export function SqlEditor({
           closeBrackets(),
           highlightSelectionMatches(),
           autocompletion({ icons: false }),
-          language.current.of(sql({ dialect: MySQL, upperCaseKeywords: true, schema: tables })),
+          language.current.of(sql({ dialect: MySQL, upperCaseKeywords: true, schema })),
           keymap.of([
             ...closeBracketsKeymap,
             ...defaultKeymap,
@@ -129,10 +131,10 @@ export function SqlEditor({
   useEffect(() => {
     view.current?.dispatch({
       effects: language.current.reconfigure(
-        sql({ dialect: MySQL, upperCaseKeywords: true, schema: tables }),
+        sql({ dialect: MySQL, upperCaseKeywords: true, schema }),
       ),
     });
-  }, [tables]);
+  }, [schema]);
 
   return <div ref={host} className="h-full min-h-0 overflow-hidden" />;
 }

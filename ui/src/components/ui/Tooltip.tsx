@@ -16,7 +16,7 @@ export function Tooltip({
   children,
 }: {
   content: ReactNode;
-  shortcut?: string;
+  shortcut?: readonly string[];
   children: ReactNode;
 }) {
   return (

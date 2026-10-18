@@ -1,7 +1,7 @@
 use std::fmt;
 
 use quarry_model::{
-    ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, TableRef, Workspace,
+    BrowseQuery, ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, TableRef, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -66,6 +66,11 @@ pub enum Command {
         id: ConnId,
         database: String,
     },
+    /// Column names of every table in a database, for completion → `Event::Columns`.
+    LoadColumns {
+        id: ConnId,
+        database: String,
+    },
     /// Columns, keys, indexes and DDL of a table → `Event::TableInfo`.
     /// Connects first when the connection is not open yet.
     LoadTableInfo {
@@ -93,6 +98,38 @@ pub enum Command {
         limit: u64,
         #[ts(type = "number")]
         offset: u64,
+        /// Filters and sort, applied by the database.
+        #[serde(default)]
+        query: BrowseQuery,
+    },
+    /// Exact number of rows of `table` that match `query.filters`, on the tab's session (so
+    /// `Cancel` stops it) → `Event::RowCount`.
+    CountRows {
+        tab: TabId,
+        conn: ConnId,
+        table: TableRef,
+        #[serde(default)]
+        query: BrowseQuery,
+    },
+    /// Show the query plan of one statement in the tab, as rows (`json: false`) or as one JSON
+    /// document. The statement itself never runs. Results arrive like `Run`.
+    Explain {
+        tab: TabId,
+        conn: ConnId,
+        database: Option<String>,
+        sql: String,
+        json: bool,
+    },
+    /// Start a transaction on the tab's session → `Event::TransactionState`.
+    BeginTransaction {
+        tab: TabId,
+        conn: ConnId,
+        database: Option<String>,
+    },
+    /// Commit (`commit: true`) or roll back the tab's transaction → `Event::TransactionState`.
+    EndTransaction {
+        tab: TabId,
+        commit: bool,
     },
     /// Write grid edits to `table` in one transaction on the tab's session → `ChangesApplied`
     /// or `ChangesFailed`. On production the engine first answers `ChangesConfirmRequired`;

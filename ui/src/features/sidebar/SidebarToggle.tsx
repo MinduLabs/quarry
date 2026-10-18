@@ -1,7 +1,8 @@
 import { PanelLeft } from "lucide-react";
 import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/cn";
-import { isMac, modKey } from "@/lib/platform";
+import { isMac } from "@/lib/platform";
+import { keysOf } from "@/lib/shortcuts";
 import { useApp } from "@/store/app";
 
 /**
@@ -16,7 +17,7 @@ export function SidebarToggle() {
     <div className={cn("absolute z-30", isMac ? "top-1 left-21" : "top-1 left-2")}>
       <IconButton
         label={open ? "Hide sidebar" : "Show sidebar"}
-        shortcut={`${modKey} B`}
+        shortcut={keysOf("toggleSidebar")}
         aria-pressed={open}
         onClick={toggle}
       >

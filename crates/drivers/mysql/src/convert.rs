@@ -94,11 +94,20 @@ pub fn value(raw: MyValue, column: &Column) -> Value {
         MyValue::NULL => return Value::Null,
         MyValue::Bytes(bytes) => bytes,
         // The binary protocol (prepared statements) returns typed values.
+        // YEAR and small unsigned types arrive as `Int`; the text protocol reads them as unsigned.
+        MyValue::Int(v) if is_unsigned(column) => {
+            return u64::try_from(v).map_or(Value::Int(v), Value::UInt);
+        }
         MyValue::Int(v) => return Value::Int(v),
         MyValue::UInt(v) => return Value::UInt(v),
         MyValue::Float(v) => return Value::Float(f64::from(v)),
         MyValue::Double(v) => return Value::Float(v),
-        other => return Value::Text(other.as_sql(true).trim_matches('\'').to_owned()),
+        MyValue::Date(y, mo, d, h, mi, s, us) => {
+            return binary_date(column, (y, mo, d, h, mi, s, us));
+        }
+        MyValue::Time(negative, days, h, mi, s, us) => {
+            return binary_time(negative, days, (h, mi, s, us));
+        }
     };
 
     match column.column_type() {
@@ -158,6 +167,45 @@ pub fn value(raw: MyValue, column: &Column) -> Value {
             Err(err) => Value::Bytes(err.into_bytes()),
         },
     }
+}
+
+/// A `DATE` / `DATETIME` / `TIMESTAMP` from the binary protocol. Zero dates stay as text, like
+/// the text protocol's `0000-00-00`.
+fn binary_date(column: &Column, (y, mo, d, h, mi, s, us): (u16, u8, u8, u8, u8, u8, u32)) -> Value {
+    let date = NaiveDate::from_ymd_opt(i32::from(y), u32::from(mo), u32::from(d));
+    let is_date = matches!(
+        column.column_type(),
+        ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE
+    );
+    match date {
+        Some(date) if is_date => Value::Date(date),
+        Some(date) => date
+            .and_hms_micro_opt(u32::from(h), u32::from(mi), u32::from(s), us)
+            .map(Value::Timestamp)
+            .unwrap_or_else(|| Value::Text(date.to_string())),
+        None if is_date => Value::Text(format!("{y:04}-{mo:02}-{d:02}")),
+        None => Value::Text(format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}")),
+    }
+}
+
+/// A `TIME` from the binary protocol. MySQL allows negative values and more than 24 hours,
+/// which `NaiveTime` cannot hold; those stay as text.
+fn binary_time(negative: bool, days: u32, (h, mi, s, us): (u8, u8, u8, u32)) -> Value {
+    if !negative
+        && days == 0
+        && let Some(time) =
+            NaiveTime::from_hms_micro_opt(u32::from(h), u32::from(mi), u32::from(s), us)
+    {
+        return Value::Time(time);
+    }
+    let hours = u64::from(days) * 24 + u64::from(h);
+    let sign = if negative { "-" } else { "" };
+    let fraction = if us > 0 {
+        format!(".{us:06}")
+    } else {
+        String::new()
+    };
+    Value::Text(format!("{sign}{hours:02}:{mi:02}:{s:02}{fraction}"))
 }
 
 fn lossy(bytes: &[u8]) -> String {

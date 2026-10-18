@@ -86,7 +86,9 @@ impl WorkspaceStore {
 
 #[cfg(test)]
 mod tests {
-    use quarry_model::{BrowsePage, ConnId, SavedTab, TableRef};
+    use quarry_model::{
+        BrowsePage, BrowseQuery, ColumnFilter, ConnId, FilterOp, SavedTab, SortKey, TableRef,
+    };
 
     use super::*;
 
@@ -116,6 +118,17 @@ mod tests {
                             name: "orders".into(),
                         },
                         offset: 2000,
+                        query: BrowseQuery {
+                            filters: vec![ColumnFilter {
+                                column: "status".into(),
+                                op: FilterOp::Eq,
+                                value: "paid".into(),
+                            }],
+                            sort: vec![SortKey {
+                                column: "id".into(),
+                                descending: true,
+                            }],
+                        },
                     }),
                 },
             ],
@@ -131,6 +144,24 @@ mod tests {
         let workspace = sample();
         store.save(&workspace).unwrap();
         assert_eq!(store.load().unwrap(), workspace);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn browse_tabs_saved_before_filters_load_unfiltered() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let conn = ConnId::new();
+        let old = format!(
+            r#"{{"version":1,"tabs":[{{"title":"orders","conn":"{}","database":"shop","sql":"",
+            "browse":{{"table":{{"database":"shop","schema":null,"name":"orders"}},"offset":0}}}}],
+            "active":0}}"#,
+            conn.0
+        );
+        fs::write(dir.join(WORKSPACE_FILE), old).unwrap();
+        let workspace = WorkspaceStore::new(&dir).load().unwrap();
+        let browse = workspace.tabs[0].browse.as_ref().unwrap();
+        assert_eq!(browse.query, BrowseQuery::default());
         fs::remove_dir_all(dir).unwrap();
     }
 

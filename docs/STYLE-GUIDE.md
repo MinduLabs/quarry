@@ -47,6 +47,7 @@ Use through Tailwind (`bg-surface`, `text-muted`, `border-line`, …) or `var(--
 | `bg-danger-solid` | Destructive button fill (white text) |
 | `bg-env-local`, `bg-env-staging`, `bg-env-production` | Environment badges and dots |
 | `bg-cell-modified`, `bg-cell-inserted`, `bg-cell-deleted` | Pending grid edits |
+| `bg-kbd`, `text-kbd-fg`, `border-kbd-border`, `kbd-edge` | Key caps (`Kbd`) |
 
 Text/background pairs meet WCAG AA (4.5:1) except `text-faint`, which is for non-essential text only.
 
@@ -118,7 +119,9 @@ Patterns (utility classes in `base.css`):
 
 **Buttons** — `primary` (accent fill, one per view), `secondary` (surface fill + hairline), `ghost` (transparent, toolbars), `danger` (destructive confirmations only). Text in sentence case: "New connection", "Run".
 
-**Shortcuts** — always drawn with `Kbd` (one key cap per key: `⌘ N`, `Ctrl ↵`), in tooltips and in the welcome screen; never as plain text.
+**Shortcuts** — always drawn with `Kbd`: one raised key cap per key (18px, 4px radius, a darker bottom edge, like macOS), in tooltips, menus, the welcome screen and Settings › Keyboard; never as plain text. Every shortcut is listed once in `ui/src/lib/shortcuts.ts` with platform-neutral keys (`Mod` = ⌘ on macOS, Ctrl elsewhere); `Kbd` prints them the platform's way: `⌘ ⇧ T` with symbols in macOS order (⌃ ⌥ ⇧ ⌘), `Ctrl Shift T` on Linux. A `title` attribute uses `shortcutText()`.
+
+**Themes** — System (follows the OS), Light or Dark, chosen in Settings. `lib/theme.ts` sets `data-theme` on the root element; the dark tokens sit under `:root[data-theme="dark"]`.
 
 **Inputs** — 28px, `bg-app`, 1px `border-line-strong`, 6px radius, focus: accent border + 3px `accent-soft` ring. Labels above inputs, 12px muted.
 

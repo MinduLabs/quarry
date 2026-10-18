@@ -5,7 +5,8 @@ import { Tooltip } from "./Tooltip";
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Accessible name; also shown as the tooltip. */
   label: string;
-  shortcut?: string;
+  /** Platform-neutral chord from `lib/shortcuts.ts`. */
+  shortcut?: readonly string[];
   size?: "sm" | "md";
   children: ReactNode;
 }

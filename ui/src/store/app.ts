@@ -4,6 +4,8 @@
  */
 import { create } from "zustand";
 import type { BrowsePage } from "@/bindings/BrowsePage";
+import type { BrowseQuery } from "@/bindings/BrowseQuery";
+import type { Capabilities } from "@/bindings/Capabilities";
 import type { CellValue } from "@/bindings/CellValue";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
@@ -13,10 +15,12 @@ import type { HistoryEntry } from "@/bindings/HistoryEntry";
 import type { ObjectKind } from "@/bindings/ObjectKind";
 import type { RowChange } from "@/bindings/RowChange";
 import type { SchemaObject } from "@/bindings/SchemaObject";
+import type { TableColumns } from "@/bindings/TableColumns";
 import type { TableInfo } from "@/bindings/TableInfo";
 import type { Value } from "@/bindings/Value";
 import type { Workspace } from "@/bindings/Workspace";
 import { send } from "@/lib/engine";
+import { applyTheme, loadTheme, saveTheme, type ThemePref } from "@/lib/theme";
 import { quoteIdent } from "@/lib/values";
 
 /** Rows per page in a browse tab. */
@@ -25,7 +29,7 @@ export const PAGE_SIZE = 1000;
 export type ConnStatus =
   | { kind: "idle" }
   | { kind: "connecting" }
-  | { kind: "connected"; version: string }
+  | { kind: "connected"; version: string; capabilities: Capabilities }
   | { kind: "failed"; error: string };
 
 export interface DbNode {
@@ -34,6 +38,8 @@ export interface DbNode {
   loading: boolean;
   objects: SchemaObject[] | null;
   error: string | null;
+  /** Column names per table, for completion. Loaded after `objects`; `null` until then. */
+  columns: TableColumns[] | null;
 }
 
 export interface ConnNode {
@@ -57,6 +63,14 @@ export interface TabStructure {
 }
 
 export type TabView = "data" | "structure";
+
+export const emptyQuery = (): BrowseQuery => ({ filters: [], sort: [] });
+
+/** The statement whose plan the tab shows, and as what. */
+export interface ExplainState {
+  sql: string;
+  json: boolean;
+}
 
 /** Rows of history shown in the sidebar. */
 export const HISTORY_LIMIT = 200;
@@ -119,6 +133,40 @@ export interface Tab {
   error: string | null;
   /** Bumped on every run so views can reset scroll/selection. */
   runId: number;
+  /** An exact row count of the browsed table (with its filters) is being computed. */
+  counting: boolean;
+  /** Exact row count for the current filters, once asked for. */
+  rowCount: number | null;
+  /** The tab's session has a transaction open. */
+  txOpen: boolean;
+  /** Set while the results are a query plan. */
+  explain: ExplainState | null;
+  /** The SQL last run in this tab, for Refresh. */
+  lastRun: string | null;
+}
+
+function blankTab(
+  fields: Pick<Tab, "title" | "connId" | "database" | "sql" | "browse"> & { id: number },
+): Tab {
+  return {
+    ...fields,
+    view: "data",
+    structure: null,
+    paged: false,
+    edits: null,
+    saving: false,
+    running: false,
+    sets: [],
+    activeSet: 0,
+    elapsedMs: null,
+    error: null,
+    runId: 0,
+    counting: false,
+    rowCount: null,
+    txOpen: false,
+    explain: null,
+    lastRun: null,
+  };
 }
 
 export interface Toast {
@@ -132,13 +180,16 @@ export interface Toast {
 export interface QuitInfo {
   running: number;
   edits: number;
+  /** Tabs with an open transaction, which quitting rolls back. */
+  transactions: number;
 }
 
 /** Returns what quitting would lose, or null when it is safe to quit without asking. */
 export function pendingWork(tabs: Tab[]): QuitInfo | null {
   const running = tabs.filter((t) => t.running).length;
   const edits = tabs.filter((t) => editCount(t.edits) > 0).length;
-  return running + edits > 0 ? { running, edits } : null;
+  const transactions = tabs.filter((t) => t.txOpen).length;
+  return running + edits + transactions > 0 ? { running, edits, transactions } : null;
 }
 
 export interface PendingChangesConfirm {
@@ -173,6 +224,8 @@ interface State {
   test: { request: number; pending: boolean; ok: boolean | null; message: string } | null;
   confirm: PendingConfirm | null;
   changesConfirm: PendingChangesConfirm | null;
+  /** Tabs waiting for the user to agree that closing them rolls back an open transaction. */
+  closeConfirm: number[] | null;
   history: HistoryState;
   favorites: Favorite[];
   toasts: Toast[];
@@ -202,11 +255,30 @@ interface State {
 
   newQuery: (target?: { connId: string; database: string | null }) => void;
   selectTab: (id: number) => void;
-  closeTab: (id: number) => void;
+  /** Close a tab; with an open transaction, ask first unless `force`. */
+  closeTab: (id: number, force?: boolean) => void;
+  /** Close several tabs; asks once if any has an open transaction, unless `force`. */
+  closeTabs: (ids: number[], force?: boolean) => void;
+  /** Tabs closed this session, newest last, for "Reopen closed tab". */
+  closedTabs: ClosedTab[];
+  reopenClosedTab: () => void;
+  answerCloseConfirm: (close: boolean) => void;
   setSql: (id: number, sql: string) => void;
   run: (id: number, sql: string) => void;
   /** Load the page of a browse tab that starts at row `offset`. */
   browse: (id: number, offset: number) => void;
+  /** Replace the filters and sort of a browse tab and reload from the first row. */
+  setBrowseQuery: (id: number, query: BrowseQuery) => void;
+  /** Sort by `column`: ascending, then descending, then unsorted. */
+  toggleSort: (id: number, column: string) => void;
+  /** Count the rows that match the browse tab's filters exactly. */
+  countRows: (id: number) => void;
+  /** Show the plan of `sql` (one statement) as a table or as a JSON tree. */
+  explain: (id: number, sql: string, json: boolean) => void;
+  beginTransaction: (id: number) => void;
+  endTransaction: (id: number, commit: boolean) => void;
+  /** Load the tab's results again: the same page of a table, plan, or last query. */
+  refresh: (id: number) => void;
   cancel: (id: number) => void;
   setActiveSet: (id: number, set: number) => void;
   /** Data or Structure, for browse tabs. */
@@ -230,6 +302,11 @@ interface State {
   clearHistory: () => void;
   /** Open `sql` in a new tab on that connection and database (history, favorites). */
   openSql: (connId: string, database: string | null, sql: string, title?: string) => void;
+  /** Light, dark, or follow the OS; remembered between launches. */
+  theme: ThemePref;
+  setTheme: (theme: ThemePref) => void;
+  settingsOpen: boolean;
+  setSettingsOpen: (open: boolean) => void;
   /** Sidebar visibility; remembered between launches. */
   sidebarOpen: boolean;
   toggleSidebar: () => void;
@@ -247,6 +324,12 @@ function loadSidebarOpen(): boolean {
     return true;
   }
 }
+
+/** What "Reopen closed tab" brings back: the same things a restart restores. */
+export type ClosedTab = Pick<Tab, "title" | "connId" | "database" | "sql" | "browse">;
+
+/** Closed tabs kept for reopening. */
+const CLOSED_TAB_LIMIT = 20;
 
 let nextTabId = 1;
 let nextQuery = 1;
@@ -352,25 +435,7 @@ export const useApp = create<State>()((set, get) => {
     sql: string,
     browse: BrowsePage | null = null,
   ) => {
-    const tab: Tab = {
-      id: nextTabId++,
-      title,
-      connId,
-      database,
-      sql,
-      browse,
-      view: "data",
-      structure: null,
-      paged: false,
-      edits: null,
-      saving: false,
-      running: false,
-      sets: [],
-      activeSet: 0,
-      elapsedMs: null,
-      error: null,
-      runId: 0,
-    };
+    const tab = blankTab({ id: nextTabId++, title, connId, database, sql, browse });
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, active: { connId, database } }));
     return tab.id;
   };
@@ -385,6 +450,14 @@ export const useApp = create<State>()((set, get) => {
     activeTabId: null,
     dialog: null,
     test: null,
+    theme: loadTheme(),
+    setTheme: (theme) => {
+      saveTheme(theme);
+      applyTheme(theme);
+      set({ theme });
+    },
+    settingsOpen: false,
+    setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
     sidebarOpen: loadSidebarOpen(),
     toggleSidebar: () =>
       set((s) => {
@@ -400,6 +473,7 @@ export const useApp = create<State>()((set, get) => {
     dismissQuit: () => set({ quit: null }),
     confirm: null,
     changesConfirm: null,
+    closeConfirm: null,
     history: { entries: [], loaded: false, query: "" },
     favorites: [],
     toasts: [],
@@ -448,13 +522,23 @@ export const useApp = create<State>()((set, get) => {
             const name = get().connections.find((c) => c.id === event.id)?.name ?? "";
             get().toast("error", `${name}: ${state.error}`);
           }
+          // The engine closed the connection's sessions, which rolls back their transactions.
+          if (state.kind === "Disconnected") {
+            set((s) => ({
+              tabs: s.tabs.map((t) => (t.connId === event.id ? { ...t, txOpen: false } : t)),
+            }));
+          }
           patchNode(event.id, (node) => {
             switch (state.kind) {
               case "Connecting":
                 return { status: { kind: "connecting" } };
               case "Connected":
                 return {
-                  status: { kind: "connected", version: state.server_version },
+                  status: {
+                    kind: "connected",
+                    version: state.server_version,
+                    capabilities: state.capabilities,
+                  },
                   expanded: true,
                 };
               case "Disconnected":
@@ -475,6 +559,7 @@ export const useApp = create<State>()((set, get) => {
               loading: name === preferred,
               objects: null,
               error: null,
+              columns: null,
             })),
           }));
           if (preferred && event.databases.includes(preferred)) {
@@ -488,6 +573,20 @@ export const useApp = create<State>()((set, get) => {
             objects: event.objects,
             error: event.error,
           }));
+          // Completion works without columns, so they load after the tree is shown.
+          if (event.objects) send({ type: "LoadColumns", id: event.id, database: event.database });
+          break;
+        case "Columns":
+          // Keep the previous columns when a reload fails.
+          if (event.columns) patchDb(event.id, event.database, () => ({ columns: event.columns }));
+          break;
+        case "RowCount":
+          patchTab(event.tab, () => ({ counting: false, rowCount: event.count }));
+          if (event.error) get().toast("error", event.error);
+          break;
+        case "TransactionState":
+          patchTab(event.tab, () => ({ txOpen: event.open }));
+          if (event.error) get().toast("error", event.error);
           break;
         case "ConfirmRequired":
           set({ confirm: { ...event } });
@@ -535,25 +634,16 @@ export const useApp = create<State>()((set, get) => {
           const known = new Set(get().connections.map((c) => c.id));
           const restored: Tab[] = event.workspace.tabs
             .filter((t) => known.has(t.conn))
-            .map((t) => ({
-              id: nextTabId++,
-              title: t.title,
-              connId: t.conn,
-              database: t.database,
-              sql: t.sql,
-              browse: t.browse,
-              view: "data" as const,
-              structure: null,
-              paged: false,
-              edits: null,
-              saving: false,
-              running: false,
-              sets: [],
-              activeSet: 0,
-              elapsedMs: null,
-              error: null,
-              runId: 0,
-            }));
+            .map((t) =>
+              blankTab({
+                id: nextTabId++,
+                title: t.title,
+                connId: t.conn,
+                database: t.database,
+                sql: t.sql,
+                browse: t.browse,
+              }),
+            );
           for (const t of restored) {
             const n = /^Query (\d+)$/.exec(t.title)?.[1];
             if (n) nextQuery = Math.max(nextQuery, Number(n) + 1);
@@ -676,7 +766,7 @@ export const useApp = create<State>()((set, get) => {
         return;
       }
       if (kind === "table" || kind === "view") {
-        const browse = { table: { database, schema: null, name }, offset: 0 };
+        const browse = { table: { database, schema: null, name }, offset: 0, query: emptyQuery() };
         const id = openTab(connId, database, name, "", browse);
         get().browse(id, 0);
         return;
@@ -703,17 +793,53 @@ export const useApp = create<State>()((set, get) => {
       openTab(t.connId, t.database, `Query ${nextQuery++}`, "");
     },
     selectTab: (id) => set({ activeTabId: id }),
-    closeTab: (id) => {
-      send({ type: "CloseTab", tab: id });
+    closeTab: (id, force = false) => get().closeTabs([id], force),
+    closeTabs: (ids, force = false) => {
+      const closing = new Set(ids);
+      const { tabs } = get();
+      if (!force && tabs.some((t) => closing.has(t.id) && t.txOpen)) {
+        set({ closeConfirm: ids });
+        return;
+      }
+      // The engine cancels a running query before it closes the session.
+      for (const id of ids) send({ type: "CloseTab", tab: id });
       set((s) => {
-        const index = s.tabs.findIndex((t) => t.id === id);
-        const tabs = s.tabs.filter((t) => t.id !== id);
-        const neighbour = tabs[Math.min(index, tabs.length - 1)];
+        const closed: ClosedTab[] = s.tabs
+          .filter((t) => closing.has(t.id))
+          .map(({ title, connId, database, sql, browse }) => ({
+            title,
+            connId,
+            database,
+            sql,
+            browse,
+          }));
+        const first = s.tabs.findIndex((t) => closing.has(t.id));
+        const rest = s.tabs.filter((t) => !closing.has(t.id));
+        const neighbour = rest[Math.min(Math.max(first, 0), rest.length - 1)];
+        const activeClosed = s.activeTabId !== null && closing.has(s.activeTabId);
         return {
-          tabs,
-          activeTabId: s.activeTabId === id ? (neighbour?.id ?? null) : s.activeTabId,
+          tabs: rest,
+          activeTabId: activeClosed ? (neighbour?.id ?? null) : s.activeTabId,
+          closedTabs: [...s.closedTabs, ...closed].slice(-CLOSED_TAB_LIMIT),
         };
       });
+    },
+    closedTabs: [],
+    reopenClosedTab: () => {
+      const closed = get().closedTabs;
+      // Skip tabs whose connection was deleted since.
+      const known = new Set(get().connections.map((c) => c.id));
+      const index = closed.findLastIndex((t) => known.has(t.connId));
+      const tab = closed[index];
+      set({ closedTabs: index >= 0 ? closed.slice(0, index) : [] });
+      if (!tab) return;
+      const id = openTab(tab.connId, tab.database, tab.title, tab.sql, tab.browse);
+      if (tab.browse) get().browse(id, tab.browse.offset);
+    },
+    answerCloseConfirm: (close) => {
+      const ids = get().closeConfirm;
+      set({ closeConfirm: null });
+      if (close && ids) get().closeTabs(ids, true);
     },
     setSql: (id, sql) => patchTab(id, () => ({ sql })),
     run: (id, sql) => {
@@ -723,7 +849,7 @@ export const useApp = create<State>()((set, get) => {
         get().toast("info", "Save or discard your changes first");
         return;
       }
-      patchTab(id, () => ({ paged: false, edits: null }));
+      patchTab(id, () => ({ paged: false, edits: null, explain: null, lastRun: sql }));
       send({
         type: "Run",
         tab: id,
@@ -741,7 +867,7 @@ export const useApp = create<State>()((set, get) => {
         return;
       }
       const browse = { ...tab.browse, offset: Math.max(0, offset) };
-      patchTab(id, () => ({ browse, paged: true, view: "data", edits: null }));
+      patchTab(id, () => ({ browse, paged: true, view: "data", edits: null, explain: null }));
       // The primary key decides whether the page can be edited.
       if (tab.structure === null) loadStructure(id);
       send({
@@ -751,7 +877,69 @@ export const useApp = create<State>()((set, get) => {
         table: browse.table,
         limit: PAGE_SIZE,
         offset: browse.offset,
+        query: browse.query,
       });
+    },
+    setBrowseQuery: (id, query) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab?.browse || tab.running) return;
+      if (editCount(tab.edits) > 0) {
+        get().toast("info", "Save or discard your changes first");
+        return;
+      }
+      patchTab(id, (t) => ({ browse: t.browse && { ...t.browse, query }, rowCount: null }));
+      get().browse(id, 0);
+    },
+    toggleSort: (id, column) => {
+      const query = get().tabs.find((t) => t.id === id)?.browse?.query;
+      if (!query) return;
+      const current = query.sort[0]?.column === column ? query.sort[0] : null;
+      const sort = !current
+        ? [{ column, descending: false }]
+        : current.descending
+          ? []
+          : [{ column, descending: true }];
+      get().setBrowseQuery(id, { ...query, sort });
+    },
+    countRows: (id) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab?.browse || tab.counting || tab.running) return;
+      patchTab(id, () => ({ counting: true }));
+      send({
+        type: "CountRows",
+        tab: id,
+        conn: tab.connId,
+        table: tab.browse.table,
+        query: tab.browse.query,
+      });
+    },
+    explain: (id, sql, json) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab || tab.running || !sql.trim()) return;
+      if (editCount(tab.edits) > 0) {
+        get().toast("info", "Save or discard your changes first");
+        return;
+      }
+      patchTab(id, () => ({ paged: false, edits: null, explain: { sql, json } }));
+      send({ type: "Explain", tab: id, conn: tab.connId, database: tab.database, sql, json });
+    },
+    beginTransaction: (id) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab || tab.running || tab.txOpen) return;
+      send({ type: "BeginTransaction", tab: id, conn: tab.connId, database: tab.database });
+    },
+    endTransaction: (id, commit) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab?.txOpen || tab.running) return;
+      send({ type: "EndTransaction", tab: id, commit });
+    },
+    refresh: (id) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab || tab.running) return;
+      // Safe mode still applies: a rerun write on staging or production asks again.
+      if (tab.explain) get().explain(id, tab.explain.sql, tab.explain.json);
+      else if (tab.browse && (tab.paged || !tab.lastRun)) get().browse(id, tab.browse.offset);
+      else if (tab.lastRun) get().run(id, tab.lastRun);
     },
     cancel: (id) => send({ type: "Cancel", tab: id }),
     setActiveSet: (id, index) => patchTab(id, () => ({ activeSet: index })),

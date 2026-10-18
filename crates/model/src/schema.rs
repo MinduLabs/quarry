@@ -32,6 +32,19 @@ pub struct TableInfo {
     pub foreign_keys: Vec<ForeignKey>,
     /// `CREATE TABLE` / `CREATE VIEW` statement, when the driver can produce it.
     pub ddl: Option<String>,
+    /// Row count from table statistics, which can be off by a lot. `None` for views or when the
+    /// driver has no estimate.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub estimated_rows: Option<u64>,
+}
+
+/// Column names of one table, for SQL completion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TableColumns {
+    pub table: String,
+    pub columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

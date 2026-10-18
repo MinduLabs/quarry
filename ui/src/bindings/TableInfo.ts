@@ -15,4 +15,9 @@ primary_key: Array<string>, indexes: Array<IndexInfo>, foreign_keys: Array<Forei
 /**
  * `CREATE TABLE` / `CREATE VIEW` statement, when the driver can produce it.
  */
-ddl: string | null, };
+ddl: string | null, 
+/**
+ * Row count from table statistics, which can be off by a lot. `None` for views or when the
+ * driver has no estimate.
+ */
+estimated_rows: number | null, };

@@ -8,13 +8,14 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Opts, OptsBuilder, SslOpts};
+use mysql_async::{Conn, Opts, OptsBuilder, QueryResult, SslOpts};
 use quarry_driver_api::{
     CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig,
     Result, Session, SharedCancel,
 };
 use quarry_model::{
-    Capabilities, DriverId, ObjectKind, SchemaObject, SslMode, TableInfo, TableRef, Value,
+    Capabilities, DriverId, ObjectKind, SchemaObject, SslMode, TableColumns, TableInfo, TableRef,
+    Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
@@ -126,61 +127,25 @@ impl Session for MysqlSession {
 
     async fn execute(&mut self, sql: &str, opts: &ExecOpts, sink: ExecSink<'_>) -> Result<()> {
         let started = Instant::now();
-        let mut result = self.conn.query_iter(sql).await.map_err(map_err)?;
-        let limit = opts.row_limit.unwrap_or(u64::MAX);
-        let batch_size = opts.batch_size.max(1);
+        let result = self.conn.query_iter(sql).await.map_err(map_err)?;
+        stream(result, opts, sink).await?;
+        sink(ExecItem::Done {
+            elapsed: started.elapsed(),
+        });
+        Ok(())
+    }
 
-        // One iteration per result set; `next()` moves to the next set when the current one ends.
-        while let Some(columns) = result.columns() {
-            if columns.is_empty() {
-                let affected = result.affected_rows();
-                result.next().await.map_err(map_err)?;
-                sink(ExecItem::SetDone {
-                    affected,
-                    rows: 0,
-                    truncated: false,
-                });
-                continue;
-            }
-
-            sink(ExecItem::Columns(
-                columns.iter().map(convert::column_meta).collect(),
-            ));
-            let mut batch = Vec::with_capacity(batch_size);
-            let mut rows: u64 = 0;
-            let mut truncated = false;
-            while let Some(row) = result.next().await.map_err(map_err)? {
-                if rows >= limit {
-                    // Keep draining so the connection is freed, but drop the data.
-                    truncated = true;
-                    continue;
-                }
-                rows += 1;
-                let values = row.unwrap();
-                batch.push(
-                    values
-                        .into_iter()
-                        .zip(columns.iter())
-                        .map(|(v, c)| convert::value(v, c))
-                        .collect(),
-                );
-                if batch.len() == batch_size {
-                    sink(ExecItem::Rows(std::mem::replace(
-                        &mut batch,
-                        Vec::with_capacity(batch_size),
-                    )));
-                }
-            }
-            if !batch.is_empty() {
-                sink(ExecItem::Rows(batch));
-            }
-            sink(ExecItem::SetDone {
-                affected: 0,
-                rows,
-                truncated,
-            });
-        }
-
+    async fn query(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        opts: &ExecOpts,
+        sink: ExecSink<'_>,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let params: Vec<mysql_async::Value> = params.iter().map(convert::to_mysql).collect();
+        let result = self.conn.exec_iter(sql, params).await.map_err(map_err)?;
+        stream(result, opts, sink).await?;
         sink(ExecItem::Done {
             elapsed: started.elapsed(),
         });
@@ -239,6 +204,10 @@ impl Session for MysqlSession {
         Ok(objects)
     }
 
+    async fn list_columns(&mut self, database: &str) -> Result<Vec<TableColumns>> {
+        introspect::columns(&mut self.conn, database).await
+    }
+
     async fn table_info(&mut self, table: &TableRef) -> Result<TableInfo> {
         introspect::table_info(&mut self.conn, table).await
     }
@@ -283,6 +252,68 @@ impl Session for MysqlSession {
     }
 }
 
+/// Send every result set of `result` to `sink`, keeping at most `opts.row_limit` rows per set.
+async fn stream<P: mysql_async::prelude::Protocol>(
+    mut result: QueryResult<'_, '_, P>,
+    opts: &ExecOpts,
+    sink: ExecSink<'_>,
+) -> Result<()> {
+    let limit = opts.row_limit.unwrap_or(u64::MAX);
+    let batch_size = opts.batch_size.max(1);
+
+    // One iteration per result set; `next()` moves to the next set when the current one ends.
+    while let Some(columns) = result.columns() {
+        if columns.is_empty() {
+            let affected = result.affected_rows();
+            result.next().await.map_err(map_err)?;
+            sink(ExecItem::SetDone {
+                affected,
+                rows: 0,
+                truncated: false,
+            });
+            continue;
+        }
+
+        sink(ExecItem::Columns(
+            columns.iter().map(convert::column_meta).collect(),
+        ));
+        let mut batch = Vec::with_capacity(batch_size);
+        let mut rows: u64 = 0;
+        let mut truncated = false;
+        while let Some(row) = result.next().await.map_err(map_err)? {
+            if rows >= limit {
+                // Keep draining so the connection is freed, but drop the data.
+                truncated = true;
+                continue;
+            }
+            rows += 1;
+            let values = row.unwrap();
+            batch.push(
+                values
+                    .into_iter()
+                    .zip(columns.iter())
+                    .map(|(v, c)| convert::value(v, c))
+                    .collect(),
+            );
+            if batch.len() == batch_size {
+                sink(ExecItem::Rows(std::mem::replace(
+                    &mut batch,
+                    Vec::with_capacity(batch_size),
+                )));
+            }
+        }
+        if !batch.is_empty() {
+            sink(ExecItem::Rows(batch));
+        }
+        sink(ExecItem::SetDone {
+            affected: 0,
+            rows,
+            truncated,
+        });
+    }
+    Ok(())
+}
+
 /// Cancels via `KILL QUERY <id>` on a second connection.
 #[derive(Debug)]
 struct MysqlCancel {
@@ -324,16 +355,37 @@ impl Dialect for MysqlDialect {
         "?".to_owned()
     }
 
-    fn select_page(&self, table: &TableRef, limit: u64, offset: u64) -> String {
-        let name = match &table.database {
-            Some(db) => format!("{}.{}", self.quote_ident(db), self.quote_ident(&table.name)),
-            None => self.quote_ident(&table.name),
-        };
-        if offset == 0 {
-            format!("SELECT * FROM {name} LIMIT {limit}")
-        } else {
-            format!("SELECT * FROM {name} LIMIT {limit} OFFSET {offset}")
+    fn select_page(
+        &self,
+        table: &TableRef,
+        filter: Option<&str>,
+        order: Option<&str>,
+        limit: u64,
+        offset: u64,
+    ) -> String {
+        let mut sql = format!("SELECT * FROM {}", self.qualify(table));
+        if let Some(filter) = filter {
+            sql.push_str(" WHERE ");
+            sql.push_str(filter);
         }
+        if let Some(order) = order {
+            sql.push_str(" ORDER BY ");
+            sql.push_str(order);
+        }
+        sql.push_str(&format!(" LIMIT {limit}"));
+        if offset > 0 {
+            sql.push_str(&format!(" OFFSET {offset}"));
+        }
+        sql
+    }
+
+    fn explain(&self, statement: &str, json: bool) -> Option<String> {
+        // MySQL 5.6+ and MariaDB 10.1+ both accept FORMAT=JSON.
+        Some(if json {
+            format!("EXPLAIN FORMAT=JSON {statement}")
+        } else {
+            format!("EXPLAIN {statement}")
+        })
     }
 }
 
@@ -362,12 +414,16 @@ mod tests {
             name: "orders".into(),
         };
         assert_eq!(
-            MysqlDialect.select_page(&table, 100, 0),
+            MysqlDialect.select_page(&table, None, None, 100, 0),
             "SELECT * FROM `shop`.`orders` LIMIT 100"
         );
         assert_eq!(
-            MysqlDialect.select_page(&table, 100, 200),
-            "SELECT * FROM `shop`.`orders` LIMIT 100 OFFSET 200"
+            MysqlDialect.select_page(&table, Some("`a` = ?"), Some("`b` DESC"), 100, 200),
+            "SELECT * FROM `shop`.`orders` WHERE `a` = ? ORDER BY `b` DESC LIMIT 100 OFFSET 200"
+        );
+        assert_eq!(
+            MysqlDialect.count_rows(&table, Some("`a` IS NULL")),
+            "SELECT COUNT(*) FROM `shop`.`orders` WHERE `a` IS NULL"
         );
     }
 }

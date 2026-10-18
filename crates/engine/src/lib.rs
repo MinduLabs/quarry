@@ -4,6 +4,7 @@
 //! [`EngineHandle`] and receives [`Event`]s from [`EngineEvents`]. Every command runs in its
 //! own task, so a long query never blocks other commands.
 
+mod browse;
 mod command;
 mod edit;
 mod event;
@@ -18,7 +19,8 @@ use quarry_driver_api::{
     DriverError, DriverRegistry, ExecItem, ExecOpts, ResolvedConfig, Session, SharedCancel,
 };
 use quarry_model::{
-    ConnId, ConnectionConfig, Environment, Favorite, HistoryEntry, RowChange, TableRef, Workspace,
+    BrowseQuery, ConnId, ConnectionConfig, Environment, Favorite, HistoryEntry, RowChange,
+    TableRef, Value, Workspace,
 };
 use quarry_store::{
     ConfigStore, FavoritesStore, HistoryStore, SecretKind, SecretStore, WorkspaceStore,
@@ -34,6 +36,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Rows kept per result set of a typed query; more are drained but not sent (`truncated`).
 const RUN_ROW_LIMIT: u64 = 1000;
+
+/// Grid edits inside an open transaction run between these (standard SQL savepoints).
+const EDIT_SAVEPOINT: &str = "SAVEPOINT quarry_grid_edit";
+const EDIT_ROLLBACK: &str = "ROLLBACK TO SAVEPOINT quarry_grid_edit";
+const EDIT_RELEASE: &str = "RELEASE SAVEPOINT quarry_grid_edit";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -115,6 +122,8 @@ struct TabSession {
     conn: ConnId,
     session: SharedSession,
     database: Option<String>,
+    /// A transaction is open on `session` (started by the user, not by grid edits).
+    in_transaction: bool,
 }
 
 struct Engine {
@@ -251,6 +260,7 @@ impl Engine {
             Command::Connect { id } => self.connect(id).await,
             Command::Disconnect { id } => self.disconnect(id).await,
             Command::LoadObjects { id, database } => self.load_objects(id, database).await,
+            Command::LoadColumns { id, database } => self.load_columns(id, database).await,
             Command::LoadTableInfo {
                 request,
                 conn,
@@ -277,7 +287,8 @@ impl Engine {
                     });
                     return;
                 }
-                self.run_query(tab, conn, database, sql, RUN_ROW_LIMIT, true)
+                let query = Query::user(sql);
+                self.run_query(tab, conn, database, query, RUN_ROW_LIMIT)
                     .await;
             }
             Command::Browse {
@@ -286,9 +297,10 @@ impl Engine {
                 table,
                 limit,
                 offset,
-            } => match self.page_sql(conn, &table, limit, offset) {
-                Ok(sql) => {
-                    self.run_query(tab, conn, table.database.clone(), sql, limit, false)
+                query,
+            } => match self.page_query(conn, &table, &query, limit, offset) {
+                Ok(query) => {
+                    self.run_query(tab, conn, table.database.clone(), query, limit)
                         .await;
                 }
                 Err(error) => self.emit(Event::QueryFailed {
@@ -297,6 +309,35 @@ impl Engine {
                     cancelled: false,
                 }),
             },
+            Command::CountRows {
+                tab,
+                conn,
+                table,
+                query,
+            } => self.count_rows(tab, conn, table, query).await,
+            Command::Explain {
+                tab,
+                conn,
+                database,
+                sql,
+                json,
+            } => match self.explain_query(conn, &sql, json) {
+                Ok(query) => {
+                    self.run_query(tab, conn, database, query, RUN_ROW_LIMIT)
+                        .await;
+                }
+                Err(error) => self.emit(Event::QueryFailed {
+                    tab,
+                    error,
+                    cancelled: false,
+                }),
+            },
+            Command::BeginTransaction {
+                tab,
+                conn,
+                database,
+            } => self.begin_transaction(tab, conn, database).await,
+            Command::EndTransaction { tab, commit } => self.end_transaction(tab, commit).await,
             Command::ApplyChanges {
                 tab,
                 conn,
@@ -697,10 +738,18 @@ impl Engine {
             Err(err) => return self.emit(failed(describe(&err))),
         };
         let server_version = session.server_version();
+        let capabilities = self
+            .registry
+            .get(&resolved.config.driver)
+            .map(|d| d.capabilities())
+            .unwrap_or_default();
         lock(&self.meta).insert(id, Arc::new(tokio::sync::Mutex::new(session)));
         self.emit(Event::ConnState {
             id,
-            state: ConnState::Connected { server_version },
+            state: ConnState::Connected {
+                server_version,
+                capabilities,
+            },
         });
         self.emit(Event::Databases { id, databases });
     }
@@ -770,6 +819,29 @@ impl Engine {
         });
     }
 
+    async fn load_columns(&self, id: ConnId, database: String) {
+        let Some(meta) = lock(&self.meta).get(&id).cloned() else {
+            let error = Some("Not connected".to_owned());
+            return self.emit(Event::Columns {
+                id,
+                database,
+                columns: None,
+                error,
+            });
+        };
+        let result = meta.lock().await.list_columns(&database).await;
+        let (columns, error) = match result {
+            Ok(columns) => (Some(columns), None),
+            Err(err) => (None, Some(describe(&err))),
+        };
+        self.emit(Event::Columns {
+            id,
+            database,
+            columns,
+            error,
+        });
+    }
+
     /// The connection's metadata session, connecting first when needed.
     async fn meta_session(&self, id: ConnId) -> Result<SharedSession, String> {
         if let Some(meta) = lock(&self.meta).get(&id).cloned() {
@@ -834,6 +906,7 @@ impl Engine {
             conn,
             session: Arc::new(tokio::sync::Mutex::new(session)),
             database: None,
+            in_transaction: false,
         });
         Ok(())
     }
@@ -843,10 +916,14 @@ impl Engine {
         tab: TabId,
         conn: ConnId,
         database: Option<String>,
-        sql: String,
+        query: Query,
         row_limit: u64,
-        record: bool,
     ) {
+        let Query {
+            sql,
+            params,
+            from_user,
+        } = query;
         self.emit(Event::QueryStarted { tab });
         let failed = |error: String| Event::QueryFailed {
             tab,
@@ -908,12 +985,27 @@ impl Engine {
             ..ExecOpts::default()
         };
         let ran_at = chrono::Utc::now();
-        let result = session.execute(&sql, &opts, &mut sink).await;
+        let result = if params.is_empty() {
+            session.execute(&sql, &opts, &mut sink).await
+        } else {
+            session.query(&sql, &params, &opts, &mut sink).await
+        };
         drop(session);
         let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         let error = match result {
             Ok(()) => {
                 self.emit(Event::QueryFinished { tab, elapsed_ms });
+                if from_user {
+                    let open = transaction_after(tab_session.in_transaction, &sql);
+                    if open != tab_session.in_transaction {
+                        tab_session.in_transaction = open;
+                        self.emit(Event::TransactionState {
+                            tab,
+                            open,
+                            error: None,
+                        });
+                    }
+                }
                 None
             }
             Err(err) => {
@@ -926,7 +1018,7 @@ impl Engine {
                 Some(error.lines().next().unwrap_or_default().to_owned())
             }
         };
-        if record {
+        if from_user {
             self.record(HistoryEntry {
                 sql,
                 conn,
@@ -982,8 +1074,16 @@ impl Engine {
         let Some(tab_session) = slot.as_mut() else {
             return;
         };
+        let in_transaction = tab_session.in_transaction;
         let mut session = tab_session.session.lock().await;
-        if let Err(err) = session.begin().await {
+        // Inside the user's transaction a savepoint keeps the batch all-or-nothing without
+        // committing their other work.
+        let started = if in_transaction {
+            run_plain(&mut **session, EDIT_SAVEPOINT).await
+        } else {
+            session.begin().await
+        };
+        if let Err(err) = started {
             return self.emit(failed(describe(&err)));
         }
         for statement in &statements {
@@ -1004,11 +1104,25 @@ impl Engine {
                 Err(err) => Some(format!("{}\nNothing was saved.", describe(&err))),
             };
             if let Some(error) = error {
-                if let Err(err) = session.rollback().await {
+                let undone = if in_transaction {
+                    run_plain(&mut **session, EDIT_ROLLBACK).await
+                } else {
+                    session.rollback().await
+                };
+                if let Err(err) = undone {
                     tracing::warn!(%err, "rollback after failed edit");
                 }
                 return self.emit(failed(error));
             }
+        }
+        if in_transaction {
+            if let Err(err) = run_plain(&mut **session, EDIT_RELEASE).await {
+                return self.emit(failed(describe(&err)));
+            }
+            return self.emit(Event::ChangesApplied {
+                tab,
+                message: format!("{summary} in the open transaction. Commit to keep them."),
+            });
         }
         if let Err(err) = session.commit().await {
             if let Err(err) = session.rollback().await {
@@ -1022,22 +1136,161 @@ impl Engine {
         });
     }
 
-    /// `SELECT` for one page of `table`, in the dialect of the connection's driver.
-    fn page_sql(
-        &self,
-        conn: ConnId,
-        table: &TableRef,
-        limit: u64,
-        offset: u64,
-    ) -> Result<String, String> {
+    fn driver_of(&self, conn: ConnId) -> Result<&dyn quarry_driver_api::Driver, String> {
         let config = self
             .config_of(conn)
             .ok_or_else(|| "Connection not found".to_owned())?;
-        let driver = self
-            .registry
+        self.registry
             .get(&config.driver)
-            .ok_or_else(|| format!("No driver for “{}”", config.driver.0))?;
-        Ok(driver.dialect().select_page(table, limit, offset))
+            .ok_or_else(|| format!("No driver for “{}”", config.driver.0))
+    }
+
+    /// `SELECT` for one page of `table`, in the dialect of the connection's driver.
+    fn page_query(
+        &self,
+        conn: ConnId,
+        table: &TableRef,
+        query: &BrowseQuery,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Query, String> {
+        let dialect = self.driver_of(conn)?.dialect();
+        let clauses = browse::clauses(dialect, query)?;
+        let sql = dialect.select_page(
+            table,
+            clauses.filter.as_deref(),
+            clauses.order.as_deref(),
+            limit,
+            offset,
+        );
+        Ok(Query {
+            sql,
+            params: clauses.params,
+            from_user: false,
+        })
+    }
+
+    /// The plan statement for `sql`, which must be a single statement that is not already an
+    /// `EXPLAIN` (so it can never become `EXPLAIN ANALYZE`, which runs the statement).
+    fn explain_query(&self, conn: ConnId, sql: &str, json: bool) -> Result<Query, String> {
+        let dialect = self.driver_of(conn)?.dialect();
+        let statement = single_statement(sql)?;
+        let sql = dialect
+            .explain(statement, json)
+            .ok_or_else(|| "This database cannot show query plans.".to_owned())?;
+        Ok(Query {
+            sql,
+            params: Vec::new(),
+            from_user: false,
+        })
+    }
+
+    async fn count_rows(&self, tab: TabId, conn: ConnId, table: TableRef, query: BrowseQuery) {
+        let result = self.count(tab, conn, &table, &query).await;
+        let (count, error) = match result {
+            Ok(count) => (Some(count), None),
+            Err(error) => (None, Some(error)),
+        };
+        self.emit(Event::RowCount { tab, count, error });
+    }
+
+    async fn count(
+        &self,
+        tab: TabId,
+        conn: ConnId,
+        table: &TableRef,
+        query: &BrowseQuery,
+    ) -> Result<u64, String> {
+        let dialect = self.driver_of(conn)?.dialect();
+        let clauses = browse::clauses(dialect, query)?;
+        let sql = dialect.count_rows(table, clauses.filter.as_deref());
+        let slot = self.tab_slot(tab);
+        let mut slot = slot.lock().await;
+        self.ensure_tab_session(&mut slot, tab, conn).await?;
+        let Some(tab_session) = slot.as_mut() else {
+            return Err("The tab has no session.".to_owned());
+        };
+        let mut first: Option<Value> = None;
+        let mut sink = |item: ExecItem| {
+            if let ExecItem::Rows(rows) = item
+                && first.is_none()
+            {
+                first = rows.into_iter().next().and_then(|r| r.into_iter().next());
+            }
+        };
+        let opts = ExecOpts {
+            row_limit: Some(1),
+            ..ExecOpts::default()
+        };
+        let mut session = tab_session.session.lock().await;
+        let result = if clauses.params.is_empty() {
+            session.execute(&sql, &opts, &mut sink).await
+        } else {
+            session.query(&sql, &clauses.params, &opts, &mut sink).await
+        };
+        result.map_err(|e| describe(&e))?;
+        match first {
+            Some(Value::Int(n)) => u64::try_from(n).map_err(|_| "Unexpected row count".to_owned()),
+            Some(Value::UInt(n)) => Ok(n),
+            Some(Value::Decimal(text) | Value::Text(text)) => {
+                text.parse().map_err(|_| "Unexpected row count".to_owned())
+            }
+            _ => Err("The database returned no row count.".to_owned()),
+        }
+    }
+
+    async fn begin_transaction(&self, tab: TabId, conn: ConnId, database: Option<String>) {
+        let slot = self.tab_slot(tab);
+        let mut slot = slot.lock().await;
+        let state =
+            |open: bool, error: Option<String>| Event::TransactionState { tab, open, error };
+        if let Err(error) = self.ensure_tab_session(&mut slot, tab, conn).await {
+            return self.emit(state(false, Some(error)));
+        }
+        let Some(tab_session) = slot.as_mut() else {
+            return;
+        };
+        if tab_session.in_transaction {
+            return self.emit(state(true, None));
+        }
+        let mut session = tab_session.session.lock().await;
+        if let Some(db) = database.filter(|db| tab_session.database.as_ref() != Some(db)) {
+            if let Err(err) = session.use_database(&db).await {
+                return self.emit(state(false, Some(describe(&err))));
+            }
+            tab_session.database = Some(db);
+        }
+        match session.begin().await {
+            Ok(()) => {
+                tab_session.in_transaction = true;
+                self.emit(state(true, None));
+            }
+            Err(err) => self.emit(state(false, Some(describe(&err)))),
+        }
+    }
+
+    async fn end_transaction(&self, tab: TabId, commit: bool) {
+        let slot = self.tab_slot(tab);
+        let mut slot = slot.lock().await;
+        let state =
+            |open: bool, error: Option<String>| Event::TransactionState { tab, open, error };
+        let Some(tab_session) = slot.as_mut() else {
+            return self.emit(state(false, None));
+        };
+        let mut session = tab_session.session.lock().await;
+        let result = if commit {
+            session.commit().await
+        } else {
+            session.rollback().await
+        };
+        match result {
+            Ok(()) => {
+                tab_session.in_transaction = false;
+                self.emit(state(false, None));
+            }
+            // A failed COMMIT leaves the transaction open; the user can retry or roll back.
+            Err(err) => self.emit(state(tab_session.in_transaction, Some(describe(&err)))),
+        }
     }
 
     fn cancel(&self, tab: TabId) {
@@ -1048,14 +1301,80 @@ impl Engine {
     }
 
     async fn close_tab(&self, tab: TabId) {
-        lock(&self.cancels).remove(&tab);
+        let cancel = lock(&self.cancels).remove(&tab);
         let slot = lock(&self.tabs).remove(&tab);
-        if let Some(slot) = slot
-            && let Some(tab_session) = slot.lock().await.take()
-        {
+        let Some(slot) = slot else { return };
+        // A busy slot means a query (or count) is running and holds the session: stop it,
+        // otherwise closing would wait until it ends. An idle session needs no KILL.
+        let mut guard = match slot.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                if let Some((_, cancel)) = cancel {
+                    cancel.cancel();
+                }
+                slot.lock().await
+            }
+        };
+        if let Some(tab_session) = guard.take() {
+            drop(guard);
             close_shared(tab_session.session).await;
         }
     }
+}
+
+/// SQL for a tab, with its parameters.
+#[derive(Debug, Clone)]
+struct Query {
+    sql: String,
+    params: Vec<Value>,
+    /// Typed by the user: recorded in the history and may begin or end a transaction.
+    from_user: bool,
+}
+
+impl Query {
+    fn user(sql: String) -> Self {
+        Self {
+            sql,
+            params: Vec::new(),
+            from_user: true,
+        }
+    }
+}
+
+/// Run a statement whose result does not matter (the text protocol accepts any statement).
+async fn run_plain(session: &mut dyn Session, sql: &str) -> Result<(), DriverError> {
+    session
+        .execute(sql, &ExecOpts::default(), &mut |_: ExecItem| {})
+        .await
+}
+
+/// Whether a transaction is open after `sql` ran successfully, given whether one was open.
+fn transaction_after(mut open: bool, sql: &str) -> bool {
+    use quarry_sql::TransactionEffect;
+    for range in quarry_sql::split(sql) {
+        match quarry_sql::transaction_effect(&sql[range]) {
+            Some(TransactionEffect::Begin) => open = true,
+            Some(TransactionEffect::End) => open = false,
+            None => {}
+        }
+    }
+    open
+}
+
+/// The only statement in `sql`, refusing scripts and statements that already explain.
+fn single_statement(sql: &str) -> Result<&str, String> {
+    let ranges = quarry_sql::split(sql);
+    let [range] = ranges.as_slice() else {
+        return Err(
+            "Explain works on one statement. Put the cursor on it, or select it.".to_owned(),
+        );
+    };
+    let statement = &sql[range.clone()];
+    let first = quarry_sql::first_keyword(statement).unwrap_or_default();
+    if matches!(first.as_str(), "EXPLAIN" | "DESCRIBE" | "DESC" | "ANALYZE") {
+        return Err("This statement is already a plan request. Run it instead.".to_owned());
+    }
+    Ok(statement)
 }
 
 /// Which SSH tunnel `Engine::resolve` uses.
@@ -1136,6 +1455,42 @@ mod tests {
         assert_eq!(safety_check(Production, "SELECT 1; SHOW TABLES"), None);
         assert!(safety_check(Production, "INSERT INTO t VALUES (1)").is_some());
         assert!(safety_check(Production, "ALTER TABLE t ADD c INT").is_some());
+    }
+
+    #[test]
+    fn explain_takes_one_plain_statement() {
+        assert_eq!(single_statement("  SELECT 1;  "), Ok("SELECT 1"));
+        assert!(single_statement("SELECT 1; SELECT 2").is_err());
+        assert!(single_statement("").is_err());
+        for already in [
+            "EXPLAIN SELECT 1",
+            "analyze delete from t",
+            "DESC t",
+            "describe t",
+        ] {
+            assert!(single_statement(already).is_err(), "{already}");
+        }
+        // What the engine sends is always a read, so safe mode never needs to ask.
+        for statement in [
+            "DELETE FROM t",
+            "DROP TABLE t",
+            "/* x */ UPDATE t SET a = 1",
+        ] {
+            let sql = format!("EXPLAIN {}", single_statement(statement).unwrap());
+            assert_eq!(quarry_sql::classify(&sql), quarry_sql::StatementKind::Read);
+        }
+    }
+
+    #[test]
+    fn transaction_state_follows_statements() {
+        assert!(transaction_after(false, "BEGIN; INSERT INTO t VALUES (1)"));
+        assert!(!transaction_after(true, "INSERT INTO t VALUES (1); COMMIT"));
+        assert!(transaction_after(
+            true,
+            "SAVEPOINT a; ROLLBACK TO SAVEPOINT a"
+        ));
+        assert!(!transaction_after(true, "ALTER TABLE t ADD c INT"));
+        assert!(!transaction_after(false, "SELECT 'BEGIN'"));
     }
 
     #[test]
@@ -1499,6 +1854,7 @@ mod mysql_tests {
                 table: table.clone(),
                 limit: 100,
                 offset: 1000,
+                query: BrowseQuery::default(),
             })
             .unwrap();
         let Event::ResultRows { rows, .. } =
@@ -1673,6 +2029,364 @@ mod mysql_tests {
         })
         .await;
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn filters_counts_columns_and_plans() {
+        use quarry_model::{ColumnFilter, FilterOp, SortKey, Value};
+        let Some(config) = config() else { return };
+        let id = config.id;
+        let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir.clone()),
+            data_dir: Some(dir.clone()),
+            known_hosts: None,
+            disable_keyring: true,
+        })
+        .unwrap();
+        engine
+            .send(Command::SaveConnection {
+                config,
+                password: Some(Password("quarry".into())),
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+        engine.send(Command::Connect { id }).unwrap();
+        let Event::ConnState { state, .. } = next_matching(&events, |e| {
+            matches!(
+                e,
+                Event::ConnState {
+                    state: ConnState::Connected { .. },
+                    ..
+                }
+            )
+        })
+        .await
+        else {
+            unreachable!()
+        };
+        assert!(matches!(state, ConnState::Connected { capabilities, .. } if capabilities.explain));
+
+        let table = TableRef {
+            database: Some("shop".into()),
+            schema: None,
+            name: "orders".into(),
+        };
+        let filter = |column: &str, op, value: &str| ColumnFilter {
+            column: column.into(),
+            op,
+            value: value.into(),
+        };
+        let paid = BrowseQuery {
+            filters: vec![filter("status", FilterOp::Eq, "paid")],
+            sort: vec![SortKey {
+                column: "id".into(),
+                descending: true,
+            }],
+        };
+        engine
+            .send(Command::Browse {
+                tab: 4,
+                conn: id,
+                table: table.clone(),
+                limit: 3,
+                offset: 0,
+                query: paid.clone(),
+            })
+            .unwrap();
+        let Event::ResultRows { rows, .. } =
+            next_matching(&events, |e| matches!(e, Event::ResultRows { tab: 4, .. })).await
+        else {
+            unreachable!()
+        };
+        // Order n has status ELT(1 + n % 4, …): paid when n % 4 = 1, so the newest is 4997.
+        let ids: Vec<&Value> = rows.iter().map(|r| &r[0]).collect();
+        assert_eq!(
+            ids,
+            [&Value::UInt(4997), &Value::UInt(4993), &Value::UInt(4989)]
+        );
+        assert!(rows.iter().all(|r| r[2] == Value::Text("paid".into())));
+        next_matching(&events, |e| {
+            matches!(e, Event::QueryFinished { tab: 4, .. })
+        })
+        .await;
+
+        let count = |query: BrowseQuery| Command::CountRows {
+            tab: 4,
+            conn: id,
+            table: table.clone(),
+            query,
+        };
+        engine.send(count(paid)).unwrap();
+        let event = next_matching(&events, |e| matches!(e, Event::RowCount { tab: 4, .. })).await;
+        assert!(
+            matches!(
+                event,
+                Event::RowCount {
+                    count: Some(1250),
+                    ..
+                }
+            ),
+            "{event:?}"
+        );
+        // `%` and `_` in the text match literally, so nothing matches.
+        let literal = BrowseQuery {
+            filters: vec![
+                filter("note", FilterOp::Contains, "wrap #7_"),
+                filter("note", FilterOp::IsNotNull, ""),
+            ],
+            sort: vec![],
+        };
+        engine.send(count(literal)).unwrap();
+        let event = next_matching(&events, |e| matches!(e, Event::RowCount { tab: 4, .. })).await;
+        assert!(
+            matches!(event, Event::RowCount { count: Some(0), .. }),
+            "{event:?}"
+        );
+
+        engine
+            .send(Command::LoadColumns {
+                id,
+                database: "shop".into(),
+            })
+            .unwrap();
+        let Event::Columns { columns, error, .. } =
+            next_matching(&events, |e| matches!(e, Event::Columns { .. })).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(error, None);
+        assert!(
+            columns
+                .unwrap()
+                .iter()
+                .any(|t| t.table == "customers" && t.columns.contains(&"email".to_owned()))
+        );
+
+        let explain = |sql: &str, json: bool| Command::Explain {
+            tab: 4,
+            conn: id,
+            database: Some("shop".into()),
+            sql: sql.into(),
+            json,
+        };
+        engine
+            .send(explain("DELETE FROM orders WHERE id = 1", true))
+            .unwrap();
+        let Event::ResultRows { rows, .. } =
+            next_matching(&events, |e| matches!(e, Event::ResultRows { tab: 4, .. })).await
+        else {
+            unreachable!()
+        };
+        assert!(
+            matches!(&rows[0][0], Value::Text(t) | Value::Json(t) if t.contains("query_block"))
+        );
+        next_matching(&events, |e| {
+            matches!(e, Event::QueryFinished { tab: 4, .. })
+        })
+        .await;
+        engine.send(count(BrowseQuery::default())).unwrap();
+        let event = next_matching(&events, |e| matches!(e, Event::RowCount { tab: 4, .. })).await;
+        assert!(
+            matches!(
+                event,
+                Event::RowCount {
+                    count: Some(5000),
+                    ..
+                }
+            ),
+            "explaining a DELETE must not run it: {event:?}"
+        );
+        engine.send(explain("SELECT 1; SELECT 2", false)).unwrap();
+        next_matching(&events, |e| matches!(e, Event::QueryFailed { tab: 4, .. })).await;
+        engine
+            .send(explain("ANALYZE DELETE FROM orders", false))
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::QueryFailed { tab: 4, .. })).await;
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn closing_a_busy_tab_stops_its_query() {
+        let Some(config) = config() else { return };
+        let id = config.id;
+        let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir.clone()),
+            data_dir: Some(dir.clone()),
+            known_hosts: None,
+            disable_keyring: true,
+        })
+        .unwrap();
+        engine
+            .send(Command::SaveConnection {
+                config,
+                password: Some(Password("quarry".into())),
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+        engine
+            .send(Command::Run {
+                tab: 8,
+                conn: id,
+                database: None,
+                sql: "SELECT SLEEP(30), 1".into(),
+                confirmed: false,
+            })
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::QueryStarted { tab: 8 })).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let started = std::time::Instant::now();
+        engine.send(Command::CloseTab { tab: 8 }).unwrap();
+        next_matching(&events, |e| {
+            matches!(
+                e,
+                Event::QueryFinished { tab: 8, .. } | Event::QueryFailed { tab: 8, .. }
+            )
+        })
+        .await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        next_matching(
+            &events,
+            |e| matches!(e, Event::HistoryAdded { entry } if entry.sql.contains("SLEEP(30)")),
+        )
+        .await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn transactions_follow_commands_and_sql() {
+        use quarry_model::{CellValue, Value};
+        let Some(config) = config() else { return };
+        let id = config.id;
+        let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir.clone()),
+            data_dir: Some(dir.clone()),
+            known_hosts: None,
+            disable_keyring: true,
+        })
+        .unwrap();
+        engine
+            .send(Command::SaveConnection {
+                config,
+                password: Some(Password("quarry".into())),
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+
+        let run = |sql: &str| Command::Run {
+            tab: 6,
+            conn: id,
+            database: Some("shop".into()),
+            sql: sql.into(),
+            confirmed: false,
+        };
+        let finished = |e: &Event| matches!(e, Event::QueryFinished { tab: 6, .. });
+        let state = |e: &Event| matches!(e, Event::TransactionState { tab: 6, .. });
+        engine
+            .send(run("DROP TABLE IF EXISTS tx_scratch; \
+                 CREATE TABLE tx_scratch (id INT PRIMARY KEY, name VARCHAR(20) NULL);"))
+            .unwrap();
+        next_matching(&events, finished).await;
+
+        engine
+            .send(Command::BeginTransaction {
+                tab: 6,
+                conn: id,
+                database: Some("shop".into()),
+            })
+            .unwrap();
+        let event = next_matching(&events, state).await;
+        assert!(
+            matches!(
+                event,
+                Event::TransactionState {
+                    open: true,
+                    error: None,
+                    ..
+                }
+            ),
+            "{event:?}"
+        );
+        engine
+            .send(run("INSERT INTO tx_scratch VALUES (1, 'one')"))
+            .unwrap();
+        next_matching(&events, finished).await;
+        // Grid edits inside the transaction stay uncommitted.
+        engine
+            .send(Command::ApplyChanges {
+                tab: 6,
+                conn: id,
+                table: TableRef {
+                    database: Some("shop".into()),
+                    schema: None,
+                    name: "tx_scratch".into(),
+                },
+                changes: vec![RowChange::Insert {
+                    values: vec![CellValue {
+                        column: "id".into(),
+                        value: Value::Int(2),
+                    }],
+                }],
+                confirmed: false,
+            })
+            .unwrap();
+        let event = next_matching(&events, |e| {
+            matches!(
+                e,
+                Event::ChangesApplied { tab: 6, .. } | Event::ChangesFailed { tab: 6, .. }
+            )
+        })
+        .await;
+        assert!(
+            matches!(&event, Event::ChangesApplied { message, .. } if message.contains("open transaction")),
+            "{event:?}"
+        );
+        engine
+            .send(Command::EndTransaction {
+                tab: 6,
+                commit: false,
+            })
+            .unwrap();
+        let event = next_matching(&events, state).await;
+        assert!(
+            matches!(event, Event::TransactionState { open: false, .. }),
+            "{event:?}"
+        );
+        engine.send(run("SELECT COUNT(*) FROM tx_scratch")).unwrap();
+        let Event::ResultRows { rows, .. } =
+            next_matching(&events, |e| matches!(e, Event::ResultRows { tab: 6, .. })).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(rows[0][0], Value::Int(0), "the rollback undid both inserts");
+        next_matching(&events, finished).await;
+
+        // Typed BEGIN and COMMIT are tracked too.
+        engine
+            .send(run("BEGIN; INSERT INTO tx_scratch VALUES (3, 'three')"))
+            .unwrap();
+        let event = next_matching(&events, state).await;
+        assert!(matches!(event, Event::TransactionState { open: true, .. }));
+        engine.send(run("COMMIT")).unwrap();
+        let event = next_matching(&events, state).await;
+        assert!(matches!(event, Event::TransactionState { open: false, .. }));
+
+        engine.send(run("DROP TABLE tx_scratch")).unwrap();
+        next_matching(
+            &events,
+            |e| matches!(e, Event::HistoryAdded { entry } if entry.sql == "DROP TABLE tx_scratch"),
+        )
+        .await;
         std::fs::remove_dir_all(dir).unwrap();
     }
 

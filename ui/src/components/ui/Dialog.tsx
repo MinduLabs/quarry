@@ -11,6 +11,8 @@ export function Dialog({
   children,
   footer,
   width = 440,
+  height,
+  flush = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -19,13 +21,17 @@ export function Dialog({
   children?: ReactNode;
   footer?: ReactNode;
   width?: number;
+  /** Fixed height, so the dialog keeps its size while its content changes (still ≤ 85vh). */
+  height?: number;
+  /** The body takes the remaining space without padding and scrolls itself. */
+  flush?: boolean;
 }) {
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="animate-fade fixed inset-0 z-40 bg-black/30" />
         <RadixDialog.Content
-          style={{ width }}
+          style={{ width, height }}
           className={cn(
             "animate-dialog fixed top-1/2 left-1/2 z-50 flex max-h-[85vh] max-w-[calc(100vw-32px)]",
             "-translate-x-1/2 -translate-y-1/2 flex-col rounded-xl bg-elevated shadow-dialog outline-none",
@@ -50,7 +56,12 @@ export function Dialog({
               <X size={14} strokeWidth={1.75} />
             </RadixDialog.Close>
           </div>
-          {children && <div className="overflow-y-auto px-6 pb-2">{children}</div>}
+          {children &&
+            (flush ? (
+              <div className="flex min-h-0 flex-1 border-line border-t">{children}</div>
+            ) : (
+              <div className="overflow-y-auto px-6 pb-2">{children}</div>
+            ))}
           {footer && (
             <div className="flex items-center justify-end gap-2 px-6 pt-3 pb-5">{footer}</div>
           )}

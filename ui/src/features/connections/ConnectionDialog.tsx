@@ -7,7 +7,7 @@ import type { SslMode } from "@/bindings/SslMode";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { ErrorNotice } from "@/components/ui/ErrorNotice";
-import { Field, Input } from "@/components/ui/Input";
+import { Field, Input, PasswordInput } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Spinner } from "@/components/ui/Spinner";
 import { Switch } from "@/components/ui/Switch";
@@ -191,11 +191,11 @@ export function ConnectionDialog() {
         )}
 
         <div className="grid grid-cols-[1fr_140px] gap-3">
-          <Field label="Name">
+          <Field label="Name" hint="Left empty, the host is used.">
             <Input
               autoFocus
               value={form.name}
-              placeholder={form.host || "My database"}
+              placeholder="My database"
               onChange={(e) => set("name", e.target.value)}
             />
           </Field>
@@ -230,8 +230,7 @@ export function ConnectionDialog() {
             <Input value={form.user} onChange={(e) => set("user", e.target.value)} />
           </Field>
           <Field label="Password">
-            <Input
-              type="password"
+            <PasswordInput
               value={form.password}
               placeholder={existing ? "Unchanged" : ""}
               onChange={(e) => set("password", e.target.value)}
@@ -302,8 +301,7 @@ export function ConnectionDialog() {
                   label={form.sshAuth === "key" ? "Key passphrase" : "SSH password"}
                   hint={form.sshAuth === "key" ? "Leave empty if the key has none." : undefined}
                 >
-                  <Input
-                    type="password"
+                  <PasswordInput
                     value={form.sshSecret}
                     placeholder={existing?.ssh ? "Unchanged" : ""}
                     onChange={(e) => set("sshSecret", e.target.value)}

@@ -3,7 +3,7 @@
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row};
 use quarry_driver_api::{Dialect, Result};
-use quarry_model::{ColumnInfo, ForeignKey, IndexInfo, TableInfo, TableRef};
+use quarry_model::{ColumnInfo, ForeignKey, IndexInfo, TableColumns, TableInfo, TableRef};
 
 use crate::{MysqlDialect, map_err};
 
@@ -123,6 +123,17 @@ pub async fn table_info(conn: &mut Conn, table: &TableRef) -> Result<TableInfo> 
         .map_err(map_err)?
         .and_then(|row| row.get_opt::<String, _>(1).and_then(|v| v.ok()));
 
+    // InnoDB samples this, so it can be far off; views report NULL.
+    let estimated_rows: Option<u64> = conn
+        .exec_first::<Option<u64>, _, _>(
+            "SELECT TABLE_ROWS FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+            key,
+        )
+        .await
+        .map_err(map_err)?
+        .flatten();
+
     Ok(TableInfo {
         table: TableRef {
             database: Some(database),
@@ -134,7 +145,31 @@ pub async fn table_info(conn: &mut Conn, table: &TableRef) -> Result<TableInfo> 
         indexes,
         foreign_keys,
         ddl,
+        estimated_rows,
     })
+}
+
+/// Column names of every table and view in `database`, in table and column order.
+pub async fn columns(conn: &mut Conn, database: &str) -> Result<Vec<TableColumns>> {
+    let rows: Vec<(String, String)> = conn
+        .exec(
+            "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION",
+            (database,),
+        )
+        .await
+        .map_err(map_err)?;
+    let mut tables: Vec<TableColumns> = Vec::new();
+    for (table, column) in rows {
+        match tables.last_mut() {
+            Some(last) if last.table == table => last.columns.push(column),
+            _ => tables.push(TableColumns {
+                table,
+                columns: vec![column],
+            }),
+        }
+    }
+    Ok(tables)
 }
 
 fn non_empty(text: String) -> Option<String> {

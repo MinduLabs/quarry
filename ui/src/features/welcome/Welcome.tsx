@@ -1,14 +1,9 @@
 import { Button } from "@/components/ui/Button";
 import { Kbd } from "@/components/ui/Kbd";
-import { modKey } from "@/lib/platform";
+import { keysOf, SHORTCUTS, type ShortcutId } from "@/lib/shortcuts";
 import { useApp } from "@/store/app";
 
-const SHORTCUTS: [string, string][] = [
-  ["New connection", `${modKey} N`],
-  ["New query", `${modKey} T`],
-  ["Run statement", `${modKey} ↵`],
-  ["Close tab", `${modKey} W`],
-];
+const WELCOME: ShortcutId[] = ["newConnection", "newQuery", "run", "closeTab", "settings"];
 
 export function Welcome() {
   const hasConnections = useApp((s) => s.connections.length > 0);
@@ -33,11 +28,11 @@ export function Welcome() {
         </Button>
       )}
       <dl className="grid grid-cols-[auto_auto] items-center gap-x-8 gap-y-2 text-sm">
-        {SHORTCUTS.map(([label, keys]) => (
-          <div key={label} className="contents">
-            <dt className="text-muted">{label}</dt>
+        {WELCOME.map((id) => (
+          <div key={id} className="contents">
+            <dt className="text-muted">{SHORTCUTS[id].label}</dt>
             <dd className="flex justify-end">
-              <Kbd keys={keys} />
+              <Kbd keys={keysOf(id)} />
             </dd>
           </div>
         ))}

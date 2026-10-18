@@ -201,3 +201,82 @@ async fn table_info_reads_columns_keys_and_ddl() {
     assert!(info.primary_key.is_empty());
     assert!(info.ddl.unwrap().contains("VIEW `paid_orders`"));
 }
+
+#[tokio::test]
+async fn parameterized_query_converts_like_plain_query() {
+    let Some(cfg) = config("quarry") else { return };
+    let mut session = MysqlDriver::default().connect(&cfg).await.unwrap();
+    let rows_of = |items: Vec<ExecItem>| -> Vec<Vec<Value>> {
+        items
+            .into_iter()
+            .filter_map(|i| match i {
+                ExecItem::Rows(r) => Some(r),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    let mut plain = Vec::new();
+    session
+        .execute(
+            "SELECT * FROM all_types ORDER BY id",
+            &ExecOpts::default(),
+            &mut |i| plain.push(i),
+        )
+        .await
+        .unwrap();
+    let mut prepared = Vec::new();
+    session
+        .query(
+            "SELECT * FROM all_types WHERE id >= ? ORDER BY id",
+            &[Value::Text("0".into())],
+            &ExecOpts::default(),
+            &mut |i| prepared.push(i),
+        )
+        .await
+        .unwrap();
+    // The binary protocol returns typed values; they must come out the same as text ones.
+    assert_eq!(rows_of(prepared), rows_of(plain));
+}
+
+#[tokio::test]
+async fn lists_columns_and_estimates_rows() {
+    let Some(cfg) = config("quarry") else { return };
+    let mut session = MysqlDriver::default().connect(&cfg).await.unwrap();
+    let tables = session.list_columns("shop").await.unwrap();
+    let orders = tables.iter().find(|t| t.table == "orders").unwrap();
+    assert_eq!(orders.columns[..3], ["id", "customer_id", "status"]);
+    assert!(tables.iter().any(|t| t.table == "paid_orders"));
+    let table = quarry_model::TableRef {
+        database: Some("shop".into()),
+        schema: None,
+        name: "orders".into(),
+    };
+    let info = session.table_info(&table).await.unwrap();
+    assert!(info.estimated_rows.is_some());
+}
+
+#[tokio::test]
+async fn parameterized_query_with_no_rows_ends() {
+    let Some(cfg) = config("quarry") else { return };
+    let mut session = MysqlDriver::default().connect(&cfg).await.unwrap();
+    let mut items = Vec::new();
+    let mut sink = |i| items.push(i);
+    let params = [Value::Text("0".into())];
+    let opts = ExecOpts::default();
+    let run = session.query(
+        "SELECT * FROM orders WHERE id = ?",
+        &params,
+        &opts,
+        &mut sink,
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), run)
+        .await
+        .expect("an empty result must end")
+        .unwrap();
+    let sets = items
+        .iter()
+        .filter(|i| matches!(i, ExecItem::SetDone { .. }))
+        .count();
+    assert_eq!(sets, 1, "one empty result set");
+}

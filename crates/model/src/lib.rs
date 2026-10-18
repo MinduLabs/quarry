@@ -3,6 +3,7 @@
 //! Rules: no IO, no async. Every type is `serde`-serializable and exported to TypeScript
 //! (`ts-rs`), because the same types travel to the UI and, later, to out-of-process drivers.
 
+mod browse;
 mod capabilities;
 mod column;
 mod connection;
@@ -14,6 +15,7 @@ mod schema;
 mod value;
 mod workspace;
 
+pub use browse::{BrowseQuery, ColumnFilter, FilterOp, SortKey};
 pub use capabilities::{Capabilities, ObjectKind};
 pub use column::ColumnMeta;
 pub use connection::{ConnId, ConnectionConfig, DriverId, SshAuth, SshConfig, SslMode};
@@ -21,6 +23,8 @@ pub use edit::{CellValue, RowChange};
 pub use environment::Environment;
 pub use favorite::{Favorite, FavoriteId, FavoriteItem};
 pub use history::HistoryEntry;
-pub use schema::{ColumnInfo, ForeignKey, IndexInfo, SchemaObject, TableInfo, TableRef};
+pub use schema::{
+    ColumnInfo, ForeignKey, IndexInfo, SchemaObject, TableColumns, TableInfo, TableRef,
+};
 pub use value::Value;
 pub use workspace::{BrowsePage, SavedTab, Workspace};

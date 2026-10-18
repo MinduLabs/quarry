@@ -1,6 +1,6 @@
 use quarry_model::{
-    ColumnMeta, ConnId, ConnectionConfig, Favorite, HistoryEntry, SchemaObject, TableInfo, Value,
-    Workspace,
+    Capabilities, ColumnMeta, ConnId, ConnectionConfig, Favorite, HistoryEntry, SchemaObject,
+    TableColumns, TableInfo, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -12,9 +12,15 @@ use crate::command::{RequestId, TabId};
 #[ts(export)]
 pub enum ConnState {
     Connecting,
-    Connected { server_version: String },
+    Connected {
+        server_version: String,
+        /// What the connection's driver supports; clients enable features from it.
+        capabilities: Capabilities,
+    },
     Disconnected,
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -64,6 +70,13 @@ pub enum Event {
         objects: Option<Vec<SchemaObject>>,
         error: Option<String>,
     },
+    /// Either `columns` or `error` is set.
+    Columns {
+        id: ConnId,
+        database: String,
+        columns: Option<Vec<TableColumns>>,
+        error: Option<String>,
+    },
     /// Either `info` or `error` is set.
     TableInfo {
         request: RequestId,
@@ -111,6 +124,22 @@ pub enum Event {
         tab: TabId,
         error: String,
         cancelled: bool,
+    },
+
+    /// Answer to `CountRows`: either `count` or `error` is set.
+    RowCount {
+        tab: TabId,
+        #[ts(type = "number | null")]
+        count: Option<u64>,
+        error: Option<String>,
+    },
+    /// Whether the tab's session has a transaction open. Sent after `BeginTransaction`,
+    /// `EndTransaction`, and a `Run` that began or ended one (`BEGIN`, `COMMIT`, DDL, …).
+    /// `error` is set when a begin, commit or rollback failed.
+    TransactionState {
+        tab: TabId,
+        open: bool,
+        error: Option<String>,
     },
 
     /// Safe mode for grid edits: ask the user, then resend `ApplyChanges` with `confirmed: true`.
