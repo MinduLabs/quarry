@@ -49,11 +49,24 @@ pub enum StatementKind {
 /// Classify a statement by its first keyword (comments and parentheses are skipped).
 /// Unknown keywords count as `Write`, to stay on the safe side.
 pub fn classify(statement: &str) -> StatementKind {
-    let words = keywords(statement);
+    classify_words(&keywords(statement))
+}
+
+fn classify_words(words: &[String]) -> StatementKind {
     let Some(first) = words.first() else {
         return StatementKind::Read;
     };
     match first.as_str() {
+        // `EXPLAIN ANALYZE` runs the statement it explains, so it is as risky as that statement.
+        "EXPLAIN" | "DESCRIBE" | "DESC" if words.get(1).is_some_and(|w| w == "ANALYZE") => {
+            let rest = &words[2..];
+            let rest = if rest.first().is_some_and(|w| w == "FORMAT") {
+                rest.get(2..).unwrap_or_default()
+            } else {
+                rest
+            };
+            classify_words(rest)
+        }
         "SELECT" | "SHOW" | "EXPLAIN" | "DESCRIBE" | "DESC" | "USE" | "HELP" | "VALUES"
         | "TABLE" => StatementKind::Read,
         // CTE: look at the main statement that follows.
@@ -71,6 +84,39 @@ pub fn classify(statement: &str) -> StatementKind {
         "UPDATE" | "DELETE" if !words.iter().any(|w| w == "WHERE") => StatementKind::Destructive,
         "CREATE" | "ALTER" | "RENAME" | "GRANT" | "REVOKE" => StatementKind::Schema,
         _ => StatementKind::Write,
+    }
+}
+
+/// The first keyword of a statement, upper-cased, skipping comments.
+pub fn first_keyword(statement: &str) -> Option<String> {
+    keywords(statement).into_iter().next()
+}
+
+/// How a statement changes the session's transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionEffect {
+    /// `BEGIN`, `START TRANSACTION`.
+    Begin,
+    /// `COMMIT`, `ROLLBACK`, and statements that commit implicitly (`CREATE`, `ALTER`, `DROP`,
+    /// `TRUNCATE`, `RENAME`, `GRANT`, `REVOKE`).
+    End,
+}
+
+/// The effect of `statement` on an open transaction, or `None` if it does not start or end one.
+/// `ROLLBACK TO SAVEPOINT` keeps the transaction open.
+pub fn transaction_effect(statement: &str) -> Option<TransactionEffect> {
+    let words = keywords(statement);
+    let second = words.get(1).map(String::as_str);
+    match words.first()?.as_str() {
+        // MariaDB's `BEGIN NOT ATOMIC` starts a compound statement, not a transaction.
+        "BEGIN" if second != Some("NOT") => Some(TransactionEffect::Begin),
+        "START" if second == Some("TRANSACTION") => Some(TransactionEffect::Begin),
+        "COMMIT" => Some(TransactionEffect::End),
+        "ROLLBACK" if !words.iter().any(|w| w == "TO") => Some(TransactionEffect::End),
+        "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME" | "GRANT" | "REVOKE" => {
+            Some(TransactionEffect::End)
+        }
+        _ => None,
     }
 }
 
@@ -250,10 +296,55 @@ mod tests {
             ("ALTER TABLE t ADD c INT", Schema),
             ("OPTIMIZE TABLE t", Write),
             ("", Read),
+            ("EXPLAIN DELETE FROM t", Read),
+            ("explain select 1", Read),
+            ("EXPLAIN ANALYZE SELECT * FROM t", Read),
+            ("explain analyze delete from t", Destructive),
+            (
+                "EXPLAIN ANALYZE FORMAT=TREE UPDATE t SET a = 1 WHERE id = 2",
+                Write,
+            ),
+            (
+                "DESC ANALYZE DELETE a FROM a JOIN b ON a.id = b.id",
+                Destructive,
+            ),
+            ("/* EXPLAIN ANALYZE */ SELECT 1", Read),
+            ("EXPLAIN 'analyze'", Read),
+            ("EXPLAIN ANALYZE", Read),
         ];
         for (sql, kind) in cases {
             assert_eq!(classify(sql), kind, "{sql}");
         }
+    }
+
+    #[test]
+    fn transaction_effects() {
+        use TransactionEffect::*;
+        let cases = [
+            ("BEGIN", Some(Begin)),
+            ("begin work", Some(Begin)),
+            ("START TRANSACTION READ ONLY", Some(Begin)),
+            ("BEGIN NOT ATOMIC SELECT 1; END", None),
+            ("commit", Some(End)),
+            ("ROLLBACK", Some(End)),
+            ("ROLLBACK TO SAVEPOINT a", None),
+            ("rollback work to a", None),
+            ("CREATE TABLE t (id INT)", Some(End)),
+            ("truncate t", Some(End)),
+            ("DELETE FROM t", None),
+            ("SELECT 'commit'", None),
+            ("-- commit\nSELECT 1", None),
+            ("START SLAVE", None),
+            ("", None),
+        ];
+        for (sql, effect) in cases {
+            assert_eq!(transaction_effect(sql), effect, "{sql}");
+        }
+        assert_eq!(
+            first_keyword("/* x */ explain select 1").as_deref(),
+            Some("EXPLAIN")
+        );
+        assert_eq!(first_keyword("  -- only a comment"), None);
     }
 
     #[test]
