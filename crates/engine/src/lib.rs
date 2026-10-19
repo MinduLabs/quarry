@@ -2272,8 +2272,14 @@ mod mysql_tests {
             unreachable!()
         };
         assert_eq!(error, None);
-        // Dropping it again fails: it is gone.
+        // Dropping it again fails: it is gone. Each statement is recorded as it runs, so the
+        // failed one reaches the history before the change reports back.
         engine.send(alter(true)).unwrap();
+        next_matching(
+            &events,
+            |e| matches!(e, Event::HistoryAdded { entry } if entry.error.is_some()),
+        )
+        .await;
         let Event::SchemaChanged { error, .. } = next_matching(&events, |e| {
             matches!(e, Event::SchemaChanged { request: 21, .. })
         })
@@ -2282,11 +2288,6 @@ mod mysql_tests {
             unreachable!()
         };
         assert!(error.is_some());
-        next_matching(
-            &events,
-            |e| matches!(e, Event::HistoryAdded { entry } if entry.error.is_some()),
-        )
-        .await;
 
         std::fs::remove_dir_all(dir).unwrap();
     }
