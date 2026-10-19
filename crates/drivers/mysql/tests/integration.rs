@@ -179,7 +179,10 @@ async fn table_info_reads_columns_keys_and_ddl() {
     assert!(!id.nullable);
     assert_eq!(id.extra.as_deref(), Some("auto_increment"));
     let status = info.columns.iter().find(|c| c.name == "status").unwrap();
-    assert_eq!(status.default.as_deref(), Some("pending"));
+    // Defaults come back as SQL, ready to put in DDL.
+    assert_eq!(status.default.as_deref(), Some("'pending'"));
+    assert!(id.auto_increment && !id.generated);
+    assert!(!info.view);
     assert!(
         info.indexes
             .iter()
@@ -199,7 +202,118 @@ async fn table_info_reads_columns_keys_and_ddl() {
     };
     let info = session.table_info(&view).await.unwrap();
     assert!(info.primary_key.is_empty());
+    assert!(info.view);
     assert!(info.ddl.unwrap().contains("VIEW `paid_orders`"));
+}
+
+#[tokio::test]
+async fn schema_changes_round_trip() {
+    use quarry_model::{AlterOp, ColumnDef, IndexDef, SchemaChange, TableRef};
+    let Some(cfg) = config("quarry") else { return };
+    let driver = MysqlDriver::default();
+    let mut session = driver.connect(&cfg).await.unwrap();
+    let table = TableRef {
+        database: Some("shop".into()),
+        schema: None,
+        name: "ddl_scratch".into(),
+    };
+    let column = |name: &str, type_name: &str, default: Option<&str>| ColumnDef {
+        name: name.into(),
+        type_name: type_name.into(),
+        nullable: true,
+        default: default.map(Into::into),
+        auto_increment: false,
+        on_update: None,
+        comment: None,
+    };
+    let run = async |session: &mut Box<dyn quarry_driver_api::Session>, change: SchemaChange| {
+        for sql in driver.dialect().schema_change(&change).unwrap().unwrap() {
+            session
+                .execute(&sql, &ExecOpts::default(), &mut |_| {})
+                .await
+                .unwrap();
+        }
+    };
+    session
+        .execute(
+            "DROP TABLE IF EXISTS ddl_scratch",
+            &ExecOpts::default(),
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+    let mut id = column("id", "INT", None);
+    id.nullable = false;
+    id.auto_increment = true;
+    run(
+        &mut session,
+        SchemaChange::CreateTable {
+            table: table.clone(),
+            columns: vec![id, column("note", "VARCHAR(20)", Some("'it''s'"))],
+            primary_key: vec!["id".into()],
+        },
+    )
+    .await;
+    let mut updated = column("updated", "TIMESTAMP", Some("CURRENT_TIMESTAMP"));
+    updated.on_update = Some("CURRENT_TIMESTAMP".into());
+    run(
+        &mut session,
+        SchemaChange::AlterTable {
+            table: table.clone(),
+            ops: vec![
+                AlterOp::AddColumn { column: updated },
+                AlterOp::AddIndex {
+                    index: IndexDef {
+                        name: "by_note".into(),
+                        columns: vec!["note".into()],
+                        unique: true,
+                    },
+                },
+            ],
+        },
+    )
+    .await;
+    let info = session.table_info(&table).await.unwrap();
+    let note = info.columns.iter().find(|c| c.name == "note").unwrap();
+    assert_eq!(note.default.as_deref(), Some("'it''s'"));
+    let updated = info.columns.iter().find(|c| c.name == "updated").unwrap();
+    assert_eq!(updated.default.as_deref(), Some("CURRENT_TIMESTAMP"));
+    assert_eq!(updated.on_update.as_deref(), Some("CURRENT_TIMESTAMP"));
+    assert!(info.indexes.iter().any(|i| i.name == "by_note" && i.unique));
+
+    // Changing a column with what table_info read keeps its default and ON UPDATE.
+    let def = ColumnDef {
+        name: "changed".into(),
+        type_name: updated.type_name.clone(),
+        nullable: updated.nullable,
+        default: updated.default.clone(),
+        auto_increment: updated.auto_increment,
+        on_update: updated.on_update.clone(),
+        comment: Some("renamed".into()),
+    };
+    run(
+        &mut session,
+        SchemaChange::AlterTable {
+            table: table.clone(),
+            ops: vec![
+                AlterOp::ModifyColumn {
+                    name: "updated".into(),
+                    column: def,
+                },
+                AlterOp::DropIndex {
+                    name: "by_note".into(),
+                },
+            ],
+        },
+    )
+    .await;
+    let info = session.table_info(&table).await.unwrap();
+    let changed = info.columns.iter().find(|c| c.name == "changed").unwrap();
+    assert_eq!(changed.on_update.as_deref(), Some("CURRENT_TIMESTAMP"));
+    assert_eq!(changed.comment.as_deref(), Some("renamed"));
+    assert!(info.indexes.iter().all(|i| i.name != "by_note"));
+
+    run(&mut session, SchemaChange::DropTable { table, view: false }).await;
 }
 
 #[tokio::test]

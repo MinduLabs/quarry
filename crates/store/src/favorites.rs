@@ -1,4 +1,4 @@
-//! Pinned tables and saved queries in `<config dir>/favorites.toml`.
+//! Pinned connections and tables, and saved queries, in `<config dir>/favorites.toml`.
 
 use std::fs;
 use std::path::PathBuf;
@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::{Result, StoreError, write_atomic};
 
 const FAVORITES_FILE: &str = "favorites.toml";
-const SCHEMA_VERSION: u32 = 1;
+/// 2: connection favorites. A version 1 file reads as is; older Quarry refuses version 2 instead
+/// of failing on an item kind it does not know.
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FavoritesFile {
@@ -97,6 +99,38 @@ mod tests {
         ];
         store.save(&list).unwrap();
         assert_eq!(store.load().unwrap(), list);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn connection_favorites_and_version_1_files() {
+        let dir = std::env::temp_dir().join(format!("quarry-fav-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let conn = ConnId::new();
+        let v1 = format!(
+            "version = 1\n\n[[favorite]]\nid = \"{}\"\nname = \"orders\"\nconn = \"{}\"\n\
+             database = \"shop\"\n\n[favorite.item]\nkind = \"table\"\ntable = \"orders\"\n",
+            uuid::Uuid::new_v4(),
+            conn.0
+        );
+        fs::write(dir.join(FAVORITES_FILE), v1).unwrap();
+        let store = FavoritesStore::new(&dir);
+        let mut list = store.load().unwrap();
+        assert_eq!(list.len(), 1);
+        list.push(Favorite {
+            id: FavoriteId::new(),
+            name: "Local MySQL".into(),
+            conn,
+            database: None,
+            item: FavoriteItem::Connection,
+        });
+        store.save(&list).unwrap();
+        assert_eq!(store.load().unwrap(), list);
+        assert!(
+            fs::read_to_string(dir.join(FAVORITES_FILE))
+                .unwrap()
+                .starts_with("version = 2")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

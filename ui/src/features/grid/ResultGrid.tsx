@@ -6,9 +6,11 @@ import type { SortKey } from "@/bindings/SortKey";
 import type { Value } from "@/bindings/Value";
 import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
 import { cn } from "@/lib/cn";
-import { copyValue, displayValue, isNumericType } from "@/lib/values";
-import type { Edits } from "@/store/app";
+import { type CopyFormat, formatCells } from "@/lib/copy";
+import { copyValue, displayValue, isLongValue, isNumericType } from "@/lib/values";
+import { copyText, type Edits } from "@/store/app";
 import { CellEditor } from "./CellEditor";
+import { ValueDialog } from "./ValueDialog";
 
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
@@ -26,11 +28,13 @@ function measure(columns: ColumnMeta[], rows: Value[][]): number[] {
   });
 }
 
-/** Grid editing, when the shown page belongs to a table with a primary key. */
+/** Grid editing, when the shown result can be written back to its table. */
 export interface GridEditing {
   edits: Edits;
   onEdit: (row: number, col: number, value: Value) => void;
   onToggleDelete: (row: number) => void;
+  /** Add a new row (only where rows can be inserted). */
+  onInsertRow?: () => void;
 }
 
 /** Sorting by clicking a header, for table pages (the database sorts). */
@@ -41,10 +45,32 @@ export interface GridSorting {
 
 type Pos = { row: number; col: number };
 
+/** A rectangle of cells: `anchor` is where it started, `focus` is the active cell. */
+type Selection = { anchor: Pos; focus: Pos };
+
+type Rect = { top: number; bottom: number; left: number; right: number };
+
+function rectOf(sel: Selection): Rect {
+  return {
+    top: Math.min(sel.anchor.row, sel.focus.row),
+    bottom: Math.max(sel.anchor.row, sel.focus.row),
+    left: Math.min(sel.anchor.col, sel.focus.col),
+    right: Math.max(sel.anchor.col, sel.focus.col),
+  };
+}
+
+const inRect = (rect: Rect | null, row: number, col: number) =>
+  rect !== null && row >= rect.top && row <= rect.bottom && col >= rect.left && col <= rect.right;
+
+const range = (from: number, to: number) =>
+  Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
 /**
- * Virtualized result grid (docs/STYLE-GUIDE.md › Data grid). Read-only unless `editing` is set:
- * then double-click or Enter edits a cell, Delete marks the row, and new rows follow the loaded
- * ones. Rows are virtualized; columns are all rendered (fine for typical result widths).
+ * Virtualized result grid (docs/STYLE-GUIDE.md › Data grid). Click, drag, Shift+click or
+ * Shift+arrows select a block of cells; the row numbers select whole rows. The block copies as
+ * TSV, CSV, JSON or INSERT. With `editing`, double-click or Enter edits a cell, Delete marks the
+ * selected rows, and new rows follow the loaded ones. Rows are virtualized; columns are all
+ * rendered (fine for typical result widths).
  */
 export function ResultGrid({
   columns,
@@ -52,23 +78,35 @@ export function ResultGrid({
   resetKey,
   editing,
   sorting,
+  onCopyInsert,
+  onExport,
+  onSelectRows,
 }: {
   columns: ColumnMeta[];
   rows: Value[][];
   resetKey: number;
   editing?: GridEditing;
   sorting?: GridSorting;
+  /** Copy the given rows as an INSERT (the engine writes it). */
+  onCopyInsert?: (columns: string[], rows: Value[][]) => void;
+  /** Export the whole result (or table), not just the selection. */
+  onExport?: () => void;
+  /** The rows the selection spans, whenever they change (empty when nothing is selected). */
+  onSelectRows?: (rows: number[]) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
   const [widths, setWidths] = useState<number[]>([]);
-  const [cell, setCell] = useState<Pos | null>(null);
+  const [sel, setSel] = useState<Selection | null>(null);
   const [editor, setEditor] = useState<Pos | null>(null);
+  const [viewer, setViewer] = useState<Pos | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when a new result arrives
   useEffect(() => {
     setWidths(measure(columns, rows));
-    setCell(null);
+    setSel(null);
     setEditor(null);
+    setViewer(null);
     scroller.current?.scrollTo({ top: 0, left: 0 });
   }, [columns, resetKey]);
 
@@ -78,13 +116,29 @@ export function ResultGrid({
     if (rows.length > 0 && rows.length <= 500) setWidths(measure(columns, rows));
   }, [rows.length > 0]);
 
+  useEffect(() => {
+    const stop = () => {
+      dragging.current = false;
+    };
+    window.addEventListener("mouseup", stop);
+    return () => window.removeEventListener("mouseup", stop);
+  }, []);
+
   const edits = editing?.edits;
   const inserted = edits?.inserts.length ?? 0;
   const count = rows.length + inserted;
+  const lastCol = columns.length - 1;
   const deleted = useMemo(() => new Set(edits?.deletes ?? []), [edits?.deletes]);
   const numeric = useMemo(() => columns.map((c) => isNumericType(c.type_name)), [columns]);
   const template = `${GUTTER}px ${widths.map((w) => `${w}px`).join(" ")}`;
   const totalWidth = GUTTER + widths.reduce((a, b) => a + b, 0);
+  const rect = sel ? rectOf(sel) : null;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when the spanned rows change
+  useEffect(() => {
+    onSelectRows?.(rect ? range(rect.top, rect.bottom) : []);
+  }, [rect?.top, rect?.bottom]);
+  const cell = sel?.focus ?? null;
 
   const virtualizer = useVirtualizer({
     count,
@@ -131,8 +185,57 @@ export function ResultGrid({
     scroller.current?.focus();
   };
 
+  /** Edit in place, or in the value dialog for values that don't fit one line. */
+  const open = (pos: Pos) => {
+    if (canEdit(pos) && !isLongValue(valueAt(pos.row, pos.col))) setEditor(pos);
+    else setViewer(pos);
+  };
+
+  /** The selected block: column names (as shown, or as in the table) and values. */
+  const block = (sourceNames = false) => {
+    if (!rect) return { names: [], values: [] };
+    const cols = range(rect.left, rect.right);
+    const names = cols.map((c) => {
+      const column = columns[c];
+      return (sourceNames ? column?.source_column : null) ?? column?.name ?? "";
+    });
+    const values = range(rect.top, rect.bottom).map((r) =>
+      cols.map((c) => valueAt(r, c) ?? { t: "null" as const }),
+    );
+    return { names, values };
+  };
+
+  const copy = (format: CopyFormat) => {
+    const { names, values } = block();
+    if (values.length === 0) return;
+    const one = values.length === 1 && names.length === 1;
+    // A single cell copies as its full value, like before.
+    if (format === "tsv" && one) return copyText(copyValue(values[0]?.[0]));
+    copyText(formatCells(format, names, values));
+  };
+
+  const select = (focus: Pos, extend: boolean) => {
+    setSel((s) => ({ anchor: extend && s ? s.anchor : focus, focus }));
+    virtualizer.scrollToIndex(focus.row);
+  };
+
+  const selectedRows = () => (rect ? range(rect.top, rect.bottom) : []);
+
+  const toggleDeleteSelected = () => {
+    if (!editing) return;
+    // New rows are removed by index, so remove from the bottom up.
+    for (const row of selectedRows().reverse()) editing.onToggleDelete(row);
+  };
+
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (!cell || editor) return;
+    if (editor || viewer) return;
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && event.key.toLowerCase() === "a" && count > 0) {
+      event.preventDefault();
+      setSel({ anchor: { row: 0, col: 0 }, focus: { row: count - 1, col: lastCol } });
+      return;
+    }
+    if (!cell) return;
     const moves: Record<string, [number, number]> = {
       ArrowUp: [-1, 0],
       ArrowDown: [1, 0],
@@ -143,54 +246,103 @@ export function ResultGrid({
     if (delta) {
       event.preventDefault();
       const row = Math.min(count - 1, Math.max(0, cell.row + delta[0]));
-      const col = Math.min(columns.length - 1, Math.max(0, cell.col + delta[1]));
-      setCell({ row, col });
-      virtualizer.scrollToIndex(row);
+      const col = Math.min(lastCol, Math.max(0, cell.col + delta[1]));
+      select({ row, col }, event.shiftKey);
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && event.key === "c") {
+    if (mod && event.key.toLowerCase() === "c") {
       event.preventDefault();
-      void navigator.clipboard.writeText(copyValue(valueAt(cell.row, cell.col)));
+      copy("tsv");
+      return;
+    }
+    if (event.key === "Enter" && event.shiftKey) {
+      event.preventDefault();
+      setViewer(cell);
       return;
     }
     if (event.key === "Enter" && canEdit(cell)) {
       event.preventDefault();
-      setEditor(cell);
+      open(cell);
+      return;
+    }
+    if (event.key === "Escape" && sel) {
+      setSel({ anchor: cell, focus: cell });
       return;
     }
     if ((event.key === "Delete" || event.key === "Backspace") && editing) {
       event.preventDefault();
-      editing.onToggleDelete(cell.row);
+      toggleDeleteSelected();
     }
   };
 
-  const menu: MenuItem[] =
-    editing && cell
-      ? [
-          ...(canEdit(cell)
-            ? [
-                { label: "Edit", onSelect: () => setEditor(cell) },
-                { label: "Set NULL", onSelect: () => commit(cell, { t: "null" }) },
-              ]
-            : []),
-          {
-            label: "Copy",
-            onSelect: () =>
-              void navigator.clipboard.writeText(copyValue(valueAt(cell.row, cell.col))),
-          },
-          {
-            label:
-              cell.row >= rows.length
-                ? "Remove new row"
-                : deleted.has(cell.row)
-                  ? "Keep row"
-                  : "Delete row",
-            onSelect: () => editing.onToggleDelete(cell.row),
-            danger: cell.row < rows.length && !deleted.has(cell.row),
-            separatorBefore: true,
-          },
-        ]
-      : [];
+  const rowsSelected = selectedRows();
+  const deletingNew = rowsSelected.length > 0 && rowsSelected.every((r) => r >= rows.length);
+  const keeping = rowsSelected.length > 0 && rowsSelected.every((r) => deleted.has(r));
+  const rowWord = rowsSelected.length === 1 ? "row" : `${rowsSelected.length} rows`;
+
+  const menu: MenuItem[] = cell
+    ? [
+        {
+          label: canEdit(cell) ? "Edit value…" : "Open value…",
+          onSelect: () => setViewer(cell),
+        },
+        ...(canEdit(cell)
+          ? [
+              {
+                label: "Set NULL",
+                onSelect: () => {
+                  if (!rect || !editing) return;
+                  for (const r of range(rect.top, rect.bottom)) {
+                    if (deleted.has(r)) continue;
+                    for (const c of range(rect.left, rect.right)) {
+                      editing.onEdit(r, c, { t: "null" });
+                    }
+                  }
+                },
+              },
+            ]
+          : []),
+        {
+          label: "Copy",
+          onSelect: () => copy("tsv"),
+          separatorBefore: true,
+        },
+        { label: "Copy with headers", onSelect: () => copy("tsv_headers") },
+        { label: "Copy as CSV", onSelect: () => copy("csv") },
+        { label: "Copy as JSON", onSelect: () => copy("json") },
+        ...(onCopyInsert
+          ? [
+              {
+                label: "Copy as INSERT",
+                onSelect: () => {
+                  const { names, values } = block(true);
+                  onCopyInsert(names, values);
+                },
+              },
+            ]
+          : []),
+        ...(onExport ? [{ label: "Export…", onSelect: onExport }] : []),
+        ...(editing?.onInsertRow
+          ? [{ label: "Insert row", onSelect: editing.onInsertRow, separatorBefore: true }]
+          : []),
+        ...(editing
+          ? [
+              {
+                label: deletingNew
+                  ? `Remove new ${rowWord}`
+                  : keeping
+                    ? `Keep ${rowWord}`
+                    : `Delete ${rowWord}`,
+                onSelect: toggleDeleteSelected,
+                danger: !deletingNew && !keeping,
+                separatorBefore: !editing.onInsertRow,
+              },
+            ]
+          : []),
+      ]
+    : [];
+
+  const viewed = viewer && columns[viewer.col];
 
   const grid = (
     <div
@@ -199,8 +351,9 @@ export function ResultGrid({
       role="grid"
       aria-rowcount={count}
       aria-colcount={columns.length}
+      aria-multiselectable
       onKeyDown={onKeyDown}
-      className="relative h-full min-h-0 overflow-auto bg-app font-mono text-sm outline-none"
+      className="relative h-full min-h-0 select-none overflow-auto bg-app font-mono text-sm outline-none"
     >
       <div
         style={{ width: totalWidth, height: HEADER_HEIGHT + virtualizer.getTotalSize() }}
@@ -212,7 +365,16 @@ export function ResultGrid({
           style={{ gridTemplateColumns: template, height: HEADER_HEIGHT }}
           className="sticky top-0 z-20 grid border-line border-b bg-surface font-sans text-sm"
         >
-          <div className="sticky left-0 z-10 border-line border-r bg-surface" />
+          <button
+            type="button"
+            aria-label="Select all"
+            tabIndex={-1}
+            onClick={() =>
+              count > 0 &&
+              setSel({ anchor: { row: 0, col: 0 }, focus: { row: count - 1, col: lastCol } })
+            }
+            className="sticky left-0 z-10 border-line border-r bg-surface hover:bg-hover"
+          />
           {columns.map((column, i) => {
             const source = column.source_column ?? column.name;
             const key = sorting?.sort.find((k) => k.column === source);
@@ -268,6 +430,7 @@ export function ResultGrid({
           const r = item.index;
           const isNew = r >= rows.length;
           const isDeleted = deleted.has(r);
+          const rowSelected = rect !== null && r >= rect.top && r <= rect.bottom;
           return (
             <div
               key={item.key}
@@ -283,33 +446,63 @@ export function ResultGrid({
                 isDeleted && "bg-cell-deleted text-muted line-through",
               )}
             >
-              <div className="sticky left-0 z-10 flex items-center justify-end border-line border-r bg-surface pr-2 font-sans text-faint text-xs tabular-nums">
+              <div
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  dragging.current = true;
+                  setSel((s) => ({
+                    anchor: e.shiftKey && s ? { row: s.anchor.row, col: 0 } : { row: r, col: 0 },
+                    focus: { row: r, col: lastCol },
+                  }));
+                  scroller.current?.focus();
+                }}
+                onMouseEnter={() => {
+                  if (dragging.current)
+                    setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: lastCol } });
+                }}
+                className={cn(
+                  "sticky left-0 z-10 flex cursor-default items-center justify-end border-line border-r bg-surface pr-2 font-sans text-faint text-xs tabular-nums",
+                  rowSelected && "text-fg",
+                )}
+              >
                 {isNew ? "+" : r + 1}
               </div>
               {columns.map((_, c) => {
                 const value = valueAt(r, c);
-                const selected = cell?.row === r && cell.col === c;
-                const open = editor?.row === r && editor.col === c;
+                const selected = inRect(rect, r, c);
+                const focused = cell?.row === r && cell.col === c;
+                const editingHere = editor?.row === r && editor.col === c;
                 return (
                   <div
                     // biome-ignore lint/suspicious/noArrayIndexKey: cells are positional
                     key={c}
                     role="gridcell"
                     aria-selected={selected}
-                    onMouseDown={() => setCell({ row: r, col: c })}
-                    onDoubleClick={() => {
+                    onMouseDown={(e) => {
                       const pos = { row: r, col: c };
-                      if (canEdit(pos)) setEditor(pos);
+                      // A right-click inside the selection keeps it for the menu.
+                      if (e.button === 2 && inRect(rect, r, c)) return;
+                      if (e.button === 0) dragging.current = true;
+                      setSel((s) => ({
+                        anchor: e.shiftKey && e.button === 0 && s ? s.anchor : pos,
+                        focus: pos,
+                      }));
                     }}
+                    onMouseEnter={() => {
+                      if (dragging.current)
+                        setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: c } });
+                    }}
+                    onDoubleClick={() => open({ row: r, col: c })}
                     className={cn(
                       "relative flex items-center overflow-hidden px-2 tabular-nums",
                       numeric[c] && "justify-end",
                       (value === undefined || value.t === "null") && "text-faint italic",
                       isModified(r, c) && "bg-cell-modified",
-                      selected && "bg-selected outline-1 outline-accent -outline-offset-1",
+                      selected && "bg-selected",
+                      focused && "outline-1 outline-accent -outline-offset-1",
                     )}
                   >
-                    {open ? (
+                    {editingHere ? (
                       <CellEditor
                         initial={value === undefined ? "" : copyValue(value)}
                         onCommit={(text) => commit({ row: r, col: c }, { t: "text", v: text })}
@@ -333,5 +526,24 @@ export function ResultGrid({
     </div>
   );
 
-  return editing ? <ContextMenuArea items={menu}>{grid}</ContextMenuArea> : grid;
+  return (
+    <>
+      <ContextMenuArea items={menu}>{grid}</ContextMenuArea>
+      {viewer && viewed && (
+        <ValueDialog
+          column={viewed}
+          value={valueAt(viewer.row, viewer.col)}
+          editable={canEdit(viewer)}
+          onSave={(value) => {
+            commit(viewer, value);
+            setViewer(null);
+          }}
+          onClose={() => {
+            setViewer(null);
+            scroller.current?.focus();
+          }}
+        />
+      )}
+    </>
+  );
 }

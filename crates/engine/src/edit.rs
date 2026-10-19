@@ -128,19 +128,29 @@ fn assignments(
         .join(separator)
 }
 
-/// `pk = ? AND …`. A key is required: without one the statement could touch every row.
+/// `key = ? AND …`, with `IS NULL` for NULL values. A key is required: without one the
+/// statement could touch every row. The key is the primary key, or every comparable column of a
+/// table without one; either way the statement must then hit exactly one row (`one_row`).
 fn key_filter(
     dialect: &dyn Dialect,
     key: &[CellValue],
     params: &mut Vec<Value>,
 ) -> Result<String, String> {
     if key.is_empty() {
-        return Err("This table has no primary key, so rows can't be changed safely.".to_owned());
+        return Err("This row has no key columns, so it can't be changed safely.".to_owned());
     }
-    if key.iter().any(|c| c.value.is_null()) {
-        return Err("A primary key value is NULL; the row can't be matched.".to_owned());
-    }
-    Ok(assignments(dialect, key, params, " AND "))
+    Ok(key
+        .iter()
+        .map(|c| {
+            let column = dialect.quote_ident(&c.column);
+            if c.value.is_null() {
+                return format!("{column} IS NULL");
+            }
+            params.push(c.value.clone());
+            format!("{column} = {}", dialect.placeholder(params.len()))
+        })
+        .collect::<Vec<_>>()
+        .join(" AND "))
 }
 
 #[cfg(test)]
@@ -239,13 +249,24 @@ pub(crate) mod tests {
     fn refuses_rows_without_a_usable_key() {
         let no_key = vec![RowChange::Delete { key: vec![] }];
         assert!(statements(&Ansi, &table(), &no_key).is_err());
-        let null_key = vec![RowChange::Update {
-            key: vec![cell("id", Value::Null)],
-            set: vec![cell("a", Value::Int(1))],
-        }];
-        assert!(statements(&Ansi, &table(), &null_key).is_err());
         let empty_insert = vec![RowChange::Insert { values: vec![] }];
         assert!(statements(&Ansi, &table(), &empty_insert).is_err());
+    }
+
+    #[test]
+    fn null_key_values_match_with_is_null() {
+        // A table without a primary key is keyed by all its columns, some of them NULL.
+        let changes = vec![RowChange::Update {
+            key: vec![cell("a", Value::Int(1)), cell("b", Value::Null)],
+            set: vec![cell("c", Value::Int(2))],
+        }];
+        let out = statements(&Ansi, &table(), &changes).unwrap();
+        assert_eq!(
+            out[0].sql,
+            r#"UPDATE "shop"."orders" SET "c" = $1 WHERE "a" = $2 AND "b" IS NULL"#
+        );
+        assert_eq!(out[0].params, vec![Value::Int(2), Value::Int(1)]);
+        assert!(out[0].one_row);
     }
 
     #[test]

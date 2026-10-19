@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use quarry_model::HistoryEntry;
+use quarry_model::{ConnId, HistoryEntry};
 
 use crate::{Result, StoreError, write_atomic};
 
@@ -91,8 +91,13 @@ impl HistoryStore {
         Ok(())
     }
 
-    /// Newest first. `query` matches the SQL, ignoring case.
-    pub fn search(&self, query: Option<&str>, limit: usize) -> Result<Vec<HistoryEntry>> {
+    /// Newest first. `query` matches the SQL, ignoring case; `conn` keeps one connection's.
+    pub fn search(
+        &self,
+        query: Option<&str>,
+        conn: Option<ConnId>,
+        limit: usize,
+    ) -> Result<Vec<HistoryEntry>> {
         let needle = query
             .map(str::trim)
             .filter(|q| !q.is_empty())
@@ -102,6 +107,7 @@ impl HistoryStore {
             .read_all()?
             .into_iter()
             .rev()
+            .filter(|e| conn.is_none_or(|c| e.conn == c))
             .filter(|e| {
                 needle
                     .as_ref()
@@ -125,8 +131,6 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use quarry_model::ConnId;
-
     use super::*;
 
     fn entry(sql: &str) -> HistoryEntry {
@@ -148,7 +152,7 @@ mod tests {
     fn appends_and_searches_newest_first() {
         let dir = temp_dir();
         let store = HistoryStore::new(&dir);
-        assert!(store.search(None, 10).unwrap().is_empty());
+        assert!(store.search(None, None, 10).unwrap().is_empty());
         store.append(&entry("SELECT * FROM orders")).unwrap();
         store
             .append(&entry("select count(*) from customers"))
@@ -157,14 +161,18 @@ mod tests {
             .append(&entry("UPDATE orders SET note = 'x'"))
             .unwrap();
 
-        let all = store.search(None, 10).unwrap();
+        let all = store.search(None, None, 10).unwrap();
         assert_eq!(all[0].sql, "UPDATE orders SET note = 'x'");
-        let orders = store.search(Some("ORDERS"), 10).unwrap();
+        let orders = store.search(Some("ORDERS"), None, 10).unwrap();
         assert_eq!(orders.len(), 2);
-        assert_eq!(store.search(None, 1).unwrap().len(), 1);
+        assert_eq!(store.search(None, None, 1).unwrap().len(), 1);
+        let first = all[2].conn;
+        let one = store.search(None, Some(first), 10).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].sql, "SELECT * FROM orders");
 
         store.clear().unwrap();
-        assert!(store.search(None, 10).unwrap().is_empty());
+        assert!(store.search(None, None, 10).unwrap().is_empty());
         fs::remove_dir_all(dir).ok();
     }
 
@@ -175,7 +183,7 @@ mod tests {
         for i in 0..(MAX_ENTRIES + MAX_ENTRIES / 5 + 1) {
             store.append(&entry(&format!("SELECT {i}"))).unwrap();
         }
-        let all = store.search(None, usize::MAX).unwrap();
+        let all = store.search(None, None, usize::MAX).unwrap();
         assert_eq!(all.len(), MAX_ENTRIES);
         assert_eq!(
             all[0].sql,
@@ -191,7 +199,7 @@ mod tests {
         let good = serde_json::to_string(&entry("SELECT 1")).unwrap();
         fs::write(dir.join(HISTORY_FILE), format!("{{broken\n{good}\n")).unwrap();
         let store = HistoryStore::new(&dir);
-        assert_eq!(store.search(None, 10).unwrap().len(), 1);
+        assert_eq!(store.search(None, None, 10).unwrap().len(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
 }

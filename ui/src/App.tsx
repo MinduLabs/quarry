@@ -7,9 +7,13 @@ import { send, subscribe } from "@/lib/engine";
 import { isMac } from "@/lib/platform";
 import { pendingWork, saveWorkspace, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
+import { HistoryDialog } from "./features/history/HistoryDialog";
+import { CommandPalette } from "./features/palette/CommandPalette";
 import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { QueryView } from "./features/query/QueryView";
+import { SchemaFormDialog } from "./features/schema/SchemaFormDialog";
+import { SchemaReviewDialog } from "./features/schema/SchemaReviewDialog";
 import { SettingsDialog } from "./features/settings/SettingsDialog";
 import { Sidebar } from "./features/sidebar/Sidebar";
 import { SidebarToggle } from "./features/sidebar/SidebarToggle";
@@ -98,6 +102,8 @@ export function App() {
       else if (key === "w" && activeTabId !== null) closeTab(activeTabId);
       else if (key === "b") useApp.getState().toggleSidebar();
       else if (key === ",") useApp.getState().setSettingsOpen(true);
+      else if (key === "p") useApp.getState().setPalette(e.shiftKey ? "commands" : "open");
+      else if (key === (isMac ? "y" : "h") && !e.shiftKey) useApp.getState().setHistoryOpen(true);
       else return;
       e.preventDefault();
     };
@@ -175,6 +181,10 @@ export function App() {
       <ConfirmRunDialog />
       <ConfirmChangesDialog />
       <SettingsDialog />
+      <SchemaFormDialog />
+      <SchemaReviewDialog />
+      <CommandPalette />
+      <HistoryDialog />
       <CloseTabDialog />
       <QuitDialog />
       <Toaster />

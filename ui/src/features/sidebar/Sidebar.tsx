@@ -11,32 +11,60 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
+import type { SchemaObject } from "@/bindings/SchemaObject";
 import { EnvBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
-import { ContextMenuArea } from "@/components/ui/Menu";
+import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
 import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { Spinner } from "@/components/ui/Spinner";
 import { TreeRow } from "@/components/ui/TreeRow";
 import { keysOf } from "@/lib/shortcuts";
-import { type ConnNode, useApp } from "@/store/app";
+import { type ConnNode, copyText, type DbNode, useApp } from "@/store/app";
 import { FavoritesList } from "../favorites/FavoritesList";
-import { HistoryList } from "../history/HistoryList";
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
 
-type Pane = "connections" | "favorites" | "history";
+/**
+ * What a connection shows under the sidebar filter `needle` (lower case): everything (`all`), or
+ * only some databases, each with all its objects (`objects: null`) or only the matching ones.
+ * `null` when nothing in it matches. Only loaded databases are searched.
+ */
+type Match =
+  | { all: true }
+  | { all: false; databases: Array<{ db: DbNode; objects: SchemaObject[] | null }> };
+
+function matchOf(
+  config: ConnectionConfig,
+  node: ConnNode | undefined,
+  needle: string,
+): Match | null {
+  if (!needle || config.name.toLowerCase().includes(needle)) return { all: true };
+  type Shown = { db: DbNode; objects: SchemaObject[] | null };
+  const databases = (node?.databases ?? []).flatMap((db): Shown[] => {
+    if (db.name.toLowerCase().includes(needle)) return [{ db, objects: null }];
+    const objects = (db.objects ?? []).filter((o) => o.name.toLowerCase().includes(needle));
+    return objects.length > 0 ? [{ db, objects }] : [];
+  });
+  return databases.length > 0 ? { all: false, databases } : null;
+}
 
 export function Sidebar() {
   const connections = useApp((s) => s.connections);
   const ready = useApp((s) => s.ready);
   const version = useApp((s) => s.engineVersion);
   const openDialog = useApp((s) => s.openDialog);
+  const nodes = useApp((s) => s.nodes);
+  const pane = useApp((s) => s.sidebarPane);
+  const setPane = useApp((s) => s.setSidebarPane);
   const [selected, setSelected] = useState<string | null>(null);
-  const [pane, setPane] = useState<Pane>("connections");
-  // Filters the history (and favorites); the connection tree does not use it yet.
+  // Filters connections, databases and loaded tables, or favorites, by name.
   const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const matches = connections
+    .map((config) => ({ config, match: matchOf(config, nodes[config.id], needle) }))
+    .filter((m) => m.match !== null);
 
   return (
     <aside className="flex h-full flex-col bg-sidebar">
@@ -60,7 +88,6 @@ export function Sidebar() {
           tabs={[
             { value: "connections", label: "Connections" },
             { value: "favorites", label: "Favorites" },
-            { value: "history", label: "History" },
           ]}
         />
         <div className="relative">
@@ -74,7 +101,7 @@ export function Sidebar() {
             aria-label="Search"
             value={query}
             inputSize="lg"
-            placeholder="Filter"
+            placeholder={pane === "connections" ? "Filter connections and tables" : "Filter"}
             onChange={(e) => setQuery(e.target.value)}
             className="pr-8 pl-8 [&::-webkit-search-cancel-button]:hidden"
           />
@@ -96,19 +123,23 @@ export function Sidebar() {
           {ready && connections.length === 0 && (
             <EmptyState onAdd={() => openDialog({ mode: "new" })} />
           )}
-          {connections.map((config) => (
+          {matches.map(({ config, match }) => (
             <ConnectionBranch
               key={config.id}
               config={config}
+              match={match ?? { all: true }}
               selected={selected}
               onSelect={setSelected}
             />
           ))}
+          {needle && connections.length > 0 && matches.length === 0 && (
+            <p className="px-2 pt-6 text-center text-sm text-muted">
+              Nothing matches. Only connected databases that are open are searched.
+            </p>
+          )}
         </div>
-      ) : pane === "favorites" ? (
-        <FavoritesList query={query} />
       ) : (
-        <HistoryList query={query} />
+        <FavoritesList query={query} />
       )}
 
       <footer className="flex h-8 shrink-0 items-center justify-between pr-1.5 pl-3 text-xs text-faint">
@@ -141,13 +172,18 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 
 function ConnectionBranch({
   config,
+  match,
   selected,
   onSelect,
 }: {
   config: ConnectionConfig;
+  match: Match;
   selected: string | null;
   onSelect: (key: string) => void;
 }) {
+  const isFavorite = useApp((s) =>
+    s.favorites.some((f) => f.conn === config.id && f.item.kind === "connection"),
+  );
   const node = useApp((s) => s.nodes[config.id]) as ConnNode | undefined;
   const {
     toggleConnection,
@@ -157,20 +193,43 @@ function ConnectionBranch({
     newQuery,
     openDialog,
     addTableFavorite,
+    openSchemaForm,
+    alterSchema,
+    reloadObjects,
+    openStructure,
+    toggleConnectionFavorite,
+    transfer,
   } = useApp.getState();
   const status = node?.status.kind ?? "idle";
   const connected = status === "connected";
+  const canChangeSchema =
+    node?.status.kind === "connected" && node.status.capabilities.schema_edit && !config.read_only;
+  const conn = config.id;
 
-  const menu = [
+  const menu: MenuItem[] = [
     ...(connected
       ? [
           {
             label: "New query",
             onSelect: () => newQuery({ connId: config.id, database: config.database }),
           },
+          ...(canChangeSchema
+            ? [
+                {
+                  label: "New database…",
+                  onSelect: () => openSchemaForm({ kind: "create_database", conn }),
+                },
+              ]
+            : []),
           { label: "Disconnect", onSelect: () => disconnect(config.id) },
         ]
       : [{ label: "Connect", onSelect: () => toggleConnection(config.id) }]),
+    {
+      label: isFavorite ? "Remove from favorites" : "Add to favorites",
+      onSelect: () => toggleConnectionFavorite(conn),
+      separatorBefore: true,
+    },
+    { label: "Copy name", onSelect: () => copyText(config.name) },
     {
       label: "Edit…",
       onSelect: () => openDialog({ mode: "edit", id: config.id }),
@@ -188,7 +247,7 @@ function ConnectionBranch({
       <ContextMenuArea items={menu}>
         <TreeRow
           depth={0}
-          expanded={connected ? node?.expanded : undefined}
+          expanded={connected ? node?.expanded || !match.all : undefined}
           icon={<Server {...ICON} />}
           label={config.name}
           active={selected === config.id}
@@ -209,50 +268,130 @@ function ConnectionBranch({
       </ContextMenuArea>
 
       {connected &&
-        node?.expanded &&
-        node.databases.map((db) => {
+        node &&
+        (node.expanded || !match.all) &&
+        (match.all
+          ? node.databases.map((db) => ({ db, objects: null as SchemaObject[] | null }))
+          : match.databases
+        ).map(({ db, objects: matched }) => {
+          // A database shown for its matching tables is open and lists only those.
+          const open = matched !== null || db.expanded;
+          const shown = matched ?? db.objects ?? [];
           const dbKey = `${config.id}/${db.name}`;
+          const dbMenu: MenuItem[] = [
+            { label: "New query", onSelect: () => newQuery({ connId: conn, database: db.name }) },
+            ...(canChangeSchema
+              ? [
+                  {
+                    label: "New table…",
+                    onSelect: () =>
+                      openSchemaForm({ kind: "create_table", conn, database: db.name }),
+                  },
+                ]
+              : []),
+            { label: "Refresh", onSelect: () => reloadObjects(conn, db.name) },
+            { label: "Copy name", onSelect: () => copyText(db.name) },
+            ...(canChangeSchema
+              ? [
+                  {
+                    label: "Drop database…",
+                    danger: true,
+                    separatorBefore: true,
+                    onSelect: () => alterSchema(conn, { kind: "drop_database", name: db.name }),
+                  },
+                ]
+              : []),
+          ];
           return (
             <div key={db.name} role="group">
-              <TreeRow
-                depth={1}
-                expanded={db.expanded}
-                icon={<Database {...ICON} />}
-                label={db.name}
-                active={selected === dbKey}
-                onClick={() => {
-                  onSelect(dbKey);
-                  toggleDatabase(config.id, db.name);
-                }}
-                trailing={db.loading ? <Spinner size={12} /> : undefined}
-              />
-              {db.expanded && db.error && (
-                <p className="py-1 pl-12 text-sm text-danger">{db.error}</p>
-              )}
-              {db.expanded && db.objects?.length === 0 && (
+              <ContextMenuArea items={dbMenu}>
+                <TreeRow
+                  depth={1}
+                  expanded={open}
+                  icon={<Database {...ICON} />}
+                  label={db.name}
+                  active={selected === dbKey}
+                  onClick={() => {
+                    onSelect(dbKey);
+                    toggleDatabase(config.id, db.name);
+                  }}
+                  trailing={db.loading ? <Spinner size={12} /> : undefined}
+                />
+              </ContextMenuArea>
+              {open && db.error && <p className="py-1 pl-12 text-sm text-danger">{db.error}</p>}
+              {open && db.objects?.length === 0 && (
                 <p className="py-1 pl-12 text-sm text-faint">No tables</p>
               )}
-              {db.expanded &&
-                sortObjects(db.objects ?? []).map((object) => {
+              {open &&
+                sortObjects(shown).map((object) => {
                   const key = `${dbKey}/${object.name}`;
+                  const table = { database: db.name, schema: null, name: object.name };
+                  const isTable = object.kind === "table";
+                  const isView = object.kind === "view";
+                  const objectMenu: MenuItem[] = [
+                    {
+                      label: "Open",
+                      onSelect: () => openObject(config.id, db.name, object.name, object.kind),
+                    },
+                    ...(isTable || isView
+                      ? [
+                          {
+                            label: "Open structure",
+                            onSelect: () => openStructure(conn, db.name, object.name),
+                          },
+                          {
+                            label: "Add to favorites",
+                            onSelect: () => addTableFavorite(config.id, db.name, object.name),
+                          },
+                        ]
+                      : []),
+                    { label: "Copy name", onSelect: () => copyText(object.name) },
+                    ...(isTable || isView
+                      ? [
+                          {
+                            label: "Export…",
+                            separatorBefore: true,
+                            onSelect: () => transfer("export", { kind: "table", conn, table }),
+                          },
+                          ...(isTable && !config.read_only
+                            ? [
+                                {
+                                  label: "Import…",
+                                  onSelect: () =>
+                                    transfer("import", { kind: "table", conn, table }),
+                                },
+                              ]
+                            : []),
+                        ]
+                      : []),
+                    ...(canChangeSchema && isTable
+                      ? [
+                          {
+                            label: "Rename…",
+                            separatorBefore: true,
+                            onSelect: () => openSchemaForm({ kind: "rename_table", conn, table }),
+                          },
+                          {
+                            label: "Empty table…",
+                            danger: true,
+                            onSelect: () => alterSchema(conn, { kind: "truncate_table", table }),
+                          },
+                        ]
+                      : []),
+                    ...(canChangeSchema && (isTable || isView)
+                      ? [
+                          {
+                            label: isView ? "Drop view…" : "Drop table…",
+                            danger: true,
+                            separatorBefore: isView,
+                            onSelect: () =>
+                              alterSchema(conn, { kind: "drop_table", table, view: isView }),
+                          },
+                        ]
+                      : []),
+                  ];
                   return (
-                    <ContextMenuArea
-                      key={`${object.kind}:${object.name}`}
-                      items={[
-                        {
-                          label: "Open",
-                          onSelect: () => openObject(config.id, db.name, object.name, object.kind),
-                        },
-                        ...(object.kind === "table" || object.kind === "view"
-                          ? [
-                              {
-                                label: "Add to favorites",
-                                onSelect: () => addTableFavorite(config.id, db.name, object.name),
-                              },
-                            ]
-                          : []),
-                      ]}
-                    >
+                    <ContextMenuArea key={`${object.kind}:${object.name}`} items={objectMenu}>
                       <TreeRow
                         depth={2}
                         icon={objectIcon(object.kind)}

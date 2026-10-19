@@ -1,6 +1,7 @@
 //! MySQL / MariaDB driver, built on `mysql_async` (TLS via rustls).
 
 mod convert;
+mod ddl;
 mod diagnose;
 mod introspect;
 
@@ -14,8 +15,8 @@ use quarry_driver_api::{
     Result, Session, SharedCancel,
 };
 use quarry_model::{
-    Capabilities, DriverId, ObjectKind, SchemaObject, SslMode, TableColumns, TableInfo, TableRef,
-    Value,
+    Capabilities, DriverId, ObjectKind, SchemaChange, SchemaObject, SslMode, TableColumns,
+    TableInfo, TableRef, Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
@@ -40,6 +41,7 @@ impl Driver for MysqlDriver {
             transactions: true,
             editable_results: true,
             explain: true,
+            schema_edit: true,
             cancel: true,
             ssh: true,
             ssl: true,
@@ -209,7 +211,7 @@ impl Session for MysqlSession {
     }
 
     async fn table_info(&mut self, table: &TableRef) -> Result<TableInfo> {
-        introspect::table_info(&mut self.conn, table).await
+        introspect::table_info(&mut self.conn, table, self.version.contains("MariaDB")).await
     }
 
     async fn use_database(&mut self, database: &str) -> Result<()> {
@@ -379,6 +381,24 @@ impl Dialect for MysqlDialect {
         sql
     }
 
+    fn literal(&self, value: &Value) -> String {
+        match value {
+            // MySQL reads `\` as an escape inside strings (unless NO_BACKSLASH_ESCAPES).
+            Value::Text(text) | Value::Json(text) | Value::Other { text, .. } => {
+                format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
+            }
+            Value::Bool(b) => if *b { "1" } else { "0" }.to_owned(),
+            other => quarry_driver_api::ansi_literal(other),
+        }
+    }
+
+    fn schema_change(
+        &self,
+        change: &SchemaChange,
+    ) -> Option<std::result::Result<Vec<String>, String>> {
+        Some(ddl::statements(self, change))
+    }
+
     fn explain(&self, statement: &str, json: bool) -> Option<String> {
         // MySQL 5.6+ and MariaDB 10.1+ both accept FORMAT=JSON.
         Some(if json {
@@ -424,6 +444,19 @@ mod tests {
         assert_eq!(
             MysqlDialect.count_rows(&table, Some("`a` IS NULL")),
             "SELECT COUNT(*) FROM `shop`.`orders` WHERE `a` IS NULL"
+        );
+    }
+
+    #[test]
+    fn literals_escape_backslashes() {
+        assert_eq!(
+            MysqlDialect.literal(&Value::Text("a\\b'c".into())),
+            "'a\\\\b''c'"
+        );
+        assert_eq!(MysqlDialect.literal(&Value::Bool(true)), "1");
+        assert_eq!(
+            MysqlDialect.literal(&Value::UInt(u64::MAX)),
+            "18446744073709551615"
         );
     }
 }

@@ -20,7 +20,7 @@ impl Default for FavoriteId {
     }
 }
 
-/// A pinned table or saved query, listed in the sidebar's Favorites pane.
+/// A pinned connection or table, or a saved query, listed in the sidebar's Favorites pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Favorite {
@@ -35,6 +35,12 @@ pub struct Favorite {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export)]
 pub enum FavoriteItem {
-    Table { table: String },
-    Query { sql: String },
+    /// The connection itself (`Favorite::conn`); opening it connects.
+    Connection,
+    Table {
+        table: String,
+    },
+    Query {
+        sql: String,
+    },
 }

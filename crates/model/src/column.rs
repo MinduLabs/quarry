@@ -9,7 +9,10 @@ pub struct ColumnMeta {
     /// Database type name (`INT`, `VARCHAR`, …).
     pub type_name: String,
     pub nullable: Option<bool>,
-    /// Source table/column when the driver knows them; decides whether a column is editable.
+    /// Source database, table and column when the driver knows them; they decide whether a
+    /// query result can be edited.
+    #[serde(default)]
+    pub source_database: Option<String>,
     pub source_table: Option<String>,
     pub source_column: Option<String>,
 }

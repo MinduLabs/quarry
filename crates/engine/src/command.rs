@@ -1,7 +1,8 @@
 use std::fmt;
 
 use quarry_model::{
-    BrowseQuery, ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, TableRef, Workspace,
+    BrowseQuery, ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, SchemaChange, TableRef,
+    Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -141,6 +142,24 @@ pub enum Command {
         changes: Vec<RowChange>,
         confirmed: bool,
     },
+    /// `rows` as one `INSERT` into `table`, in the connection's dialect, for the clipboard
+    /// → `Event::InsertSql`. Nothing runs.
+    InsertSql {
+        request: RequestId,
+        conn: ConnId,
+        table: TableRef,
+        columns: Vec<String>,
+        rows: Vec<Vec<Value>>,
+    },
+    /// Change the schema. With `confirmed: false` the engine only answers `Event::SchemaReview`
+    /// with the statements it would run; the client shows them and resends with
+    /// `confirmed: true`, which runs them on the metadata session → `Event::SchemaChanged`.
+    AlterSchema {
+        request: RequestId,
+        conn: ConnId,
+        change: SchemaChange,
+        confirmed: bool,
+    },
     Cancel {
         tab: TabId,
     },
@@ -157,10 +176,12 @@ pub enum Command {
     DeleteFavorite {
         id: FavoriteId,
     },
-    /// Newest queries first, optionally filtered by SQL text → `Event::History`.
+    /// Newest queries first, optionally filtered by SQL text and connection → `Event::History`.
     LoadHistory {
         request: RequestId,
         query: Option<String>,
+        #[serde(default)]
+        conn: Option<ConnId>,
         limit: u32,
     },
     /// Delete the whole query history → `Event::History` with no entries.

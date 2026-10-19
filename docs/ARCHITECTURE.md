@@ -45,7 +45,7 @@ logic in a headless Rust core. App ID: `io.github.mindulabs.Quarry`.
 | Crate | Responsibility |
 |---|---|
 | `model` | `Value`, `ColumnMeta`, `SchemaObject`, `ConnectionConfig`, `Capabilities`, `Environment`. Exports TypeScript types (ts-rs). |
-| `driver-api` | `Driver` / `Session` traits (including `table_info`), `Dialect` (quoting, placeholders, paging), `ExecItem`, shared error type. |
+| `driver-api` | `Driver` / `Session` traits (including `table_info`), `Dialect` (quoting, placeholders, paging, literals, DDL for a `SchemaChange`), `ExecItem`, shared error type. |
 | `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls: connect, SSL modes, multi-statement scripts, cancel with `KILL QUERY` on a side connection, introspection through `information_schema`. |
 | `sql` | Statement splitting, statement at cursor, classification (read / write / DDL / destructive), transaction effect (`BEGIN`, `COMMIT`, implicit commits). |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs (`workspace.json`), query history (`history.jsonl`), secrets in the OS keyring. |
@@ -79,6 +79,9 @@ Query plan   Explain{tab, sql, json} → same events as Query (one statement; it
 Transaction  BeginTransaction{tab} / EndTransaction{tab, commit} → TransactionState
 Structure    LoadTableInfo{request, conn, table} → TableInfo
 Grid edits   ApplyChanges{tab, table, changes} → ChangesApplied | ChangesFailed (one transaction)
+Copy INSERT  InsertSql{request, conn, table, columns, rows} → InsertSql (text only; nothing runs)
+Schema       AlterSchema{request, change, confirmed:false} → SchemaReview{statements, warning}
+             → user agrees → AlterSchema{confirmed:true} → SchemaChanged (on the metadata session)
 Safe mode    Run{confirmed:false} → ConfirmRequired → user agrees → Run{confirmed:true}
              ApplyChanges{confirmed:false} → ChangesConfirmRequired (production) → … {confirmed:true}
 Tabs         LoadWorkspace → Workspace;  SaveWorkspace{request} → WorkspaceSaved
@@ -107,9 +110,22 @@ Favorites    LoadFavorites / SaveFavorite / DeleteFavorite → Favorites (the fu
   into `EXPLAIN ANALYZE` (which runs the statement). Safe mode treats `EXPLAIN ANALYZE <stmt>` like
   `<stmt>`.
 - Grid edits run on the tab's session in one transaction (a savepoint when the user has one open, so
-  their changes stay uncommitted). They are parameterized (`?` per value),
-  keyed by the primary key, and every UPDATE/DELETE must hit exactly one row or the batch rolls
-  back. Only a page of a table with a primary key is editable; read-only connections refuse.
+  their changes stay uncommitted). They are parameterized (`?` per value, `IS NULL` for a NULL key
+  value), and every UPDATE/DELETE must hit exactly one row or the batch rolls back. The UI picks
+  the key (`editTarget` in `store/app.ts`): the primary key, else a unique key on NOT NULL columns,
+  else every column whose values compare exactly (not float, JSON or geometry). A page of a table
+  and a query result whose columns all come from one table (`ColumnMeta.source_*`) are editable;
+  views and read-only connections are not. A saved query result is updated in place, never run
+  again, since the query may be a script with writes.
+- Schema changes are a `SchemaChange` (create or drop a database, create, rename, empty or drop a
+  table, add, change or drop columns and indexes). The driver's `Dialect::schema_change` writes the
+  DDL; the engine checks each statement is exactly one statement (a typed type or default cannot
+  add another) and always answers `SchemaReview` first, whatever the environment. The client
+  resends with `confirmed: true`; the engine builds the statements again from the change and runs
+  them on the metadata session, never a tab's session, so a user's open transaction is not
+  committed by DDL. Each statement goes into the history. Column types and defaults are SQL as
+  typed; `ColumnInfo.default` is already SQL (`'text'`, `CURRENT_TIMESTAMP`), so editing a column
+  keeps its default and `ON UPDATE`.
 
 ## Safe mode
 
@@ -119,14 +135,16 @@ Favorites    LoadFavorites / SaveFavorite / DeleteFavorite → Favorites (the fu
 | Staging | Asks before `DROP`, `TRUNCATE`, and `UPDATE`/`DELETE` without `WHERE`. |
 | Production | Asks before every write, including grid edits; can be set read-only. The UI marks the connection in red. |
 
-Classification comes from `quarry-sql`; the decision is made by the engine.
+Classification comes from `quarry-sql`; the decision is made by the engine. Schema changes made
+from the UI are always reviewed as SQL first; the review warns on production and before anything
+that drops data.
 
 ## Storage
 
 | Data | Location |
 |---|---|
 | Connections | `connections.toml` in the OS config dir (`~/.config/quarry`, `~/Library/Application Support/quarry`). Never contains secrets. Has a `version` field for migrations. |
-| Favorites | `favorites.toml` in the same config dir. |
+| Favorites | `favorites.toml` in the same config dir. Version 2 adds connection favorites; version 1 files load as they are. |
 | Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL, and page with its filters and sort per tab. Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
 | Query history | `history.jsonl` in the data dir: SQL, connection, database, time, duration, first error line. Newest 5,000 kept. Never passwords. |
 | Secrets | Linux: Secret Service / Secret portal via `oo7`. macOS: Keychain via `security-framework`. Account `<connection uuid>` for the database password, `<connection uuid>:ssh` for the SSH password or key passphrase. |
@@ -134,7 +152,7 @@ Classification comes from `quarry-sql`; the decision is made by the engine.
 
 ## UI
 
-`ui/src` is organized by feature: `features/{sidebar,connections,tabs,editor,query,grid,structure,history,favorites,settings,welcome,window}`,
+`ui/src` is organized by feature: `features/{sidebar,connections,tabs,editor,query,grid,structure,schema,palette,history,favorites,settings,welcome,window}`,
 shared primitives in `components/ui`, global state in `store/app.ts` (zustand; it is also where engine
 events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 [STYLE-GUIDE.md](STYLE-GUIDE.md).
@@ -143,16 +161,39 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
   `localStorage`, so they apply before the engine answers. Anything another client would need goes
   through the engine instead.
 - **Shortcuts** are listed once in `ui/src/lib/shortcuts.ts`; Settings › Keyboard shows that list.
+  Settings has one search over every section; shortcuts match by name or by their keys.
   The webview's own reload is turned off: `F5` / `Ctrl/⌘+R` refresh the active tab instead.
 
 - **Editor:** CodeMirror 6 with SQL highlighting and schema-aware completion; `Ctrl/⌘+Enter` runs the
   statement under the cursor (range computed in Rust by `statement_at`).
 - **Grid:** row virtualization (`@tanstack/react-virtual`), sticky header and row-number column,
-  resizable columns, cell selection and copy. On an editable table page: double-click or Enter to
-  edit, Set NULL, add and delete rows, then Save (`Ctrl/⌘+S`) or Discard.
+  resizable columns. A block of cells is selected by dragging, Shift+click, Shift+arrows, the row
+  numbers or `Ctrl/⌘+A`, and copies as TSV, CSV or JSON (`lib/copy.ts`) or as INSERT (the engine
+  writes it in the connection's dialect). `Shift+Enter` opens the full value: long text, JSON
+  (formatted on request) or bytes as hex or text. On an editable result: double-click or Enter to
+  edit, Set NULL, add (table pages) and delete rows, then Save (`Ctrl/⌘+S`) or Discard.
 - **Table tabs:** a Data | Structure switch (columns, indexes, foreign keys, DDL) and a pager of
-  1,000 rows without a total count.
-- **Sidebar:** Connections, Favorites (pinned tables, saved queries) and History, with one filter box.
+  1,000 rows without a total count. Structure adds, changes and drops columns and indexes when
+  `Capabilities.schema_edit` is set and the connection is writable.
+- **Environment:** the toolbar shows a STAGING / PROD badge and the query view a line of that
+  color along its top. Tabs stay neutral, so color never reads as a state of the tab.
+- **Toolbar and results bar:** frequent SQL actions (run, stop, format, history, filter, favorite)
+  sit above the editor, and the ⋯ menu holds the occasional ones (explain, begin transaction,
+  export, import). An edit bar right above an editable grid groups Add row, Delete rows and the
+  pending changes with Discard / Save; the bar below the grid holds Data / Structure, result sets,
+  status and the pager. Export and import are also in the right-click menus of tables and
+  of the grid, and in the command palette. Their logic is not built yet (`transfer` in
+  `store/app.ts` says so). The star pins a table tab's table, or
+  saves a query tab's SQL, and is filled once it is a favorite.
+- **Quick open:** `Ctrl/⌘+P` finds loaded tables, views, routines and databases, connections and
+  favorites; `>` or `Ctrl/⌘+Shift+P` lists commands.
+- **Sidebar:** Connections and Favorites (pinned connections and tables, saved queries), with one
+  filter box: by name for favorites; for the tree, connections, databases and the tables of loaded
+  databases. Right-click menus pin connections, create databases and tables, refresh a database,
+  and rename, empty or drop tables.
+- **History:** a dialog from the editor toolbar (`Ctrl+H`, `⌘Y` on macOS), not a sidebar pane: it
+  is used while writing SQL. It searches the SQL typed in query tabs (table pages are not
+  recorded), shows the tab's connection by default, inserts at the cursor or opens a new tab.
 
 ## Packaging
 

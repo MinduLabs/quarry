@@ -3,7 +3,14 @@ import { Kbd } from "@/components/ui/Kbd";
 import { keysOf, SHORTCUTS, type ShortcutId } from "@/lib/shortcuts";
 import { useApp } from "@/store/app";
 
-const WELCOME: ShortcutId[] = ["newConnection", "newQuery", "run", "closeTab", "settings"];
+const WELCOME: ShortcutId[] = [
+  "quickOpen",
+  "commands",
+  "newConnection",
+  "newQuery",
+  "run",
+  "settings",
+];
 
 export function Welcome() {
   const hasConnections = useApp((s) => s.connections.length > 0);

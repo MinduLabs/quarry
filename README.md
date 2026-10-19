@@ -29,8 +29,10 @@ Download from [Releases](https://github.com/MinduLabs/quarry/releases):
 
 ## Build from source
 
-Requirements: Rust (stable), Node 20+ with pnpm, [just](https://github.com/casey/just), and Tauri's
-system dependencies — `libwebkit2gtk-4.1-dev` on Linux, Xcode Command Line Tools on macOS.
+Besides Rust, Node with pnpm and [just](https://github.com/casey/just), the app needs the system
+webview's libraries: WebKitGTK and `pkg-config` on Linux, Xcode Command Line Tools on macOS.
+`pnpm install` does not install them. Install commands for each platform are in
+[CONTRIBUTING.md › Development setup](CONTRIBUTING.md#development-setup). Then:
 
 ```bash
 pnpm install

@@ -8,6 +8,7 @@ mod browse;
 mod command;
 mod edit;
 mod event;
+mod schema;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -20,7 +21,7 @@ use quarry_driver_api::{
 };
 use quarry_model::{
     BrowseQuery, ConnId, ConnectionConfig, Environment, Favorite, HistoryEntry, RowChange,
-    TableRef, Value, Workspace,
+    SchemaChange, TableRef, Value, Workspace,
 };
 use quarry_store::{
     ConfigStore, FavoritesStore, HistoryStore, SecretKind, SecretStore, WorkspaceStore,
@@ -348,6 +349,32 @@ impl Engine {
                 self.apply_changes(tab, conn, table, changes, confirmed)
                     .await;
             }
+            Command::InsertSql {
+                request,
+                conn,
+                table,
+                columns,
+                rows,
+            } => {
+                let result = self.driver_of(conn).and_then(|driver| {
+                    schema::insert_text(driver.dialect(), &table, &columns, &rows)
+                });
+                let (text, error) = match result {
+                    Ok(text) => (Some(text), None),
+                    Err(error) => (None, Some(error)),
+                };
+                self.emit(Event::InsertSql {
+                    request,
+                    text,
+                    error,
+                });
+            }
+            Command::AlterSchema {
+                request,
+                conn,
+                change,
+                confirmed,
+            } => self.alter_schema(request, conn, change, confirmed).await,
             Command::Cancel { tab } => self.cancel(tab),
             Command::CloseTab { tab } => self.close_tab(tab).await,
             Command::LoadFavorites => self.load_favorites(),
@@ -365,8 +392,9 @@ impl Engine {
             Command::LoadHistory {
                 request,
                 query,
+                conn,
                 limit,
-            } => self.load_history(request, query.as_deref(), limit),
+            } => self.load_history(request, query.as_deref(), conn, limit),
             Command::ClearHistory { request } => {
                 if let Some(Err(err)) = self.history.as_ref().map(HistoryStore::clear) {
                     self.notice(
@@ -550,9 +578,15 @@ impl Engine {
 
     // ---------- History ----------
 
-    fn load_history(&self, request: RequestId, query: Option<&str>, limit: u32) {
+    fn load_history(
+        &self,
+        request: RequestId,
+        query: Option<&str>,
+        conn: Option<ConnId>,
+        limit: u32,
+    ) {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-        let entries = match self.history.as_ref().map(|h| h.search(query, limit)) {
+        let entries = match self.history.as_ref().map(|h| h.search(query, conn, limit)) {
             Some(Ok(entries)) => entries,
             Some(Err(err)) => {
                 self.notice(
@@ -1134,6 +1168,88 @@ impl Engine {
             tab,
             message: summary,
         });
+    }
+
+    /// Review (`confirmed: false`) or run a schema change. The statements are always rebuilt
+    /// here from `change`, never taken from the client.
+    async fn alter_schema(
+        &self,
+        request: RequestId,
+        conn: ConnId,
+        change: SchemaChange,
+        confirmed: bool,
+    ) {
+        let done = |change: SchemaChange, error: Option<String>| Event::SchemaChanged {
+            request,
+            conn,
+            change,
+            error,
+        };
+        let Some(config) = self.config_of(conn) else {
+            return self.emit(done(change, Some("Connection not found".into())));
+        };
+        if config.read_only {
+            return self.emit(done(change, Some("This connection is read-only.".into())));
+        }
+        let statements = match self
+            .driver_of(conn)
+            .and_then(|driver| schema::statements(driver.dialect(), &change))
+        {
+            Ok(statements) => statements,
+            Err(error) => return self.emit(done(change, Some(error))),
+        };
+        if !confirmed {
+            let warning = schema::warning(config.environment, &change);
+            return self.emit(Event::SchemaReview {
+                request,
+                conn,
+                change,
+                statements,
+                warning,
+            });
+        }
+
+        let meta = match self.meta_session(conn).await {
+            Ok(meta) => meta,
+            Err(error) => return self.emit(done(change, Some(error))),
+        };
+        let mut session = meta.lock().await;
+        let mut error = None;
+        for sql in statements {
+            let ran_at = chrono::Utc::now();
+            let started = std::time::Instant::now();
+            let result = run_plain(&mut **session, &sql).await;
+            let failed = result.err().map(|err| describe(&err));
+            self.record(HistoryEntry {
+                sql,
+                conn,
+                database: change.database().map(str::to_owned),
+                ran_at,
+                elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                error: failed
+                    .as_ref()
+                    .map(|e| e.lines().next().unwrap_or_default().to_owned()),
+            });
+            if failed.is_some() {
+                error = failed;
+                break;
+            }
+        }
+        // A new or dropped database changes the tree's first level.
+        let databases = match &change {
+            SchemaChange::CreateDatabase { .. } | SchemaChange::DropDatabase { .. } => {
+                session.list_databases().await.ok()
+            }
+            _ => None,
+        };
+        drop(session);
+        if let Some(databases) = databases {
+            self.emit(Event::Databases {
+                id: conn,
+                databases,
+            });
+        }
+        self.emit(done(change, error));
     }
 
     fn driver_of(&self, conn: ConnId) -> Result<&dyn quarry_driver_api::Driver, String> {
@@ -2027,6 +2143,149 @@ mod mysql_tests {
         next_matching(&events, |e| {
             matches!(e, Event::HistoryAdded { entry } if entry.sql == "DROP TABLE edit_scratch")
         })
+        .await;
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn schema_review_then_run_and_edits_without_a_key() {
+        use quarry_model::{CellValue, SchemaChange, Value};
+        let Some(config) = config() else { return };
+        let id = config.id;
+        let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            config_dir: Some(dir.clone()),
+            data_dir: Some(dir.clone()),
+            known_hosts: None,
+            disable_keyring: true,
+        })
+        .unwrap();
+        engine
+            .send(Command::SaveConnection {
+                config,
+                password: Some(Password("quarry".into())),
+                ssh_secret: None,
+                remember_password: false,
+            })
+            .unwrap();
+        next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+        let run = |sql: &str| Command::Run {
+            tab: 4,
+            conn: id,
+            database: Some("shop".into()),
+            sql: sql.into(),
+            confirmed: false,
+        };
+        engine
+            .send(run("DROP TABLE IF EXISTS nokey_scratch; \
+                 CREATE TABLE nokey_scratch (a INT NULL, b VARCHAR(10) NULL); \
+                 INSERT INTO nokey_scratch VALUES (1, NULL), (2, 'x'), (2, 'x');"))
+            .unwrap();
+        next_matching(&events, |e| {
+            matches!(e, Event::QueryFinished { tab: 4, .. })
+        })
+        .await;
+        let table = TableRef {
+            database: Some("shop".into()),
+            schema: None,
+            name: "nokey_scratch".into(),
+        };
+        let cell = |column: &str, value: Value| CellValue {
+            column: column.into(),
+            value,
+        };
+        let apply = |changes: Vec<RowChange>| Command::ApplyChanges {
+            tab: 4,
+            conn: id,
+            table: table.clone(),
+            changes,
+            confirmed: false,
+        };
+        // Matched by all columns, NULL included.
+        engine
+            .send(apply(vec![RowChange::Update {
+                key: vec![cell("a", Value::Int(1)), cell("b", Value::Null)],
+                set: vec![cell("b", Value::Text("one".into()))],
+            }]))
+            .unwrap();
+        let event = next_matching(&events, |e| {
+            matches!(
+                e,
+                Event::ChangesApplied { tab: 4, .. } | Event::ChangesFailed { tab: 4, .. }
+            )
+        })
+        .await;
+        assert!(matches!(event, Event::ChangesApplied { .. }), "{event:?}");
+        // Two identical rows: the change would hit both, so nothing is saved.
+        engine
+            .send(apply(vec![RowChange::Delete {
+                key: vec![cell("a", Value::Int(2)), cell("b", Value::Text("x".into()))],
+            }]))
+            .unwrap();
+        let event = next_matching(&events, |e| {
+            matches!(
+                e,
+                Event::ChangesApplied { tab: 4, .. } | Event::ChangesFailed { tab: 4, .. }
+            )
+        })
+        .await;
+        assert!(
+            matches!(&event, Event::ChangesFailed { error, .. } if error.contains("2 rows")),
+            "{event:?}"
+        );
+
+        // A schema change is only reviewed until it is confirmed.
+        let drop = SchemaChange::DropTable {
+            table: table.clone(),
+            view: false,
+        };
+        let alter = |confirmed| Command::AlterSchema {
+            request: 21,
+            conn: id,
+            change: drop.clone(),
+            confirmed,
+        };
+        engine.send(alter(false)).unwrap();
+        let Event::SchemaReview {
+            statements,
+            warning,
+            ..
+        } = next_matching(&events, |e| {
+            matches!(e, Event::SchemaReview { request: 21, .. })
+        })
+        .await
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            statements,
+            vec!["DROP TABLE `shop`.`nokey_scratch`".to_owned()]
+        );
+        assert!(warning.is_some());
+        engine.send(alter(true)).unwrap();
+        let Event::SchemaChanged { error, .. } = next_matching(&events, |e| {
+            matches!(e, Event::SchemaChanged { request: 21, .. })
+        })
+        .await
+        else {
+            unreachable!()
+        };
+        assert_eq!(error, None);
+        // Dropping it again fails: it is gone.
+        engine.send(alter(true)).unwrap();
+        let Event::SchemaChanged { error, .. } = next_matching(&events, |e| {
+            matches!(e, Event::SchemaChanged { request: 21, .. })
+        })
+        .await
+        else {
+            unreachable!()
+        };
+        assert!(error.is_some());
+        next_matching(
+            &events,
+            |e| matches!(e, Event::HistoryAdded { entry } if entry.error.is_some()),
+        )
         .await;
 
         std::fs::remove_dir_all(dir).unwrap();

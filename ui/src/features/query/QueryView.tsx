@@ -2,25 +2,29 @@ import { closeCompletion } from "@codemirror/autocomplete";
 import type { EditorView } from "@codemirror/view";
 import {
   AlignLeft,
+  Ellipsis,
   Filter,
-  Layers,
-  ListTree,
+  History,
   ListVideo,
+  Minus,
   Play,
   Plus,
   Square,
   Star,
 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EnvBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { DropdownMenuButton, type MenuItem } from "@/components/ui/Menu";
 import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { Spinner } from "@/components/ui/Spinner";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { cn } from "@/lib/cn";
+import { registerEditor } from "@/lib/editors";
 import { statementAt } from "@/lib/engine";
 import { keysOf, shortcutText } from "@/lib/shortcuts";
-import { editableKey, editCount, type Tab, useApp } from "@/store/app";
+import { editCount, editTarget, type Tab, useApp } from "@/store/app";
 import { formatSql } from "../editor/format";
 import { flashRange, SqlEditor } from "../editor/SqlEditor";
 import { SaveQueryDialog } from "../favorites/SaveQueryDialog";
@@ -44,22 +48,26 @@ export function QueryView({ tab }: { tab: Tab }) {
     editCell,
     addRow,
     toggleDeleteRow,
-    discardEdits,
     saveEdits,
     explain,
     toggleSort,
     beginTransaction,
     endTransaction,
+    copyInsert,
   } = useApp.getState();
   const connStatus = useApp((s) => s.nodes[tab.connId]?.status);
   const capabilities = connStatus?.kind === "connected" ? connStatus.capabilities : null;
   const structure = tab.browse !== null && tab.view === "structure";
-  const editKey = editableKey(tab, config?.read_only ?? true);
+  const target = editTarget(tab, config?.read_only ?? true);
   const pending = editCount(tab.edits);
   const editor = useRef<EditorView | null>(null);
   const [editorHeight, setEditorHeight] = useState(220);
   const [saving, setSaving] = useState(false);
   const [filtering, setFiltering] = useState(false);
+  /** Rows the grid selection spans, for the edit bar's Delete. */
+  const [rows, setRows] = useState<number[]>([]);
+
+  useEffect(() => () => registerEditor(tab.id, null), [tab.id]);
 
   const objects = db?.objects;
   const columns = db?.columns;
@@ -129,6 +137,52 @@ export function QueryView({ tab }: { tab: Tab }) {
     return cell && (cell.t === "text" || cell.t === "json") ? cell.v : null;
   })();
   const grids = tab.sets.map((set, index) => ({ set, index })).filter(({ set }) => set.columns);
+  const { transfer } = useApp.getState();
+  const exportResult = () =>
+    transfer(
+      "export",
+      tab.browse && tab.paged
+        ? { kind: "table", conn: tab.connId, table: tab.browse.table }
+        : { kind: "result", tab: tab.id },
+    );
+  // Actions used now and then: one menu instead of a button each.
+  const moreItems: MenuItem[] = [
+    ...(capabilities?.explain && !structure
+      ? [
+          {
+            label: "Explain plan",
+            disabled: tab.running,
+            onSelect: () => void explainFromEditor(),
+          },
+        ]
+      : []),
+    ...(capabilities?.transactions && !tab.txOpen
+      ? [
+          {
+            label: "Begin transaction",
+            disabled: tab.running,
+            onSelect: () => beginTransaction(tab.id),
+          },
+        ]
+      : []),
+    {
+      label: "Export…",
+      separatorBefore: true,
+      disabled: tab.running || !(active?.columns || tab.browse),
+      onSelect: exportResult,
+    },
+    ...(target?.canInsert && tab.browse
+      ? [
+          {
+            label: "Import…",
+            disabled: tab.running,
+            onSelect: () =>
+              tab.browse &&
+              transfer("import", { kind: "table", conn: tab.connId, table: tab.browse.table }),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div
@@ -140,6 +194,16 @@ export function QueryView({ tab }: { tab: Tab }) {
         }
       }}
     >
+      {/* Staging and production tabs carry their color along the top edge. */}
+      {config && config.environment !== "local" && (
+        <div
+          aria-hidden
+          className={cn(
+            "h-0.5 shrink-0",
+            config.environment === "production" ? "bg-env-production" : "bg-env-staging",
+          )}
+        />
+      )}
       {/* Toolbar */}
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-line border-b bg-surface px-2">
         <IconButton
@@ -180,13 +244,13 @@ export function QueryView({ tab }: { tab: Tab }) {
             <AlignLeft {...ICON} />
           </IconButton>
         )}
-        {!structure && capabilities?.explain && (
+        {!structure && (
           <IconButton
-            label="Explain plan"
-            disabled={tab.running}
-            onClick={() => void explainFromEditor()}
+            label="Query history…"
+            shortcut={keysOf("history")}
+            onClick={() => useApp.getState().setHistoryOpen(true)}
           >
-            <ListTree {...ICON} />
+            <History {...ICON} />
           </IconButton>
         )}
         {capabilities?.transactions &&
@@ -209,71 +273,27 @@ export function QueryView({ tab }: { tab: Tab }) {
                 Roll back
               </Button>
             </div>
-          ) : (
-            <IconButton
-              label="Begin transaction"
-              disabled={tab.running}
-              onClick={() => beginTransaction(tab.id)}
-            >
-              <Layers {...ICON} />
-            </IconButton>
-          ))}
-        {tab.browse && (
-          <SegmentedTabs
-            label="View"
-            value={tab.view}
-            onChange={(view) => setView(tab.id, view)}
-            className="ml-2 h-7 w-44"
-            tabs={[
-              { value: "data", label: "Data" },
-              { value: "structure", label: "Structure" },
-            ]}
-          />
-        )}
+          ) : null)}
         {tab.browse && !structure && (
           <IconButton
             label={filters > 0 ? `Filters (${filters})` : "Filter rows"}
             aria-pressed={showFilters}
-            className={cn(filters > 0 && "text-accent-text")}
+            className={cn("ml-1", filters > 0 && "text-accent-text")}
             onClick={() => setFiltering((f) => !f)}
           >
             <Filter {...ICON} />
           </IconButton>
         )}
-        {editKey && !structure && (
-          <IconButton label="Add row" disabled={tab.running} onClick={() => addRow(tab.id)}>
-            <Plus {...ICON} />
-          </IconButton>
-        )}
-        {pending > 0 && !structure && (
-          <div className="ml-2 flex items-center gap-1.5">
-            <span className="text-sm text-muted">
-              {pending} {pending === 1 ? "change" : "changes"}
-            </span>
-            <Button size="sm" disabled={tab.saving} onClick={() => discardEdits(tab.id)}>
-              Discard
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={tab.saving}
-              title={`Save (${shortcutText("saveChanges")})`}
-              onClick={() => saveEdits(tab.id)}
-            >
-              {tab.saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        )}
         <div className="flex-1" />
-        {!structure && (
-          <IconButton
-            label="Save query…"
-            disabled={!tab.sql.trim()}
-            onClick={() => setSaving(true)}
-          >
-            <Star {...ICON} />
-          </IconButton>
-        )}
+        <FavoriteButton tab={tab} onSaveQuery={() => setSaving(true)} />
+        <DropdownMenuButton
+          items={moreItems}
+          trigger={
+            <IconButton label="More">
+              <Ellipsis {...ICON} />
+            </IconButton>
+          }
+        />
         <div className="flex min-w-0 items-center gap-2 pr-1 text-sm text-muted">
           {config && <EnvBadge environment={config.environment} />}
           <span className="truncate">
@@ -285,7 +305,7 @@ export function QueryView({ tab }: { tab: Tab }) {
 
       {structure && (
         <div className="min-h-0 flex-1">
-          <StructureView structure={tab.structure} />
+          <StructureView tab={tab} />
         </div>
       )}
 
@@ -298,6 +318,7 @@ export function QueryView({ tab }: { tab: Tab }) {
           onRun={(all) => void runFromEditor(all)}
           onReady={(view) => {
             editor.current = view;
+            registerEditor(tab.id, view);
           }}
         />
       </div>
@@ -324,13 +345,19 @@ export function QueryView({ tab }: { tab: Tab }) {
             label="Plan view"
             value={tab.explain.json ? "tree" : "table"}
             onChange={(view) => tab.explain && explain(tab.id, tab.explain.sql, view === "tree")}
-            className="h-6 w-36"
+            size="sm"
+            className="w-32"
             tabs={[
               { value: "tree", label: "Tree" },
               { value: "table", label: "Table" },
             ]}
           />
         </div>
+      )}
+
+      {/* Edit bar: right above the grid, where the eye is while editing. */}
+      {target && !structure && active?.columns && planText === null && (
+        <EditBar tab={tab} canInsert={target.canInsert} matchAll={target.matchAll} rows={rows} />
       )}
 
       {/* Results */}
@@ -352,11 +379,12 @@ export function QueryView({ tab }: { tab: Tab }) {
             rows={active.rows}
             resetKey={tab.runId * 100 + tab.activeSet}
             editing={
-              editKey && !tab.running
+              target && !tab.running
                 ? {
                     edits: tab.edits ?? { updates: {}, inserts: [], deletes: [] },
                     onEdit: (row, col, value) => editCell(tab.id, row, col, value),
                     onToggleDelete: (row) => toggleDeleteRow(tab.id, row),
+                    onInsertRow: target.canInsert ? () => addRow(tab.id) : undefined,
                   }
                 : undefined
             }
@@ -368,6 +396,9 @@ export function QueryView({ tab }: { tab: Tab }) {
                   }
                 : undefined
             }
+            onCopyInsert={(names, rows) => copyInsert(tab.id, names, rows)}
+            onExport={exportResult}
+            onSelectRows={setRows}
           />
         )}
         {!tab.running && !tab.error && tab.sets.length > 0 && grids.length === 0 && (
@@ -397,26 +428,42 @@ export function QueryView({ tab }: { tab: Tab }) {
         )}
       </div>
 
-      {/* Status bar */}
-      <div className="flex h-6 shrink-0 items-center gap-3 border-line border-t bg-surface px-3 text-sm text-muted">
+      {/* Results bar: everything about the result below the grid, the SQL actions stay above. */}
+      <div className="flex h-8 shrink-0 items-center gap-3 border-line border-t bg-surface px-3 text-sm text-muted">
+        {tab.browse && (
+          <SegmentedTabs
+            label="View"
+            value={tab.view}
+            onChange={(view) => setView(tab.id, view)}
+            size="sm"
+            className="w-36 shrink-0"
+            tabs={[
+              { value: "data", label: "Data" },
+              { value: "structure", label: "Structure" },
+            ]}
+          />
+        )}
+        {!structure && grids.length > 1 && (
+          <div className="flex shrink-0 items-center gap-0.5">
+            {grids.map(({ index }, n) => (
+              <button
+                key={index}
+                type="button"
+                onClick={() => useApp.getState().setActiveSet(tab.id, index)}
+                className={cn(
+                  "h-6 rounded-md px-2 text-sm transition-colors-fast",
+                  index === tab.activeSet ? "bg-selected text-fg" : "hover:bg-hover",
+                )}
+              >
+                Result {n + 1}
+              </button>
+            ))}
+          </div>
+        )}
         {tab.running && <Spinner size={11} />}
-        <span className="truncate">{status(tab)}</span>
+        <span className="min-w-0 truncate">{status(tab)}</span>
         <div className="flex-1" />
         {!structure && <Pager tab={tab} />}
-        {grids.length > 1 &&
-          grids.map(({ index }, n) => (
-            <button
-              key={index}
-              type="button"
-              onClick={() => useApp.getState().setActiveSet(tab.id, index)}
-              className={cn(
-                "h-5 rounded-sm px-2 text-xs transition-colors-fast",
-                index === tab.activeSet ? "bg-selected text-fg" : "hover:bg-hover",
-              )}
-            >
-              Result {n + 1}
-            </button>
-          ))}
       </div>
       <SaveQueryDialog tabId={tab.id} open={saving} onClose={() => setSaving(false)} />
     </div>
@@ -438,4 +485,122 @@ function status(tab: Tab): string {
   if (tab.paged) return time;
   const more = set.truncated ? " (first rows only)" : "";
   return `${plural(set.rows.length, "row")}${more} · ${time}`;
+}
+
+/**
+ * The star: on a table tab it pins the table in Favorites (filled once pinned, click again to
+ * unpin); on a query tab it saves the SQL as a favorite (filled when this SQL is saved).
+ */
+function FavoriteButton({ tab, onSaveQuery }: { tab: Tab; onSaveQuery: () => void }) {
+  const table = tab.browse?.table.name ?? null;
+  const favorite = useApp((s) =>
+    s.favorites.find((f) =>
+      table !== null
+        ? f.conn === tab.connId &&
+          f.database === tab.database &&
+          f.item.kind === "table" &&
+          f.item.table === table
+        : f.conn === tab.connId && f.item.kind === "query" && f.item.sql === tab.sql,
+    ),
+  );
+  const { addTableFavorite, deleteFavorite, toast } = useApp.getState();
+  const label =
+    table !== null
+      ? favorite
+        ? "Remove from favorites"
+        : "Add table to favorites"
+      : favorite
+        ? "Saved in favorites"
+        : "Save query…";
+  return (
+    <IconButton
+      label={label}
+      aria-pressed={Boolean(favorite)}
+      onClick={() => {
+        if (table !== null) {
+          if (favorite) deleteFavorite(favorite.id);
+          else addTableFavorite(tab.connId, tab.database ?? "", table);
+        } else if (!tab.sql.trim()) {
+          toast("info", "Write a query first, then save it");
+        } else {
+          onSaveQuery();
+        }
+      }}
+    >
+      <Star
+        {...ICON}
+        fill={favorite ? "currentColor" : "none"}
+        className={cn(favorite && "text-warning")}
+      />
+    </IconButton>
+  );
+}
+
+/** Add and delete rows, then save or discard: one group, above the grid. */
+function EditBar({
+  tab,
+  canInsert,
+  matchAll,
+  rows,
+}: {
+  tab: Tab;
+  canInsert: boolean;
+  matchAll: boolean;
+  rows: number[];
+}) {
+  const { addRow, toggleDeleteRow, discardEdits, saveEdits } = useApp.getState();
+  const pending = editCount(tab.edits);
+  const deletes = tab.edits?.deletes ?? [];
+  const loaded = tab.sets[tab.activeSet]?.rows.length ?? 0;
+  const keeping = rows.length > 0 && rows.every((r) => r < loaded && deletes.includes(r));
+  const count = rows.length > 1 ? `${rows.length} rows` : "row";
+  const busy = tab.running || tab.saving;
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-1 border-line border-b bg-surface px-2 text-sm">
+      {canInsert && (
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => addRow(tab.id)}>
+          <Plus size={14} strokeWidth={1.75} />
+          Add row
+        </Button>
+      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={busy || rows.length === 0}
+        title={rows.length === 0 ? "Select rows in the grid first" : undefined}
+        onClick={() => {
+          // New rows are removed by position, so go from the bottom up.
+          for (const row of [...rows].reverse()) toggleDeleteRow(tab.id, row);
+        }}
+      >
+        <Minus size={14} strokeWidth={1.75} />
+        {keeping ? `Keep ${count}` : `Delete ${count}`}
+      </Button>
+      {pending > 0 && (
+        <div className="ml-2 flex items-center gap-1.5 border-line border-l pl-3">
+          <span className="text-fg">
+            {pending} {pending === 1 ? "change" : "changes"}
+          </span>
+          <Button size="sm" disabled={tab.saving} onClick={() => discardEdits(tab.id)}>
+            Discard
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={tab.saving}
+            title={`Save (${shortcutText("saveChanges")})`}
+            onClick={() => saveEdits(tab.id)}
+          >
+            {tab.saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      )}
+      <div className="flex-1" />
+      {matchAll && (
+        <Tooltip content="No primary key: rows are matched by all their values">
+          <span className="cursor-default text-faint">No key</span>
+        </Tooltip>
+      )}
+    </div>
+  );
 }

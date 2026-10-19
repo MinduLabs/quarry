@@ -12,6 +12,7 @@ export function TabBar() {
   const activeId = useApp((s) => s.activeTabId);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const canReopen = useApp((s) => s.closedTabs.length > 0);
+  const connections = useApp((s) => s.connections);
   const { selectTab, closeTab, closeTabs, reopenClosedTab, newQuery } = useApp.getState();
 
   const menu = (id: number): MenuItem[] => {
@@ -19,13 +20,11 @@ export function TabBar() {
     return [
       {
         label: "Reopen closed tab",
-        shortcut: keysOf("reopenTab"),
         disabled: !canReopen,
         onSelect: reopenClosedTab,
       },
       {
         label: "Close",
-        shortcut: keysOf("closeTab"),
         onSelect: () => closeTab(id),
         separatorBefore: true,
       },
@@ -52,12 +51,19 @@ export function TabBar() {
     >
       {tabs.map((tab) => {
         const active = tab.id === activeId;
+        const environment = connections.find((c) => c.id === tab.connId)?.environment;
+        const env = environment === "local" ? undefined : environment;
+        // The environment shows as a badge in the toolbar; tabs stay neutral and name it on hover.
         return (
           <ContextMenuArea key={tab.id} items={menu(tab.id)}>
             <div
               role="tab"
               aria-selected={active}
-              title={tab.title}
+              title={
+                env
+                  ? `${tab.title} · ${env === "production" ? "Production" : "Staging"}`
+                  : tab.title
+              }
               onMouseDown={(e) => {
                 if (e.button === 1) closeTab(tab.id);
                 else selectTab(tab.id);

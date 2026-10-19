@@ -6,10 +6,19 @@ export type ColumnInfo = { name: string,
  */
 type_name: string, nullable: boolean, 
 /**
- * Default expression as the server reports it (`NULL` default is `None`).
+ * Default as an SQL expression (`'new'`, `0`, `CURRENT_TIMESTAMP`), ready to put back in
+ * DDL. No default, or a `NULL` default, is `None`.
  */
 default: string | null, 
 /**
- * Extra attributes, e.g. `auto_increment`.
+ * Extra attributes as the server reports them, e.g. `auto_increment`.
  */
-extra: string | null, comment: string | null, };
+extra: string | null, comment: string | null, auto_increment: boolean, 
+/**
+ * `ON UPDATE` expression, e.g. `CURRENT_TIMESTAMP`.
+ */
+on_update: string | null, 
+/**
+ * Computed from other columns; its definition cannot be edited as a plain column.
+ */
+generated: boolean, };

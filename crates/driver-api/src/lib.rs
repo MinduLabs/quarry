@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaObject, TableColumns, TableInfo,
-    TableRef, Value,
+    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaChange, SchemaObject, TableColumns,
+    TableInfo, TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +133,18 @@ pub trait Dialect: Send + Sync {
     fn explain(&self, _statement: &str, _json: bool) -> Option<String> {
         None
     }
+    /// `value` as an SQL literal, for statements the user copies and runs themselves
+    /// (`Copy as INSERT`). Statements Quarry runs use parameters instead.
+    fn literal(&self, value: &Value) -> String {
+        ansi_literal(value)
+    }
+
+    /// The statements that make `change`, in order, or `None` when the driver cannot change
+    /// the schema. An error says what is wrong with the change (an empty name, …).
+    fn schema_change(&self, _change: &SchemaChange) -> Option<Result<Vec<String>, String>> {
+        None
+    }
+
     /// Quoted, qualified table name: `database.schema.name`, skipping the parts that are unset.
     fn qualify(&self, table: &quarry_model::TableRef) -> String {
         [&table.database, &table.schema, &Some(table.name.clone())]
@@ -141,6 +153,28 @@ pub trait Dialect: Send + Sync {
             .map(|part| self.quote_ident(part))
             .collect::<Vec<_>>()
             .join(".")
+    }
+}
+
+/// Standard SQL literal: strings in single quotes with `'` doubled, bytes as `X'..'`.
+pub fn ansi_literal(value: &Value) -> String {
+    let quoted = |text: &str| format!("'{}'", text.replace('\'', "''"));
+    match value {
+        Value::Null => "NULL".to_owned(),
+        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_owned(),
+        Value::Int(v) => v.to_string(),
+        Value::UInt(v) => v.to_string(),
+        Value::Float(v) if v.is_finite() => v.to_string(),
+        Value::Float(v) => quoted(&v.to_string()),
+        Value::Decimal(text) => text.clone(),
+        Value::Bytes(bytes) => {
+            let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+            format!("X'{hex}'")
+        }
+        Value::Timestamp(t) => quoted(&t.format("%Y-%m-%d %H:%M:%S%.f").to_string()),
+        Value::Text(text) | Value::Json(text) => quoted(text),
+        Value::Other { text, .. } => quoted(text),
+        other => quoted(&other.display(usize::MAX)),
     }
 }
 
@@ -217,5 +251,20 @@ impl DriverRegistry {
 
     pub fn ids(&self) -> impl Iterator<Item = DriverId> + '_ {
         self.drivers.iter().map(|d| d.id())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ansi_literals() {
+        assert_eq!(ansi_literal(&Value::Null), "NULL");
+        assert_eq!(ansi_literal(&Value::Int(-3)), "-3");
+        assert_eq!(ansi_literal(&Value::Decimal("1.50".into())), "1.50");
+        assert_eq!(ansi_literal(&Value::Text("it's".into())), "'it''s'");
+        assert_eq!(ansi_literal(&Value::Bytes(vec![0xde, 0x01])), "X'DE01'");
+        assert_eq!(ansi_literal(&Value::Float(f64::NAN)), "'NaN'");
     }
 }

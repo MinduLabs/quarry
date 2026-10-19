@@ -45,7 +45,7 @@ Use through Tailwind (`bg-surface`, `text-muted`, `border-line`, …) or `var(--
 | `bg-accent-soft` | Focus ring fill, subtle accent backgrounds |
 | `text-danger`, `text-warning`, `text-success` | Status text and icons |
 | `bg-danger-solid` | Destructive button fill (white text) |
-| `bg-env-local`, `bg-env-staging`, `bg-env-production` | Environment badges and dots |
+| `bg-env-local`, `bg-env-staging`, `bg-env-production` | Environment badges, dots, and the 2px line along the top of a staging or production query view |
 | `bg-cell-modified`, `bg-cell-inserted`, `bg-cell-deleted` | Pending grid edits |
 | `bg-kbd`, `text-kbd-fg`, `border-kbd-border`, `kbd-edge` | Key caps (`Kbd`) |
 
@@ -81,19 +81,24 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 ┌─────────────┬────────────────────────────────────────────────┐
 │ ● ● ●       │ Tab bar                                    36px │
 │ Sidebar     ├────────────────────────────────────────────────┤
-│ 248px       │ Toolbar: run · stop        conn · db · ENV 36px │
+│ 248px       │ Toolbar (SQL): run · stop · …  ☆ ENV conn · db 36px │
 │ (200–400,   ├────────────────────────────────────────────────┤
 │ resizable)  │ SQL editor                                     │
 │             ├──────────────── drag handle ───────────────────┤
+│             │ Edit bar (editable results): + − · changes 32px │
+│             ├────────────────────────────────────────────────┤
 │             │ Result grid                                    │
 │             ├────────────────────────────────────────────────┤
-│             │ Status bar: rows · time · result tabs     24px │
+│             │ Results bar: Data|Structure · results · status · pager 32px │
 └─────────────┴────────────────────────────────────────────────┘
 ```
 
 - The sidebar's top row is a window drag region (`data-tauri-drag-region`). On macOS the window buttons sit at the left of that row, so it holds nothing there; on Linux the row shows the app name and the window buttons are drawn at the right of the tab bar.
 - Below it: a two-way switch (Connections / Favorites) and a Filter box (32px, 8px radius).
 - The sidebar hides and shows with the toggle next to the window buttons (`Ctrl/⌘ B`). It slides with a `transform`; the content area resizes at once. The toggle is drawn at the window level so it stays reachable while the sidebar is hidden.
+- Above the editor, the toolbar holds what acts on SQL. Right above the grid, the edit bar (only for editable results) groups Add row, Delete rows and the pending changes with Discard / Save, where the eye is while editing. Below the grid, the results bar holds the view switch, result sets, status and pages.
+- Only frequent actions get a button. Occasional ones go in the toolbar's ⋯ menu (`DropdownMenuButton`), the right-click menus and the command palette.
+- Tabs stay neutral: the environment shows as the badge in the toolbar and a 2px line along the top of the query view, never as a tab color.
 - No tabs open → centered empty state in the content area.
 
 ## Motion
@@ -119,7 +124,7 @@ Patterns (utility classes in `base.css`):
 
 **Buttons** — `primary` (accent fill, one per view), `secondary` (surface fill + hairline), `ghost` (transparent, toolbars), `danger` (destructive confirmations only). Text in sentence case: "New connection", "Run".
 
-**Shortcuts** — always drawn with `Kbd`: one raised key cap per key (18px, 4px radius, a darker bottom edge, like macOS), in tooltips, menus, the welcome screen and Settings › Keyboard; never as plain text. Every shortcut is listed once in `ui/src/lib/shortcuts.ts` with platform-neutral keys (`Mod` = ⌘ on macOS, Ctrl elsewhere); `Kbd` prints them the platform's way: `⌘ ⇧ T` with symbols in macOS order (⌃ ⌥ ⇧ ⌘), `Ctrl Shift T` on Linux. A `title` attribute uses `shortcutText()`.
+**Shortcuts** — always drawn with `Kbd`: one raised key cap per key (18px, 4px radius, a darker bottom edge, like macOS), in tooltips, the command palette, the welcome screen and Settings › Keyboard; never as plain text. Context menus show names only, no shortcuts. Every shortcut is listed once in `ui/src/lib/shortcuts.ts` with platform-neutral keys (`Mod` = ⌘ on macOS, Ctrl elsewhere); `Kbd` prints them the platform's way: `⌘ ⇧ T` with symbols in macOS order (⌃ ⌥ ⇧ ⌘), `Ctrl Shift T` on Linux. A `title` attribute uses `shortcutText()`.
 
 **Themes** — System (follows the OS), Light or Dark, chosen in Settings. `lib/theme.ts` sets `data-theme` on the root element; the dark tokens sit under `:root[data-theme="dark"]`.
 
@@ -129,7 +134,7 @@ Patterns (utility classes in `base.css`):
 
 **Tab bar** — tabs 28px tall inside the 36px bar, max 220px wide, title truncates; active tab `bg-app` with a hairline, inactive `text-muted`. Running tabs show a spinner instead of the close icon.
 
-**Data grid** — mono 12px; numbers right-aligned with tabular figures; `NULL` in italic `text-faint`; horizontal hairlines only, vertical hairlines in the header; sticky header and row-number gutter; selected cell: 1px accent outline + `bg-selected`; long values truncate with "…".
+**Data grid** — mono 12px; numbers right-aligned with tabular figures; `NULL` in italic `text-faint`; horizontal hairlines only, vertical hairlines in the header; sticky header and row-number gutter; selected cells: `bg-selected`, the active one also a 1px accent outline; long values truncate with "…" and open in full with `Shift+Enter`.
 
 **SQL editor** — CodeMirror 6, theme built from the tokens (`ui/src/features/editor/theme.ts`). Current statement gets a faint `bg-accent-soft` band; errors get a wavy `danger` underline.
 

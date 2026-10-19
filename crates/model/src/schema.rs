@@ -37,6 +37,9 @@ pub struct TableInfo {
     #[serde(default)]
     #[ts(type = "number | null")]
     pub estimated_rows: Option<u64>,
+    /// The object is a view, so its rows are not edited directly.
+    #[serde(default)]
+    pub view: bool,
 }
 
 /// Column names of one table, for SQL completion.
@@ -54,11 +57,20 @@ pub struct ColumnInfo {
     /// Full type as declared, e.g. `varchar(255)` or `int unsigned`.
     pub type_name: String,
     pub nullable: bool,
-    /// Default expression as the server reports it (`NULL` default is `None`).
+    /// Default as an SQL expression (`'new'`, `0`, `CURRENT_TIMESTAMP`), ready to put back in
+    /// DDL. No default, or a `NULL` default, is `None`.
     pub default: Option<String>,
-    /// Extra attributes, e.g. `auto_increment`.
+    /// Extra attributes as the server reports them, e.g. `auto_increment`.
     pub extra: Option<String>,
     pub comment: Option<String>,
+    #[serde(default)]
+    pub auto_increment: bool,
+    /// `ON UPDATE` expression, e.g. `CURRENT_TIMESTAMP`.
+    #[serde(default)]
+    pub on_update: Option<String>,
+    /// Computed from other columns; its definition cannot be edited as a plain column.
+    #[serde(default)]
+    pub generated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

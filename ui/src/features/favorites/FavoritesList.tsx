@@ -1,11 +1,11 @@
-import { FileCode2, Star, Table2 } from "lucide-react";
+import { FileCode2, Server, Star, Table2 } from "lucide-react";
 import { ContextMenuArea } from "@/components/ui/Menu";
 import { TreeRow } from "@/components/ui/TreeRow";
 import { useApp } from "@/store/app";
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
 
-/** Pinned tables and saved queries. `query` (the sidebar filter) matches names. */
+/** Pinned connections and tables, and saved queries. `query` (the sidebar filter) matches names. */
 export function FavoritesList({ query }: { query: string }) {
   const favorites = useApp((s) => s.favorites);
   const connections = useApp((s) => s.connections);
@@ -21,7 +21,7 @@ export function FavoritesList({ query }: { query: string }) {
           {needle ? "No matching favorites" : "No favorites yet"}
         </p>
         <p className="text-sm text-muted">
-          Right-click a table, or use Save query… in a query tab.
+          Right-click a connection or a table, or use Save query… in a query tab.
         </p>
       </div>
     );
@@ -47,11 +47,23 @@ export function FavoritesList({ query }: { query: string }) {
           >
             <TreeRow
               depth={0}
-              icon={favorite.item.kind === "table" ? <Table2 {...ICON} /> : <FileCode2 {...ICON} />}
-              label={favorite.name}
+              icon={
+                favorite.item.kind === "connection" ? (
+                  <Server {...ICON} />
+                ) : favorite.item.kind === "table" ? (
+                  <Table2 {...ICON} />
+                ) : (
+                  <FileCode2 {...ICON} />
+                )
+              }
+              label={favorite.item.kind === "connection" ? conn : favorite.name}
               title={favorite.item.kind === "query" ? favorite.item.sql : where}
               onClick={() => openFavorite(favorite)}
-              trailing={<span className="truncate text-faint text-xs">{where}</span>}
+              trailing={
+                favorite.item.kind === "connection" ? undefined : (
+                  <span className="truncate text-faint text-xs">{where}</span>
+                )
+              }
             />
           </ContextMenuArea>
         );

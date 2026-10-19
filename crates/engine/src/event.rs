@@ -1,6 +1,6 @@
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnId, ConnectionConfig, Favorite, HistoryEntry, SchemaObject,
-    TableColumns, TableInfo, Value, Workspace,
+    Capabilities, ColumnMeta, ConnId, ConnectionConfig, Favorite, HistoryEntry, SchemaChange,
+    SchemaObject, TableColumns, TableInfo, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -156,6 +156,29 @@ pub enum Event {
     ChangesFailed {
         tab: TabId,
         error: String,
+    },
+
+    /// Answer to `InsertSql`: either `text` or `error` is set.
+    InsertSql {
+        request: RequestId,
+        text: Option<String>,
+        error: Option<String>,
+    },
+    /// The statements a schema change would run. Nothing ran yet: resend `AlterSchema` with
+    /// `confirmed: true` to run them. `warning` says what is risky about it.
+    SchemaReview {
+        request: RequestId,
+        conn: ConnId,
+        change: SchemaChange,
+        statements: Vec<String>,
+        warning: Option<String>,
+    },
+    /// A schema change ran (`error: null`), failed, or was refused before running.
+    SchemaChanged {
+        request: RequestId,
+        conn: ConnId,
+        change: SchemaChange,
+        error: Option<String>,
     },
 
     /// The full favorites list, re-sent after every change.

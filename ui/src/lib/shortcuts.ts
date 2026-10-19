@@ -14,6 +14,8 @@ export const SHORTCUTS = {
   refresh: { label: "Refresh results", group: "General", keys: ["Mod", "R"] },
   toggleSidebar: { label: "Show or hide the sidebar", group: "General", keys: ["Mod", "B"] },
   settings: { label: "Settings", group: "General", keys: ["Mod", ","] },
+  quickOpen: { label: "Open a table or connection", group: "General", keys: ["Mod", "P"] },
+  commands: { label: "Show all commands", group: "General", keys: ["Mod", "Shift", "P"] },
 
   run: { label: "Run statement", group: "Editor", keys: ["Mod", "Enter"] },
   runAll: { label: "Run all", group: "Editor", keys: ["Mod", "Shift", "Enter"] },
@@ -21,9 +23,14 @@ export const SHORTCUTS = {
   complete: { label: "Show completions", group: "Editor", keys: ["Ctrl", "Space"] },
   comment: { label: "Comment or uncomment", group: "Editor", keys: ["Mod", "/"] },
   find: { label: "Find in the editor", group: "Editor", keys: ["Mod", "F"] },
+  // ⌘H hides the app on macOS, so the Mac uses ⌘Y (Safari's history key).
+  history: { label: "Query history", group: "Editor", keys: ["Mod", isMac ? "Y" : "H"] },
 
   editCell: { label: "Edit cell", group: "Results", keys: ["Enter"] },
-  copyCell: { label: "Copy cell", group: "Results", keys: ["Mod", "C"] },
+  openValue: { label: "Open the full value", group: "Results", keys: ["Shift", "Enter"] },
+  selectAll: { label: "Select all cells", group: "Results", keys: ["Mod", "A"] },
+  extendSelection: { label: "Extend the selection", group: "Results", keys: ["Shift", "↓"] },
+  copyCell: { label: "Copy selection", group: "Results", keys: ["Mod", "C"] },
   deleteRow: { label: "Delete or keep row", group: "Results", keys: ["Delete"] },
   saveChanges: { label: "Save changes", group: "Results", keys: ["Mod", "S"] },
 } as const satisfies Record<string, { label: string; group: string; keys: readonly string[] }>;

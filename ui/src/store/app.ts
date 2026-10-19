@@ -7,6 +7,7 @@ import type { BrowsePage } from "@/bindings/BrowsePage";
 import type { BrowseQuery } from "@/bindings/BrowseQuery";
 import type { Capabilities } from "@/bindings/Capabilities";
 import type { CellValue } from "@/bindings/CellValue";
+import type { ColumnInfo } from "@/bindings/ColumnInfo";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { Event } from "@/bindings/Event";
@@ -14,9 +15,11 @@ import type { Favorite } from "@/bindings/Favorite";
 import type { HistoryEntry } from "@/bindings/HistoryEntry";
 import type { ObjectKind } from "@/bindings/ObjectKind";
 import type { RowChange } from "@/bindings/RowChange";
+import type { SchemaChange } from "@/bindings/SchemaChange";
 import type { SchemaObject } from "@/bindings/SchemaObject";
 import type { TableColumns } from "@/bindings/TableColumns";
 import type { TableInfo } from "@/bindings/TableInfo";
+import type { TableRef } from "@/bindings/TableRef";
 import type { Value } from "@/bindings/Value";
 import type { Workspace } from "@/bindings/Workspace";
 import { send } from "@/lib/engine";
@@ -72,14 +75,18 @@ export interface ExplainState {
   json: boolean;
 }
 
-/** Rows of history shown in the sidebar. */
+/** Rows of history shown in the history dialog. */
 export const HISTORY_LIMIT = 200;
 
 export interface HistoryState {
   entries: HistoryEntry[];
   loaded: boolean;
   query: string;
+  /** Only this connection's queries; `null` for every connection. */
+  conn: string | null;
 }
+
+export type SidebarPane = "connections" | "favorites";
 
 /** Grid edits not yet saved. Row and column numbers index the shown page. */
 export interface Edits {
@@ -97,19 +104,114 @@ export function editCount(edits: Edits | null): number {
   return Object.keys(edits.updates).length + edits.inserts.length + edits.deletes.length;
 }
 
-/**
- * Column positions of the primary key when the shown page can be edited: a page of a table (not
- * a typed query) with a primary key whose columns are all in the result, on a writable
- * connection. `null` otherwise.
- */
-export function editableKey(tab: Tab, readOnly: boolean): number[] | null {
-  const set = tab.sets[tab.activeSet];
-  const key = tab.structure?.info?.primary_key ?? [];
-  if (readOnly || !tab.browse || !tab.paged || !set?.columns || key.length === 0) return null;
-  const names = set.columns.map((c) => c.source_column ?? c.name);
-  const positions = key.map((k) => names.indexOf(k));
-  return positions.every((p) => p >= 0) ? positions : null;
+/** The table a typed query's result set comes from, when every column comes from one table. */
+export interface ResultTable {
+  set: number;
+  table: TableRef;
+  info: TableInfo | null;
 }
+
+/** Where grid edits of the shown result go, and how rows are matched. */
+export interface EditTarget {
+  table: TableRef;
+  /** Result columns that identify a row. */
+  key: number[];
+  /** No primary or unique key: rows are matched by the values of `key` (several columns), and
+   * the engine refuses a change that would hit more than one row. */
+  matchAll: boolean;
+  /** New rows can be added (table pages only; a query result has no place to show them). */
+  canInsert: boolean;
+}
+
+/** Column types whose values do not compare exactly, so they cannot match a row. */
+const INEXACT_TYPE = /float|double|real|json|geometry|point|linestring|polygon/i;
+
+/**
+ * Where edits of the shown result go: a page of a table, or a query result whose columns all
+ * come from one table. Rows are matched by the primary key, else by a unique key on NOT NULL
+ * columns, else by all comparable columns. `null` when the result can't be edited.
+ */
+export function editTarget(tab: Tab, readOnly: boolean): EditTarget | null {
+  const set = tab.sets[tab.activeSet];
+  if (readOnly || !set?.columns) return null;
+  let table: TableRef;
+  let info: TableInfo | null | undefined;
+  let canInsert: boolean;
+  if (tab.browse && tab.paged) {
+    table = tab.browse.table;
+    info = tab.structure?.info;
+    canInsert = true;
+  } else if (!tab.explain && tab.resultTable?.set === tab.activeSet) {
+    table = tab.resultTable.table;
+    info = tab.resultTable.info;
+    canInsert = false;
+  } else {
+    return null;
+  }
+  if (!info || info.view) return null;
+  const names = set.columns.map((c) => c.source_column ?? c.name);
+  const positions = (columns: string[]) => {
+    const found = columns.map((k) => names.indexOf(k));
+    return found.every((p) => p >= 0) ? found : null;
+  };
+  if (info.primary_key.length > 0) {
+    const key = positions(info.primary_key);
+    return key && { table, key, matchAll: false, canInsert };
+  }
+  const notNull = new Set(info.columns.filter((c) => !c.nullable).map((c) => c.name));
+  for (const index of info.indexes) {
+    if (!index.unique || !index.columns.every((c) => notNull.has(c))) continue;
+    const key = positions(index.columns);
+    if (key) return { table, key, matchAll: false, canInsert };
+  }
+  const types = new Map(info.columns.map((c) => [c.name, c.type_name]));
+  const key = names
+    .map((name, i) => ({ name, i }))
+    .filter(({ name }) => types.has(name) && !INEXACT_TYPE.test(types.get(name) ?? ""))
+    .map(({ i }) => i);
+  return key.length > 0 ? { table, key, matchAll: true, canInsert } : null;
+}
+
+/** The one table every column of `set` comes from, or null. */
+function sourceTable(set: ResultSet | undefined, database: string | null): TableRef | null {
+  const columns = set?.columns;
+  const first = columns?.[0];
+  if (!columns || !first?.source_table) return null;
+  const same = columns.every(
+    (c) =>
+      c.source_table === first.source_table &&
+      c.source_database === first.source_database &&
+      c.source_column,
+  );
+  if (!same) return null;
+  return { database: first.source_database ?? database, schema: null, name: first.source_table };
+}
+
+/** What a schema form dialog edits. */
+export type SchemaForm =
+  | { kind: "column"; conn: string; table: TableRef; column: ColumnInfo | null }
+  | { kind: "index"; conn: string; table: TableRef; columns: string[] }
+  | { kind: "create_table"; conn: string; database: string }
+  | { kind: "rename_table"; conn: string; table: TableRef }
+  | { kind: "create_database"; conn: string };
+
+/** Statements of a schema change, shown before they run. */
+export interface SchemaReview {
+  request: number;
+  conn: string;
+  change: SchemaChange;
+  statements: string[];
+  warning: string | null;
+  running: boolean;
+  error: string | null;
+}
+
+export type PaletteMode = "open" | "commands";
+
+/** What an import or export works on. */
+export type TransferTarget =
+  | { kind: "table"; conn: string; table: TableRef }
+  | { kind: "result"; tab: number };
 
 export interface Tab {
   id: number;
@@ -143,6 +245,8 @@ export interface Tab {
   explain: ExplainState | null;
   /** The SQL last run in this tab, for Refresh. */
   lastRun: string | null;
+  /** The table the shown query result comes from, which makes it editable. */
+  resultTable: ResultTable | null;
 }
 
 function blankTab(
@@ -166,6 +270,7 @@ function blankTab(
     txOpen: false,
     explain: null,
     lastRun: null,
+    resultTable: null,
   };
 }
 
@@ -292,13 +397,40 @@ interface State {
   discardEdits: (id: number) => void;
   saveEdits: (id: number, confirmed?: boolean) => void;
   answerChangesConfirm: (save: boolean) => void;
+  /** Copy rows as one INSERT statement (built by the engine for the connection's dialect). */
+  copyInsert: (id: number, columns: string[], rows: Value[][]) => void;
+
+  schemaForm: SchemaForm | null;
+  openSchemaForm: (form: SchemaForm | null) => void;
+  schemaReview: SchemaReview | null;
+  /** Ask the engine for the statements of `change`; they are shown before anything runs. */
+  alterSchema: (conn: string, change: SchemaChange) => void;
+  /** Run the reviewed change, or close the review (back to its form, if one made it). */
+  answerSchemaReview: (run: boolean) => void;
+  /** Load a database's objects again, keeping the shown ones until the new list arrives. */
+  reloadObjects: (connId: string, database: string) => void;
+  /** Open a table's Structure view. */
+  openStructure: (connId: string, database: string, name: string) => void;
+
+  palette: PaletteMode | null;
+  setPalette: (mode: PaletteMode | null) => void;
+  /** Import into, or export from, a table or a tab's result. Not built yet: the buttons and menu
+   * items are in place and call this. */
+  transfer: (kind: "import" | "export", target: TransferTarget) => void;
 
   addTableFavorite: (connId: string, database: string, table: string) => void;
   saveQueryFavorite: (tabId: number, name: string) => void;
   deleteFavorite: (id: string) => void;
   openFavorite: (favorite: Favorite) => void;
 
-  loadHistory: (query: string) => void;
+  loadHistory: (query: string, conn: string | null) => void;
+  /** The query history dialog, opened from the editor toolbar. */
+  historyOpen: boolean;
+  setHistoryOpen: (open: boolean) => void;
+  sidebarPane: SidebarPane;
+  setSidebarPane: (pane: SidebarPane) => void;
+  /** Pin the connection in Favorites, or unpin it. */
+  toggleConnectionFavorite: (connId: string) => void;
   clearHistory: () => void;
   /** Open `sql` in a new tab on that connection and database (history, favorites). */
   openSql: (connId: string, database: string | null, sql: string, title?: string) => void;
@@ -339,8 +471,15 @@ let nextRequest = 1;
 /** Only the newest history request is shown, so typing fast never shows stale results. */
 let historyRequest = 0;
 
-/** Table structure requests waiting for `TableInfo`: request id → tab id. */
-const structureRequests = new Map<number, number>();
+/** Table structure requests waiting for `TableInfo`: request id → tab id, and whether the
+ * structure is the browsed table's or the source table of a query result. */
+const structureRequests = new Map<number, { tab: number; kind: "browse" | "result" }>();
+
+/** `InsertSql` requests waiting for their text: request id → rows copied. */
+const insertRequests = new Map<number, number>();
+
+/** Schema changes waiting for their first `SchemaReview` or `SchemaChanged`. */
+const schemaRequests = new Set<number>();
 
 /** Workspace writes waiting for `WorkspaceSaved`, by request id. */
 const pendingSaves = new Map<number, () => void>();
@@ -424,8 +563,65 @@ export const useApp = create<State>()((set, get) => {
     if (!tab?.browse) return;
     patchTab(id, () => ({ structure: { loading: true, info: null, error: null } }));
     const request = nextRequest++;
-    structureRequests.set(request, id);
+    structureRequests.set(request, { tab: id, kind: "browse" });
     send({ type: "LoadTableInfo", request, conn: tab.connId, table: tab.browse.table });
+  };
+
+  /** Find the table the shown query result comes from and load its keys, so it can be edited. */
+  const detectResultTable = (id: number) => {
+    const tab = get().tabs.find((t) => t.id === id);
+    if (!tab || tab.paged || tab.explain) return;
+    const table = sourceTable(tab.sets[tab.activeSet], tab.database);
+    if (!table) {
+      if (tab.resultTable) patchTab(id, () => ({ resultTable: null }));
+      return;
+    }
+    const known = tab.resultTable;
+    const same =
+      known &&
+      known.table.name === table.name &&
+      known.table.database === table.database &&
+      known.info !== null;
+    patchTab(id, () => ({
+      resultTable: { set: tab.activeSet, table, info: same ? known.info : null },
+    }));
+    if (same) return;
+    const request = nextRequest++;
+    structureRequests.set(request, { tab: id, kind: "result" });
+    send({ type: "LoadTableInfo", request, conn: tab.connId, table });
+  };
+
+  /** Show what a successful schema change changed: the tree, open structures and pages. */
+  const afterSchemaChange = (conn: string, change: SchemaChange) => {
+    if (change.kind === "create_database" || change.kind === "drop_database") return;
+    const { table } = change;
+    const database = table.database;
+    if (database) get().reloadObjects(conn, database);
+    if (change.kind === "create_table") return;
+    const onTable = (t: Tab) =>
+      t.connId === conn &&
+      t.browse?.table.name === table.name &&
+      t.browse.table.database === table.database;
+    const tabs = get().tabs.filter(onTable);
+    if (change.kind === "drop_table") {
+      get().closeTabs(tabs.map((t) => t.id));
+      return;
+    }
+    if (change.kind === "rename_table") {
+      const renamed = { ...table, name: change.new_name };
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          onTable(t) && t.browse
+            ? { ...t, title: change.new_name, browse: { ...t.browse, table: renamed } }
+            : t,
+        ),
+      }));
+      return;
+    }
+    for (const tab of tabs) {
+      if (change.kind === "alter_table") loadStructure(tab.id);
+      if (tab.paged && editCount(tab.edits) === 0) get().browse(tab.id, tab.browse?.offset ?? 0);
+    }
   };
 
   const openTab = (
@@ -474,7 +670,11 @@ export const useApp = create<State>()((set, get) => {
     confirm: null,
     changesConfirm: null,
     closeConfirm: null,
-    history: { entries: [], loaded: false, query: "" },
+    history: { entries: [], loaded: false, query: "", conn: null },
+    historyOpen: false,
+    setHistoryOpen: (historyOpen) => set({ historyOpen }),
+    sidebarPane: "connections",
+    setSidebarPane: (sidebarPane) => set({ sidebarPane }),
     favorites: [],
     toasts: [],
 
@@ -552,25 +752,34 @@ export const useApp = create<State>()((set, get) => {
         case "Databases": {
           const config = get().connections.find((c) => c.id === event.id);
           const preferred = config?.database ?? null;
+          // A refreshed list (after creating or dropping a database) keeps what is open.
+          const known = new Map(
+            (get().nodes[event.id]?.databases ?? []).map((db) => [db.name, db] as const),
+          );
+          const fresh = known.size === 0;
           patchNode(event.id, () => ({
-            databases: event.databases.map((name) => ({
-              name,
-              expanded: name === preferred,
-              loading: name === preferred,
-              objects: null,
-              error: null,
-              columns: null,
-            })),
+            databases: event.databases.map(
+              (name) =>
+                known.get(name) ?? {
+                  name,
+                  expanded: fresh && name === preferred,
+                  loading: fresh && name === preferred,
+                  objects: null,
+                  error: null,
+                  columns: null,
+                },
+            ),
           }));
-          if (preferred && event.databases.includes(preferred)) {
+          if (fresh && preferred && event.databases.includes(preferred)) {
             send({ type: "LoadObjects", id: event.id, database: preferred });
           }
           break;
         }
         case "Objects":
-          patchDb(event.id, event.database, () => ({
+          // A failed reload keeps the objects already shown.
+          patchDb(event.id, event.database, (db) => ({
             loading: false,
-            objects: event.objects,
+            objects: event.objects ?? db.objects,
             error: event.error,
           }));
           // Completion works without columns, so they load after the tree is shown.
@@ -622,6 +831,7 @@ export const useApp = create<State>()((set, get) => {
               .pop();
             return { running: false, elapsedMs: event.elapsed_ms, activeSet: lastGrid ?? 0 };
           });
+          detectResultTable(event.tab);
           break;
         case "QueryFailed":
           patchTab(event.tab, () => ({
@@ -658,10 +868,17 @@ export const useApp = create<State>()((set, get) => {
           break;
         }
         case "TableInfo": {
-          const tab = structureRequests.get(event.request);
+          const pending = structureRequests.get(event.request);
           structureRequests.delete(event.request);
-          if (tab === undefined) break;
-          patchTab(tab, () => ({
+          if (pending === undefined) break;
+          if (pending.kind === "result") {
+            // Without the table's keys the result just stays read-only.
+            patchTab(pending.tab, (t) => ({
+              resultTable: t.resultTable && { ...t.resultTable, info: event.info },
+            }));
+            break;
+          }
+          patchTab(pending.tab, () => ({
             structure: { loading: false, info: event.info, error: event.error },
           }));
           break;
@@ -670,10 +887,15 @@ export const useApp = create<State>()((set, get) => {
           set({ changesConfirm: { tab: event.tab, message: event.message } });
           break;
         case "ChangesApplied": {
+          const tab = get().tabs.find((t) => t.id === event.tab);
+          if (tab && !tab.paged) {
+            // A query result is not run again (it may be a script with writes): show the saved
+            // values in place instead.
+            patchTab(tab.id, (t) => ({ sets: withEdits(t.sets, t.activeSet, t.edits) }));
+          }
           patchTab(event.tab, () => ({ edits: null, saving: false }));
           get().toast("success", event.message);
-          const tab = get().tabs.find((t) => t.id === event.tab);
-          if (tab?.browse) get().browse(tab.id, tab.browse.offset);
+          if (tab?.browse && tab.paged) get().browse(tab.id, tab.browse.offset);
           break;
         }
         case "ChangesFailed":
@@ -693,11 +915,59 @@ export const useApp = create<State>()((set, get) => {
           set((s) => {
             const { history } = s;
             const q = history.query.trim().toLowerCase();
-            if (!history.loaded || (q && !event.entry.sql.toLowerCase().includes(q))) return {};
+            const other = history.conn !== null && history.conn !== event.entry.conn;
+            if (!history.loaded || other || (q && !event.entry.sql.toLowerCase().includes(q))) {
+              return {};
+            }
             const entries = [event.entry, ...history.entries].slice(0, HISTORY_LIMIT);
             return { history: { ...history, entries } };
           });
           break;
+        case "InsertSql": {
+          const rows = insertRequests.get(event.request);
+          insertRequests.delete(event.request);
+          if (rows === undefined) break;
+          if (event.error || event.text === null) {
+            get().toast("error", event.error ?? "Couldn't copy the rows");
+            break;
+          }
+          copyText(event.text, `Copied ${rows === 1 ? "1 row" : `${rows} rows`} as INSERT`);
+          break;
+        }
+        case "SchemaReview": {
+          if (!schemaRequests.delete(event.request)) break;
+          // The review opens over the form, so going back keeps what was typed.
+          set({
+            schemaReview: {
+              request: event.request,
+              conn: event.conn,
+              change: event.change,
+              statements: event.statements,
+              warning: event.warning,
+              running: false,
+              error: null,
+            },
+          });
+          break;
+        }
+        case "SchemaChanged": {
+          const review = get().schemaReview;
+          if (review?.request === event.request) {
+            if (event.error) {
+              set({ schemaReview: { ...review, running: false, error: event.error } });
+              break;
+            }
+            set({ schemaReview: null, schemaForm: null });
+            get().toast("success", "Schema updated");
+            afterSchemaChange(event.conn, event.change);
+            break;
+          }
+          // Refused before review (an empty name, a read-only connection): the form stays open.
+          if (schemaRequests.delete(event.request) && event.error) {
+            get().toast("error", event.error);
+          }
+          break;
+        }
         case "WorkspaceSaved":
           if (event.error) get().toast("warning", `Couldn't save open tabs: ${event.error}`);
           pendingSaves.get(event.request)?.();
@@ -849,7 +1119,13 @@ export const useApp = create<State>()((set, get) => {
         get().toast("info", "Save or discard your changes first");
         return;
       }
-      patchTab(id, () => ({ paged: false, edits: null, explain: null, lastRun: sql }));
+      patchTab(id, () => ({
+        paged: false,
+        edits: null,
+        explain: null,
+        lastRun: sql,
+        resultTable: null,
+      }));
       send({
         type: "Run",
         tab: id,
@@ -867,7 +1143,7 @@ export const useApp = create<State>()((set, get) => {
         return;
       }
       const browse = { ...tab.browse, offset: Math.max(0, offset) };
-      patchTab(id, () => ({ browse, paged: true, view: "data", edits: null, explain: null }));
+      patchTab(id, () => ({ browse, paged: true, edits: null, explain: null }));
       // The primary key decides whether the page can be edited.
       if (tab.structure === null) loadStructure(id);
       send({
@@ -936,13 +1212,23 @@ export const useApp = create<State>()((set, get) => {
     refresh: (id) => {
       const tab = get().tabs.find((t) => t.id === id);
       if (!tab || tab.running) return;
+      if (tab.browse && tab.view === "structure") return loadStructure(id);
       // Safe mode still applies: a rerun write on staging or production asks again.
       if (tab.explain) get().explain(id, tab.explain.sql, tab.explain.json);
       else if (tab.browse && (tab.paged || !tab.lastRun)) get().browse(id, tab.browse.offset);
       else if (tab.lastRun) get().run(id, tab.lastRun);
     },
     cancel: (id) => send({ type: "Cancel", tab: id }),
-    setActiveSet: (id, index) => patchTab(id, () => ({ activeSet: index })),
+    setActiveSet: (id, index) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab || tab.activeSet === index) return;
+      if (editCount(tab.edits) > 0) {
+        get().toast("info", "Save or discard your changes first");
+        return;
+      }
+      patchTab(id, () => ({ activeSet: index, edits: null }));
+      detectResultTable(id);
+    },
     setView: (id, view) => {
       const tab = get().tabs.find((t) => t.id === id);
       if (!tab?.browse) return;
@@ -1004,20 +1290,55 @@ export const useApp = create<State>()((set, get) => {
         get().toast("info", "That connection no longer exists");
         return;
       }
-      if (favorite.item.kind === "table") {
-        get().openObject(favorite.conn, favorite.database ?? "", favorite.item.table, "table");
-      } else {
-        get().openSql(favorite.conn, favorite.database, favorite.item.sql, favorite.name);
+      switch (favorite.item.kind) {
+        case "connection": {
+          // Show it in the tree, connected and open.
+          const node = get().nodes[favorite.conn];
+          set({ sidebarPane: "connections" });
+          if (!get().sidebarOpen) get().toggleSidebar();
+          if (node?.status.kind !== "connected" || !node.expanded) {
+            get().toggleConnection(favorite.conn);
+          }
+          break;
+        }
+        case "table":
+          get().openObject(favorite.conn, favorite.database ?? "", favorite.item.table, "table");
+          break;
+        case "query":
+          get().openSql(favorite.conn, favorite.database, favorite.item.sql, favorite.name);
+          break;
       }
     },
+    toggleConnectionFavorite: (connId) => {
+      const existing = get().favorites.find(
+        (f) => f.conn === connId && f.item.kind === "connection",
+      );
+      if (existing) {
+        send({ type: "DeleteFavorite", id: existing.id });
+        return;
+      }
+      const name = get().connections.find((c) => c.id === connId)?.name ?? "Connection";
+      send({
+        type: "SaveFavorite",
+        favorite: {
+          id: crypto.randomUUID(),
+          name,
+          conn: connId,
+          database: null,
+          item: { kind: "connection" },
+        },
+      });
+      get().toast("success", `Added ${name} to favorites`);
+    },
 
-    loadHistory: (query) => {
+    loadHistory: (query, conn) => {
       historyRequest = nextRequest++;
-      set((s) => ({ history: { ...s.history, query } }));
+      set((s) => ({ history: { ...s.history, query, conn } }));
       send({
         type: "LoadHistory",
         request: historyRequest,
         query: query.trim() || null,
+        conn,
         limit: HISTORY_LIMIT,
       });
     },
@@ -1069,9 +1390,10 @@ export const useApp = create<State>()((set, get) => {
       const tab = get().tabs.find((t) => t.id === id);
       const set = tab?.sets[tab.activeSet];
       const readOnly = get().connections.find((c) => c.id === tab?.connId)?.read_only ?? true;
-      if (!tab?.browse || !set?.columns || !tab.edits || tab.saving) return;
-      const key = editableKey(tab, readOnly);
-      if (!key) return;
+      if (!tab || !set?.columns || !tab.edits || tab.saving) return;
+      const target = editTarget(tab, readOnly);
+      if (!target) return;
+      const { key } = target;
       const names = set.columns.map((c) => c.source_column ?? c.name);
       const cell = (col: number, value: Value): CellValue => ({ column: names[col] ?? "", value });
       const keyOf = (row: number): CellValue[] =>
@@ -1095,7 +1417,7 @@ export const useApp = create<State>()((set, get) => {
         type: "ApplyChanges",
         tab: id,
         conn: tab.connId,
-        table: tab.browse.table,
+        table: target.table,
         changes,
         confirmed,
       });
@@ -1112,6 +1434,63 @@ export const useApp = create<State>()((set, get) => {
       patchTab(pending.tab, () => ({ saving: false }));
       get().saveEdits(pending.tab, true);
     },
+    copyInsert: (id, columns, rows) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab || rows.length === 0) return;
+      const readOnly = get().connections.find((c) => c.id === tab.connId)?.read_only ?? true;
+      // The table the rows come from; a result from several tables gets a name to replace.
+      const table = editTarget(tab, readOnly)?.table ??
+        (tab.browse && tab.paged ? tab.browse.table : null) ??
+        sourceTable(tab.sets[tab.activeSet], tab.database) ?? {
+          database: null,
+          schema: null,
+          name: "table_name",
+        };
+      const request = nextRequest++;
+      insertRequests.set(request, rows.length);
+      send({ type: "InsertSql", request, conn: tab.connId, table, columns, rows });
+    },
+
+    schemaForm: null,
+    openSchemaForm: (schemaForm) => set({ schemaForm }),
+    schemaReview: null,
+    alterSchema: (conn, change) => {
+      const request = nextRequest++;
+      schemaRequests.add(request);
+      send({ type: "AlterSchema", request, conn, change, confirmed: false });
+    },
+    answerSchemaReview: (run) => {
+      const review = get().schemaReview;
+      if (!review || review.running) return;
+      if (!run) {
+        set({ schemaReview: null });
+        return;
+      }
+      set({ schemaReview: { ...review, running: true, error: null } });
+      send({
+        type: "AlterSchema",
+        request: review.request,
+        conn: review.conn,
+        change: review.change,
+        confirmed: true,
+      });
+    },
+    reloadObjects: (connId, database) => {
+      patchDb(connId, database, () => ({ loading: true, error: null }));
+      send({ type: "LoadObjects", id: connId, database });
+    },
+    openStructure: (connId, database, name) => {
+      get().openObject(connId, database, name, "table");
+      const tab = get().tabs.find(
+        (t) => t.connId === connId && t.database === database && t.title === name,
+      );
+      if (tab) get().setView(tab.id, "structure");
+    },
+
+    palette: null,
+    setPalette: (palette) => set({ palette }),
+    transfer: (kind) =>
+      get().toast("info", `${kind === "import" ? "Import" : "Export"} is not available yet`),
   };
 });
 
@@ -1122,3 +1501,29 @@ useApp.subscribe((state, prev) => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void saveWorkspace(), 1000);
 });
+
+/** Write `text` to the clipboard and say so; a refused write says that instead. */
+export function copyText(text: string, message?: string): void {
+  navigator.clipboard.writeText(text).then(
+    () => {
+      if (message) useApp.getState().toast("success", message);
+    },
+    (err: unknown) => useApp.getState().toast("error", `Couldn't copy: ${String(err)}`),
+  );
+}
+
+/** `sets` with the saved edits of set `index` written into its rows (deleted rows removed). */
+function withEdits(sets: ResultSet[], index: number, edits: Edits | null): ResultSet[] {
+  if (!edits) return sets;
+  return sets.map((rs, i) => {
+    if (i !== index) return rs;
+    const deleted = new Set(edits.deletes);
+    const rows = rs.rows
+      .map((row, r) => {
+        const update = edits.updates[r];
+        return update ? row.map((value, c) => update[c] ?? value) : row;
+      })
+      .filter((_, r) => !deleted.has(r));
+    return { ...rs, rows };
+  });
+}

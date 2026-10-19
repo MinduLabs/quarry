@@ -26,6 +26,10 @@ pub struct Capabilities {
     pub transactions: bool,
     pub editable_results: bool,
     pub explain: bool,
+    /// Tables, columns, indexes and databases can be created, changed and dropped through
+    /// `SchemaChange`.
+    #[serde(default)]
+    pub schema_edit: bool,
     pub cancel: bool,
     pub ssh: bool,
     pub ssl: bool,

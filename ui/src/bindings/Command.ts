@@ -6,7 +6,9 @@ import type { Favorite } from "./Favorite";
 import type { FavoriteId } from "./FavoriteId";
 import type { Password } from "./Password";
 import type { RowChange } from "./RowChange";
+import type { SchemaChange } from "./SchemaChange";
 import type { TableRef } from "./TableRef";
+import type { Value } from "./Value";
 import type { Workspace } from "./Workspace";
 
 /**
@@ -17,4 +19,4 @@ export type Command = { "type": "Ping", id: number, } | { "type": "LoadConnectio
 /**
  * Filters and sort, applied by the database.
  */
-query: BrowseQuery, } | { "type": "CountRows", tab: number, conn: ConnId, table: TableRef, query: BrowseQuery, } | { "type": "Explain", tab: number, conn: ConnId, database: string | null, sql: string, json: boolean, } | { "type": "BeginTransaction", tab: number, conn: ConnId, database: string | null, } | { "type": "EndTransaction", tab: number, commit: boolean, } | { "type": "ApplyChanges", tab: number, conn: ConnId, table: TableRef, changes: Array<RowChange>, confirmed: boolean, } | { "type": "Cancel", tab: number, } | { "type": "CloseTab", tab: number, } | { "type": "LoadFavorites" } | { "type": "SaveFavorite", favorite: Favorite, } | { "type": "DeleteFavorite", id: FavoriteId, } | { "type": "LoadHistory", request: number, query: string | null, limit: number, } | { "type": "ClearHistory", request: number, } | { "type": "LoadWorkspace" } | { "type": "SaveWorkspace", request: number, workspace: Workspace, };
+query: BrowseQuery, } | { "type": "CountRows", tab: number, conn: ConnId, table: TableRef, query: BrowseQuery, } | { "type": "Explain", tab: number, conn: ConnId, database: string | null, sql: string, json: boolean, } | { "type": "BeginTransaction", tab: number, conn: ConnId, database: string | null, } | { "type": "EndTransaction", tab: number, commit: boolean, } | { "type": "ApplyChanges", tab: number, conn: ConnId, table: TableRef, changes: Array<RowChange>, confirmed: boolean, } | { "type": "InsertSql", request: number, conn: ConnId, table: TableRef, columns: Array<string>, rows: Array<Array<Value>>, } | { "type": "AlterSchema", request: number, conn: ConnId, change: SchemaChange, confirmed: boolean, } | { "type": "Cancel", tab: number, } | { "type": "CloseTab", tab: number, } | { "type": "LoadFavorites" } | { "type": "SaveFavorite", favorite: Favorite, } | { "type": "DeleteFavorite", id: FavoriteId, } | { "type": "LoadHistory", request: number, query: string | null, conn: ConnId | null, limit: number, } | { "type": "ClearHistory", request: number, } | { "type": "LoadWorkspace" } | { "type": "SaveWorkspace", request: number, workspace: Workspace, };

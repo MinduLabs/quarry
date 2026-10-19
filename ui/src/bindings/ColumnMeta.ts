@@ -9,6 +9,7 @@ export type ColumnMeta = { name: string,
  */
 type_name: string, nullable: boolean | null, 
 /**
- * Source table/column when the driver knows them; decides whether a column is editable.
+ * Source database, table and column when the driver knows them; they decide whether a
+ * query result can be edited.
  */
-source_table: string | null, source_column: string | null, };
+source_database: string | null, source_table: string | null, source_column: string | null, };

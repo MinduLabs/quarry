@@ -12,9 +12,11 @@ use quarry_model::{ColumnMeta, Value};
 const BINARY_CHARSET: u16 = 63;
 
 pub fn column_meta(column: &Column) -> ColumnMeta {
+    let database = column.schema_str();
     let table = column.org_table_str();
     let name = column.org_name_str();
     ColumnMeta {
+        source_database: (!database.is_empty()).then(|| database.into_owned()),
         name: column.name_str().into_owned(),
         type_name: type_name(column),
         nullable: Some(!column.flags().contains(ColumnFlags::NOT_NULL_FLAG)),

@@ -4,6 +4,6 @@ import type { FavoriteId } from "./FavoriteId";
 import type { FavoriteItem } from "./FavoriteItem";
 
 /**
- * A pinned table or saved query, listed in the sidebar's Favorites pane.
+ * A pinned connection or table, or a saved query, listed in the sidebar's Favorites pane.
  */
 export type Favorite = { id: FavoriteId, name: string, conn: ConnId, database: string | null, item: FavoriteItem, };

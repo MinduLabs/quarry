@@ -1,13 +1,27 @@
-import { KeyRound } from "lucide-react";
+import { Copy, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { TableInfo } from "@/bindings/TableInfo";
+import { Button } from "@/components/ui/Button";
 import { ErrorNotice } from "@/components/ui/ErrorNotice";
+import { IconButton } from "@/components/ui/IconButton";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/cn";
-import type { TabStructure } from "@/store/app";
+import { copyText, type Tab, useApp } from "@/store/app";
 
-/** Columns, indexes, foreign keys and DDL of the table a browse tab shows. Read-only. */
-export function StructureView({ structure }: { structure: TabStructure | null }) {
+const ICON = { size: 14, strokeWidth: 1.75 } as const;
+
+/**
+ * Columns, indexes, foreign keys and DDL of the table a browse tab shows. Columns and indexes
+ * can be added, changed and dropped when the driver supports it and the connection is writable;
+ * every change is shown as SQL before it runs.
+ */
+export function StructureView({ tab }: { tab: Tab }) {
+  const structure = tab.structure;
+  const canChange = useApp((s) => {
+    const config = s.connections.find((c) => c.id === tab.connId);
+    const status = s.nodes[tab.connId]?.status;
+    return status?.kind === "connected" && status.capabilities.schema_edit && !config?.read_only;
+  });
   if (!structure || structure.loading) {
     return (
       <div className="animate-fade flex h-full items-center justify-center">
@@ -22,18 +36,39 @@ export function StructureView({ structure }: { structure: TabStructure | null })
       </div>
     );
   }
-  return <Structure info={structure.info} />;
+  const info = structure.info;
+  return <Structure info={info} conn={tab.connId} canEdit={canChange && !info.view} />;
 }
 
-function Structure({ info }: { info: TableInfo }) {
+function Structure({ info, conn, canEdit }: { info: TableInfo; conn: string; canEdit: boolean }) {
+  const { openSchemaForm, alterSchema } = useApp.getState();
   const keyColumns = new Set(info.primary_key);
+  const table = info.table;
+  const drop = (op: { op: "drop_column" | "drop_index"; name: string }) =>
+    alterSchema(conn, { kind: "alter_table", table, ops: [op] });
+
   return (
     <div className="animate-fade h-full overflow-auto">
       <div className="flex max-w-5xl flex-col gap-6 p-4">
-        <Section title="Columns" count={info.columns.length}>
-          <Table head={["Name", "Type", "Null", "Default", "Extra", "Comment"]}>
+        <Section
+          title="Columns"
+          count={info.columns.length}
+          action={
+            canEdit && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openSchemaForm({ kind: "column", conn, table, column: null })}
+              >
+                <Plus {...ICON} />
+                Add column…
+              </Button>
+            )
+          }
+        >
+          <Table head={["Name", "Type", "Null", "Default", "Extra", "Comment"]} actions={canEdit}>
             {info.columns.map((c) => (
-              <tr key={c.name} className="border-line border-b last:border-b-0">
+              <tr key={c.name} className="group border-line border-b last:border-b-0">
                 <Cell>
                   <span className="flex items-center gap-1.5">
                     {keyColumns.has(c.name) && (
@@ -54,23 +89,69 @@ function Structure({ info }: { info: TableInfo }) {
                 </Cell>
                 <Cell mono>{c.extra ?? ""}</Cell>
                 <Cell>{c.comment ?? ""}</Cell>
+                {canEdit && (
+                  <RowActions>
+                    <IconButton
+                      label={c.generated ? "Generated columns are edited in SQL" : "Edit column…"}
+                      size="sm"
+                      disabled={c.generated}
+                      onClick={() => openSchemaForm({ kind: "column", conn, table, column: c })}
+                    >
+                      <Pencil {...ICON} />
+                    </IconButton>
+                    <IconButton
+                      label="Drop column…"
+                      size="sm"
+                      disabled={info.columns.length === 1}
+                      onClick={() => drop({ op: "drop_column", name: c.name })}
+                    >
+                      <Trash2 {...ICON} />
+                    </IconButton>
+                  </RowActions>
+                )}
               </tr>
             ))}
           </Table>
         </Section>
 
-        <Section title="Indexes" count={info.indexes.length}>
+        <Section
+          title="Indexes"
+          count={info.indexes.length}
+          action={
+            canEdit && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openSchemaForm({ kind: "index", conn, table, columns: [] })}
+              >
+                <Plus {...ICON} />
+                Add index…
+              </Button>
+            )
+          }
+        >
           {info.indexes.length === 0 ? (
             <Empty>No indexes</Empty>
           ) : (
-            <Table head={["Name", "Columns", "Kind"]}>
+            <Table head={["Name", "Columns", "Kind"]} actions={canEdit}>
               {info.indexes.map((i) => (
-                <tr key={i.name} className="border-line border-b last:border-b-0">
+                <tr key={i.name} className="group border-line border-b last:border-b-0">
                   <Cell>
                     <span className="font-semibold text-fg">{i.name}</span>
                   </Cell>
                   <Cell mono>{i.columns.join(", ")}</Cell>
                   <Cell>{i.primary ? "Primary key" : i.unique ? "Unique" : "Index"}</Cell>
+                  {canEdit && (
+                    <RowActions>
+                      <IconButton
+                        label={i.primary ? "Drop primary key…" : "Drop index…"}
+                        size="sm"
+                        onClick={() => drop({ op: "drop_index", name: i.name })}
+                      >
+                        <Trash2 {...ICON} />
+                      </IconButton>
+                    </RowActions>
+                  )}
                 </tr>
               ))}
             </Table>
@@ -100,8 +181,20 @@ function Structure({ info }: { info: TableInfo }) {
         </Section>
 
         {info.ddl && (
-          <Section title="DDL">
-            <pre className="overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-sm text-fg">
+          <Section
+            title="DDL"
+            action={
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => info.ddl && copyText(info.ddl, "Copied DDL")}
+              >
+                <Copy {...ICON} />
+                Copy
+              </Button>
+            }
+          >
+            <pre className="select-text overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-sm text-fg">
               {info.ddl}
             </pre>
           </Section>
@@ -114,24 +207,38 @@ function Structure({ info }: { info: TableInfo }) {
 function Section({
   title,
   count,
+  action,
   children,
 }: {
   title: string;
   count?: number;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="font-semibold text-base text-fg">
-        {title}
-        {count !== undefined && <span className="ml-1.5 font-normal text-muted">{count}</span>}
-      </h2>
+      <div className="flex h-6 items-center justify-between">
+        <h2 className="font-semibold text-base text-fg">
+          {title}
+          {count !== undefined && <span className="ml-1.5 font-normal text-muted">{count}</span>}
+        </h2>
+        {action}
+      </div>
       {children}
     </section>
   );
 }
 
-function Table({ head, children }: { head: string[]; children: ReactNode }) {
+function Table({
+  head,
+  actions,
+  children,
+}: {
+  head: string[];
+  /** Rows end with a cell of buttons. */
+  actions?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div className="overflow-auto rounded-lg border border-line">
       <table className="w-full border-collapse text-left text-sm">
@@ -142,11 +249,27 @@ function Table({ head, children }: { head: string[]; children: ReactNode }) {
                 {h}
               </th>
             ))}
+            {actions && (
+              <th className="w-16">
+                <span className="sr-only">Actions</span>
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>{children}</tbody>
       </table>
     </div>
+  );
+}
+
+/** Buttons at the end of a row, shown on hover or keyboard focus. */
+function RowActions({ children }: { children: ReactNode }) {
+  return (
+    <td className="h-7 px-1 align-middle">
+      <span className="flex justify-end gap-0.5 opacity-0 transition-opacity duration-(--duration-fast) group-focus-within:opacity-100 group-hover:opacity-100">
+        {children}
+      </span>
+    </td>
   );
 }
 

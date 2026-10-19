@@ -20,4 +20,8 @@ ddl: string | null,
  * Row count from table statistics, which can be off by a lot. `None` for views or when the
  * driver has no estimate.
  */
-estimated_rows: number | null, };
+estimated_rows: number | null, 
+/**
+ * The object is a view, so its rows are not edited directly.
+ */
+view: boolean, };

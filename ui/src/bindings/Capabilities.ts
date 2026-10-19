@@ -4,4 +4,9 @@ import type { ObjectKind } from "./ObjectKind";
 /**
  * What a driver supports. Clients enable features from this instead of checking the driver id.
  */
-export type Capabilities = { schemas: boolean, transactions: boolean, editable_results: boolean, explain: boolean, cancel: boolean, ssh: boolean, ssl: boolean, object_kinds: Array<ObjectKind>, };
+export type Capabilities = { schemas: boolean, transactions: boolean, editable_results: boolean, explain: boolean, 
+/**
+ * Tables, columns, indexes and databases can be created, changed and dropped through
+ * `SchemaChange`.
+ */
+schema_edit: boolean, cancel: boolean, ssh: boolean, ssl: boolean, object_kinds: Array<ObjectKind>, };

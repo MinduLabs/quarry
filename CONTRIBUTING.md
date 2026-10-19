@@ -10,8 +10,47 @@ contribution stays available under AGPL-3.0-or-later.
 
 ## Development setup
 
-Install Rust (stable), Node 20+ with pnpm, [just](https://github.com/casey/just) and Tauri's system
-dependencies (`libwebkit2gtk-4.1-dev` on Linux, Xcode Command Line Tools on macOS), then:
+`pnpm install` only installs the UI. The app also needs a Rust toolchain and, because Tauri uses the
+system's own webview, the native libraries of that webview. Set these up once per machine.
+
+### 1. Tools (every platform)
+
+- Rust 1.92 or newer through [rustup](https://rustup.rs)
+- Node 20+ and pnpm 9 (`corepack enable` gives you pnpm)
+- [just](https://github.com/casey/just)
+- Docker, for the test database (`just db-up`) and for Linux packages
+
+### 2. Webview libraries
+
+Linux uses WebKitGTK, which is built on GTK. Install its development packages and `pkg-config`, which
+the Rust build uses to find them. The lists follow
+[Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+Debian, Ubuntu (22.04 or newer):
+
+```bash
+sudo apt install pkg-config build-essential curl wget file libwebkit2gtk-4.1-dev libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+Fedora:
+
+```bash
+sudo dnf install pkgconf-pkg-config webkit2gtk4.1-devel openssl-devel curl wget file libxdo-devel libappindicator-gtk3-devel librsvg2-devel && sudo dnf group install c-development
+```
+
+Arch:
+
+```bash
+sudo pacman -S --needed base-devel pkgconf webkit2gtk-4.1 openssl curl wget file xdotool libappindicator-gtk3 librsvg
+```
+
+macOS: Xcode Command Line Tools (`xcode-select --install`). WKWebView ships with the system.
+
+`failed to run custom build command for glib-sys` with `The pkg-config command could not be found`
+means this step is missing. Without these libraries you can still run `pnpm check`,
+`just check-docker` (the Rust checks inside Docker) and the Docker package builds, but not `just dev`.
+
+### 3. Run
 
 ```bash
 pnpm install
