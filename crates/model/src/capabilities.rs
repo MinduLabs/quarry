@@ -30,6 +30,9 @@ pub struct Capabilities {
     /// `SchemaChange`.
     #[serde(default)]
     pub schema_edit: bool,
+    /// Server variables and status can be listed through `Session::server_info`.
+    #[serde(default)]
+    pub server_info: bool,
     pub cancel: bool,
     pub ssh: bool,
     pub ssl: bool,

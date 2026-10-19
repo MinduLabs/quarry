@@ -199,6 +199,7 @@ function ConnectionBranch({
     openStructure,
     toggleConnectionFavorite,
     transfer,
+    openServerInfo,
   } = useApp.getState();
   const status = node?.status.kind ?? "idle";
   const connected = status === "connected";
@@ -219,6 +220,15 @@ function ConnectionBranch({
                   label: "New database…",
                   onSelect: () => openSchemaForm({ kind: "create_database", conn }),
                 },
+              ]
+            : []),
+          ...(node?.status.kind === "connected" && node.status.capabilities.server_info
+            ? [
+                {
+                  label: "Server variables…",
+                  onSelect: () => openServerInfo(conn, "variables"),
+                },
+                { label: "Server status…", onSelect: () => openServerInfo(conn, "status") },
               ]
             : []),
           { label: "Disconnect", onSelect: () => disconnect(config.id) },

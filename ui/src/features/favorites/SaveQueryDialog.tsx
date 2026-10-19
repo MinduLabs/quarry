@@ -48,7 +48,7 @@ export function SaveQueryDialog({
           id={inputId}
           autoFocus
           value={name}
-          placeholder="Unpaid orders"
+          placeholder="Query name"
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();

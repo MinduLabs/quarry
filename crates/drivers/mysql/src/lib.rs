@@ -15,8 +15,8 @@ use quarry_driver_api::{
     Result, Session, SharedCancel,
 };
 use quarry_model::{
-    Capabilities, DriverId, ObjectKind, SchemaChange, SchemaObject, SslMode, TableColumns,
-    TableInfo, TableRef, Value,
+    Capabilities, DriverId, ObjectKind, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow,
+    SslMode, TableColumns, TableInfo, TableRef, Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
@@ -42,6 +42,7 @@ impl Driver for MysqlDriver {
             editable_results: true,
             explain: true,
             schema_edit: true,
+            server_info: true,
             cancel: true,
             ssh: true,
             ssl: true,
@@ -162,6 +163,18 @@ impl Session for MysqlSession {
 
     async fn list_databases(&mut self) -> Result<Vec<String>> {
         self.conn.query("SHOW DATABASES").await.map_err(map_err)
+    }
+
+    async fn server_info(&mut self, kind: ServerInfoKind) -> Result<Vec<ServerInfoRow>> {
+        let sql = match kind {
+            ServerInfoKind::Variables => "SHOW GLOBAL VARIABLES",
+            ServerInfoKind::Status => "SHOW GLOBAL STATUS",
+        };
+        let rows: Vec<(String, String)> = self.conn.query(sql).await.map_err(map_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(name, value)| ServerInfoRow { name, value })
+            .collect())
     }
 
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>> {

@@ -21,6 +21,7 @@ import {
 } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { formatSql } from "./format";
+import { snippetSource } from "./snippets";
 import { editorHighlight, editorTheme } from "./theme";
 
 const flashEffect = StateEffect.define<{ from: number; to: number } | null>();
@@ -105,6 +106,7 @@ export function SqlEditor({
           highlightSelectionMatches(),
           autocompletion({ icons: false }),
           language.current.of(sql({ dialect: MySQL, upperCaseKeywords: true, schema })),
+          MySQL.language.data.of({ autocomplete: snippetSource }),
           keymap.of([
             ...closeBracketsKeymap,
             ...defaultKeymap,

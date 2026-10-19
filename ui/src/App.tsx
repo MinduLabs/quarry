@@ -14,6 +14,7 @@ import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { QueryView } from "./features/query/QueryView";
 import { SchemaFormDialog } from "./features/schema/SchemaFormDialog";
 import { SchemaReviewDialog } from "./features/schema/SchemaReviewDialog";
+import { ServerInfoDialog } from "./features/server/ServerInfoDialog";
 import { SettingsDialog } from "./features/settings/SettingsDialog";
 import { Sidebar } from "./features/sidebar/Sidebar";
 import { SidebarToggle } from "./features/sidebar/SidebarToggle";
@@ -185,6 +186,7 @@ export function App() {
       <SchemaReviewDialog />
       <CommandPalette />
       <HistoryDialog />
+      <ServerInfoDialog />
       <CloseTabDialog />
       <QuitDialog />
       <Toaster />

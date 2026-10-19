@@ -9,4 +9,8 @@ export type Capabilities = { schemas: boolean, transactions: boolean, editable_r
  * Tables, columns, indexes and databases can be created, changed and dropped through
  * `SchemaChange`.
  */
-schema_edit: boolean, cancel: boolean, ssh: boolean, ssl: boolean, object_kinds: Array<ObjectKind>, };
+schema_edit: boolean, 
+/**
+ * Server variables and status can be listed through `Session::server_info`.
+ */
+server_info: boolean, cancel: boolean, ssh: boolean, ssl: boolean, object_kinds: Array<ObjectKind>, };

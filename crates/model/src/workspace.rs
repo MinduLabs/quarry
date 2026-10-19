@@ -22,6 +22,9 @@ pub struct SavedTab {
     /// Set when the tab browses a table opened from the sidebar.
     #[serde(default)]
     pub browse: Option<BrowsePage>,
+    /// Pinned tabs sit first and survive "Close other tabs". Missing in older workspaces.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// One page of a table, as shown in a browse tab.

@@ -24,6 +24,7 @@ import { cn } from "@/lib/cn";
 import { registerEditor } from "@/lib/editors";
 import { statementAt } from "@/lib/engine";
 import { keysOf, shortcutText } from "@/lib/shortcuts";
+import { fillVariables, queryVariables } from "@/lib/variables";
 import { editCount, editTarget, type Tab, useApp } from "@/store/app";
 import { formatSql } from "../editor/format";
 import { flashRange, SqlEditor } from "../editor/SqlEditor";
@@ -33,6 +34,7 @@ import { StructureView } from "../structure/StructureView";
 import { ExplainTree } from "./ExplainTree";
 import { FilterBar } from "./FilterBar";
 import { Pager } from "./Pager";
+import { VariablesDialog } from "./VariablesDialog";
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -64,6 +66,14 @@ export function QueryView({ tab }: { tab: Tab }) {
   const [editorHeight, setEditorHeight] = useState(220);
   const [saving, setSaving] = useState(false);
   const [filtering, setFiltering] = useState(false);
+  /** A query waiting for the values of its `{{variables}}`. */
+  const [asking, setAsking] = useState<{
+    sql: string;
+    names: string[];
+    then: (sql: string) => void;
+  } | null>(null);
+  /** The values typed last time, so running the same query again needs no retyping. */
+  const lastValues = useRef<Record<string, string>>({});
   /** Rows the grid selection spans, for the edit bar's Delete. */
   const [rows, setRows] = useState<number[]>([]);
 
@@ -94,21 +104,30 @@ export function QueryView({ tab }: { tab: Tab }) {
     return text.slice(range[0], range[1]);
   }, []);
 
+  /** Run `sql` now, or ask for its `{{variables}}` first. */
+  const withVariables = useCallback((sql: string, then: (sql: string) => void) => {
+    const names = queryVariables(sql);
+    if (names.length === 0) return then(sql);
+    setAsking({ sql, names, then });
+  }, []);
+
   const runFromEditor = useCallback(
     async (all: boolean) => {
       const view = editor.current;
       if (!view) return;
-      if (all && view.state.selection.main.empty) return run(tab.id, view.state.doc.toString());
+      if (all && view.state.selection.main.empty) {
+        return withVariables(view.state.doc.toString(), (sql) => run(tab.id, sql));
+      }
       const sql = await currentStatement();
-      if (sql) run(tab.id, sql);
+      if (sql) withVariables(sql, (filled) => run(tab.id, filled));
     },
-    [tab.id, run, currentStatement],
+    [tab.id, run, currentStatement, withVariables],
   );
 
   const explainFromEditor = useCallback(async () => {
     const sql = await currentStatement();
-    if (sql) explain(tab.id, sql, true);
-  }, [tab.id, explain, currentStatement]);
+    if (sql) withVariables(sql, (filled) => explain(tab.id, filled, true));
+  }, [tab.id, explain, currentStatement, withVariables]);
 
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
@@ -132,9 +151,23 @@ export function QueryView({ tab }: { tab: Tab }) {
     active?.columns?.map((c) => c.source_column ?? c.name) ??
     [];
   const planText = (() => {
-    if (!tab.explain?.json || tab.running) return null;
-    const cell = active?.rows[0]?.[0];
-    return cell && (cell.t === "text" || cell.t === "json") ? cell.v : null;
+    if (tab.running) return null;
+    if (tab.explain?.json) {
+      const cell = active?.rows[0]?.[0];
+      return cell && (cell.t === "text" || cell.t === "json") ? cell.v : null;
+    }
+    // EXPLAIN ANALYZE and EXPLAIN FORMAT=TREE typed in the editor come back as one column of
+    // multi-line text. A grid cell would cut it to one line, so show it as plain text.
+    const columns = active?.columns;
+    if (columns?.length !== 1 || columns[0]?.name.toUpperCase() !== "EXPLAIN") return null;
+    if (!active || active.rows.length === 0) return null;
+    const lines: string[] = [];
+    for (const row of active.rows) {
+      const cell = row[0];
+      if (cell?.t !== "text") return null;
+      lines.push(cell.v);
+    }
+    return lines.join("\n");
   })();
   const grids = tab.sets.map((set, index) => ({ set, index })).filter(({ set }) => set.columns);
   const { transfer } = useApp.getState();
@@ -336,7 +369,9 @@ export function QueryView({ tab }: { tab: Tab }) {
         <div className="absolute inset-x-0 -top-1 h-2 transition-colors-fast group-hover:bg-accent-soft" />
       </div>
 
-      {showFilters && <FilterBar tab={tab} columns={filterColumns} />}
+      {showFilters && (
+        <FilterBar tab={tab} columns={filterColumns} onClose={() => setFiltering(false)} />
+      )}
 
       {tab.explain && !structure && (
         <div className="flex h-8 shrink-0 items-center gap-2 border-line border-b bg-surface px-2 text-sm text-muted">
@@ -466,6 +501,19 @@ export function QueryView({ tab }: { tab: Tab }) {
         {!structure && <Pager tab={tab} />}
       </div>
       <SaveQueryDialog tabId={tab.id} open={saving} onClose={() => setSaving(false)} />
+      {asking && (
+        <VariablesDialog
+          names={asking.names}
+          initial={lastValues.current}
+          onClose={() => setAsking(null)}
+          onRun={(values) => {
+            lastValues.current = { ...lastValues.current, ...values };
+            const { sql, then } = asking;
+            setAsking(null);
+            then(fillVariables(sql, values));
+          }}
+        />
+      )}
     </div>
   );
 }

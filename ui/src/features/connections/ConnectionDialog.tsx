@@ -195,7 +195,7 @@ export function ConnectionDialog() {
             <Input
               autoFocus
               value={form.name}
-              placeholder="My database"
+              placeholder="Connection name"
               onChange={(e) => set("name", e.target.value)}
             />
           </Field>
@@ -259,7 +259,7 @@ export function ConnectionDialog() {
                 <Field label="SSH host">
                   <Input
                     value={form.sshHost}
-                    placeholder="bastion.example.com"
+                    placeholder="Host name or IP address"
                     aria-invalid={invalid && !form.sshHost.trim()}
                     onChange={(e) => set("sshHost", e.target.value)}
                   />

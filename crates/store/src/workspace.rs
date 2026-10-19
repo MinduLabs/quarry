@@ -105,12 +105,14 @@ mod tests {
                     database: Some("shop".into()),
                     sql: "SELECT 1;\n-- ünïcode".into(),
                     browse: None,
+                    pinned: true,
                 },
                 SavedTab {
                     title: "orders".into(),
                     conn: ConnId::new(),
                     database: Some("shop".into()),
                     sql: String::new(),
+                    pinned: false,
                     browse: Some(BrowsePage {
                         table: TableRef {
                             database: Some("shop".into()),
@@ -162,6 +164,7 @@ mod tests {
         let workspace = WorkspaceStore::new(&dir).load().unwrap();
         let browse = workspace.tabs[0].browse.as_ref().unwrap();
         assert_eq!(browse.query, BrowseQuery::default());
+        assert!(!workspace.tabs[0].pinned);
         fs::remove_dir_all(dir).unwrap();
     }
 

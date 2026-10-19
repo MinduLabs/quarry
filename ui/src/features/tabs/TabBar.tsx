@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { Pin, Plus, X } from "lucide-react";
 import { IconButton } from "@/components/ui/IconButton";
 import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
 import { Spinner } from "@/components/ui/Spinner";
@@ -7,21 +7,53 @@ import { isMac } from "@/lib/platform";
 import { keysOf } from "@/lib/shortcuts";
 import { useApp } from "@/store/app";
 
+/** Pointer movement before a press on a tab becomes a drag, so a click never reorders. */
+const DRAG_THRESHOLD = 6;
+
+/** Reorder by dragging: the tab follows the pointer across its neighbours' midpoints. */
+function startDrag(id: number, startX: number) {
+  let isDragging = false;
+  const onMove = (e: PointerEvent) => {
+    if (!isDragging && Math.abs(e.clientX - startX) < DRAG_THRESHOLD) return;
+    isDragging = true;
+    const tabs = [...document.querySelectorAll<HTMLElement>("[data-tab-id]")];
+    const over = tabs.findIndex((el) => {
+      const r = el.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX < r.right;
+    });
+    if (over >= 0) useApp.getState().moveTab(id, over);
+  };
+  const stop = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+}
+
 export function TabBar() {
   const tabs = useApp((s) => s.tabs);
   const activeId = useApp((s) => s.activeTabId);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const canReopen = useApp((s) => s.closedTabs.length > 0);
   const connections = useApp((s) => s.connections);
-  const { selectTab, closeTab, closeTabs, reopenClosedTab, newQuery } = useApp.getState();
+  const { selectTab, closeTab, closeTabs, reopenClosedTab, newQuery, togglePin } =
+    useApp.getState();
 
   const menu = (id: number): MenuItem[] => {
-    const others = tabs.filter((t) => t.id !== id).map((t) => t.id);
+    const others = tabs.filter((t) => t.id !== id && !t.pinned).map((t) => t.id);
     return [
+      {
+        label: tabs.find((t) => t.id === id)?.pinned ? "Unpin tab" : "Pin tab",
+        onSelect: () => togglePin(id),
+      },
       {
         label: "Reopen closed tab",
         disabled: !canReopen,
         onSelect: reopenClosedTab,
+        separatorBefore: true,
       },
       {
         label: "Close",
@@ -58,6 +90,7 @@ export function TabBar() {
           <ContextMenuArea key={tab.id} items={menu(tab.id)}>
             <div
               role="tab"
+              data-tab-id={tab.id}
               aria-selected={active}
               title={
                 env
@@ -65,41 +98,50 @@ export function TabBar() {
                   : tab.title
               }
               onMouseDown={(e) => {
-                if (e.button === 1) closeTab(tab.id);
-                else selectTab(tab.id);
+                if (e.button === 1) {
+                  if (!tab.pinned) closeTab(tab.id);
+                  return;
+                }
+                selectTab(tab.id);
+                if (e.button === 0) startDrag(tab.id, e.clientX);
               }}
               className={cn(
-                "animate-pop group flex h-7 max-w-55 min-w-24 items-center gap-1.5 rounded-md pr-1 pl-3 text-base transition-colors-fast",
+                "animate-pop group flex h-7 items-center gap-1.5 rounded-md text-base transition-colors-fast",
+                tab.pinned ? "max-w-32 min-w-0 pr-3 pl-2.5" : "max-w-55 min-w-24 pr-1 pl-3",
                 active
                   ? "bg-app text-fg shadow-[0_0_0_1px_var(--line)]"
                   : "text-muted hover:bg-hover hover:text-fg",
               )}
             >
+              {tab.pinned && <Pin size={12} strokeWidth={1.75} className="shrink-0" />}
               <span className="min-w-0 flex-1 truncate">{tab.title}</span>
-              <button
-                type="button"
-                aria-label={`Close ${tab.title}`}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={() => closeTab(tab.id)}
-                className={cn(
-                  "group/close flex size-5 items-center justify-center rounded-sm text-muted hover:bg-pressed hover:text-fg",
-                  !active && !tab.running && "opacity-0 group-hover:opacity-100",
-                )}
-              >
-                {/* A running tab shows its spinner until hovered, so it can still be closed. */}
-                {tab.running && (
-                  <span className="group-hover/close:hidden group-focus-visible/close:hidden">
-                    <Spinner size={11} />
-                  </span>
-                )}
-                <X
-                  size={12}
-                  strokeWidth={2}
+              {!tab.pinned && (
+                <button
+                  type="button"
+                  aria-label={`Close ${tab.title}`}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => closeTab(tab.id)}
                   className={cn(
-                    tab.running && "hidden group-hover/close:block group-focus-visible/close:block",
+                    "group/close flex size-5 items-center justify-center rounded-sm text-muted hover:bg-pressed hover:text-fg",
+                    !active && !tab.running && "opacity-0 group-hover:opacity-100",
                   )}
-                />
-              </button>
+                >
+                  {/* A running tab shows its spinner until hovered, so it can still be closed. */}
+                  {tab.running && (
+                    <span className="group-hover/close:hidden group-focus-visible/close:hidden">
+                      <Spinner size={11} />
+                    </span>
+                  )}
+                  <X
+                    size={12}
+                    strokeWidth={2}
+                    className={cn(
+                      tab.running &&
+                        "hidden group-hover/close:block group-focus-visible/close:block",
+                    )}
+                  />
+                </button>
+              )}
             </div>
           </ContextMenuArea>
         );

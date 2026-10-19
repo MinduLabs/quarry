@@ -155,7 +155,7 @@ function ColumnForm({
           <Input
             autoFocus
             value={column.name}
-            placeholder="created_at"
+            placeholder="Column name"
             onChange={(e) => patch({ name: e.target.value })}
           />
         </Field>
@@ -267,11 +267,11 @@ function IndexForm({
       }
     >
       <div className="flex flex-col gap-3 pb-2">
-        <Field label="Name">
+        <Field label="Name" hint={`Left empty, the index is named ${suggested}.`}>
           <Input
             autoFocus
             value={name}
-            placeholder={suggested}
+            placeholder="Index name"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
@@ -387,7 +387,7 @@ function CreateTableForm({
           <Input
             autoFocus
             value={name}
-            placeholder="orders"
+            placeholder="Table name"
             onChange={(e) => setName(e.target.value)}
           />
         </Field>

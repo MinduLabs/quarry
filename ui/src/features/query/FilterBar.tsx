@@ -29,7 +29,16 @@ const takesValue = (op: FilterOp) => op !== "is_null" && op !== "is_not_null";
  * Filters of a browse tab, run by the database. Edits stay local until applied, so typing never
  * reloads the page.
  */
-export function FilterBar({ tab, columns }: { tab: Tab; columns: string[] }) {
+export function FilterBar({
+  tab,
+  columns,
+  onClose,
+}: {
+  tab: Tab;
+  columns: string[];
+  /** Called when the last filter is removed, so the bar goes away with it. */
+  onClose: () => void;
+}) {
   const applied = tab.browse?.query.filters;
   const [draft, setDraft] = useState<ColumnFilter[]>(applied ?? []);
 
@@ -93,6 +102,8 @@ export function FilterBar({ tab, columns }: { tab: Tab; columns: string[] }) {
               const rest = rows.filter((_, i) => i !== index);
               setDraft(rest);
               if (applied?.length) apply(rest.filter((f) => complete.includes(f)));
+              // The form always shows one row, so removing the last one would only blank it.
+              if (rest.length === 0) onClose();
             }}
           >
             <X size={14} strokeWidth={1.75} />

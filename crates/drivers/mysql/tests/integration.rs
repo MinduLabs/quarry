@@ -7,7 +7,9 @@
 
 use quarry_driver_api::{Driver, DriverError, ExecItem, ExecOpts, ResolvedConfig};
 use quarry_driver_mysql::MysqlDriver;
-use quarry_model::{ConnId, ConnectionConfig, DriverId, Environment, ObjectKind, SslMode, Value};
+use quarry_model::{
+    ConnId, ConnectionConfig, DriverId, Environment, ObjectKind, ServerInfoKind, SslMode, Value,
+};
 
 fn config(password: &str) -> Option<ResolvedConfig> {
     let addr = std::env::var("QUARRY_TEST_MYSQL").ok()?;
@@ -62,6 +64,23 @@ async fn connects_and_lists_schema() {
             .iter()
             .any(|o| o.name == "paid_orders" && o.kind == ObjectKind::View)
     );
+}
+
+#[tokio::test]
+async fn lists_server_variables_and_status() {
+    let Some(cfg) = config("quarry") else { return };
+    let mut session = MysqlDriver::default().connect(&cfg).await.unwrap();
+    let variables = session
+        .server_info(ServerInfoKind::Variables)
+        .await
+        .unwrap();
+    assert!(variables.iter().any(|r| r.name == "max_connections"));
+    let status = session.server_info(ServerInfoKind::Status).await.unwrap();
+    assert!(status.iter().any(|r| r.name == "Uptime"));
+    let names: Vec<_> = variables.iter().map(|r| r.name.as_str()).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "sorted by name");
 }
 
 #[tokio::test]

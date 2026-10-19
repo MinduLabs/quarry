@@ -17,6 +17,8 @@ import type { ObjectKind } from "@/bindings/ObjectKind";
 import type { RowChange } from "@/bindings/RowChange";
 import type { SchemaChange } from "@/bindings/SchemaChange";
 import type { SchemaObject } from "@/bindings/SchemaObject";
+import type { ServerInfoKind } from "@/bindings/ServerInfoKind";
+import type { ServerInfoRow } from "@/bindings/ServerInfoRow";
 import type { TableColumns } from "@/bindings/TableColumns";
 import type { TableInfo } from "@/bindings/TableInfo";
 import type { TableRef } from "@/bindings/TableRef";
@@ -84,6 +86,16 @@ export interface HistoryState {
   query: string;
   /** Only this connection's queries; `null` for every connection. */
   conn: string | null;
+}
+
+/** The server variables or status dialog of one connection. */
+export interface ServerInfoState {
+  conn: string;
+  kind: ServerInfoKind;
+  request: number;
+  loading: boolean;
+  rows: ServerInfoRow[];
+  error: string | null;
 }
 
 export type SidebarPane = "connections" | "favorites";
@@ -222,6 +234,8 @@ export interface Tab {
   sql: string;
   /** Set for a table opened from the sidebar. */
   browse: BrowsePage | null;
+  /** Pinned tabs sit first, are kept by "Close other tabs" and show no close button. */
+  pinned: boolean;
   view: TabView;
   structure: TabStructure | null;
   /** The shown results are a page of `browse` (not a typed query), so the pager applies. */
@@ -254,6 +268,7 @@ function blankTab(
 ): Tab {
   return {
     ...fields,
+    pinned: false,
     view: "data",
     structure: null,
     paged: false,
@@ -367,6 +382,10 @@ interface State {
   /** Tabs closed this session, newest last, for "Reopen closed tab". */
   closedTabs: ClosedTab[];
   reopenClosedTab: () => void;
+  /** Pin or unpin a tab. Pinned tabs move to the front. */
+  togglePin: (id: number) => void;
+  /** Move a tab to `index`; a tab never crosses the line between pinned and unpinned. */
+  moveTab: (id: number, index: number) => void;
   answerCloseConfirm: (close: boolean) => void;
   setSql: (id: number, sql: string) => void;
   run: (id: number, sql: string) => void;
@@ -422,6 +441,11 @@ interface State {
   saveQueryFavorite: (tabId: number, name: string) => void;
   deleteFavorite: (id: string) => void;
   openFavorite: (favorite: Favorite) => void;
+
+  serverInfo: ServerInfoState | null;
+  /** Open the server variables or status of a connection; calling it again reloads. */
+  openServerInfo: (conn: string, kind: ServerInfoKind) => void;
+  closeServerInfo: () => void;
 
   loadHistory: (query: string, conn: string | null) => void;
   /** The query history dialog, opened from the editor toolbar. */
@@ -497,6 +521,7 @@ function workspaceOf(tabs: Tab[], activeTabId: number | null): Workspace {
       database: t.database,
       sql: t.sql,
       browse: t.browse,
+      pinned: t.pinned,
     })),
     active: active >= 0 ? active : null,
   };
@@ -673,6 +698,24 @@ export const useApp = create<State>()((set, get) => {
     history: { entries: [], loaded: false, query: "", conn: null },
     historyOpen: false,
     setHistoryOpen: (historyOpen) => set({ historyOpen }),
+    serverInfo: null,
+    openServerInfo: (conn, kind) => {
+      const request = nextRequest++;
+      // Reloading the same list keeps its rows on screen until the new ones arrive.
+      const same = get().serverInfo?.conn === conn && get().serverInfo?.kind === kind;
+      set((s) => ({
+        serverInfo: {
+          conn,
+          kind,
+          request,
+          loading: true,
+          rows: same ? (s.serverInfo?.rows ?? []) : [],
+          error: null,
+        },
+      }));
+      send({ type: "LoadServerInfo", request, conn, kind });
+    },
+    closeServerInfo: () => set({ serverInfo: null }),
     sidebarPane: "connections",
     setSidebarPane: (sidebarPane) => set({ sidebarPane }),
     favorites: [],
@@ -844,8 +887,8 @@ export const useApp = create<State>()((set, get) => {
           const known = new Set(get().connections.map((c) => c.id));
           const restored: Tab[] = event.workspace.tabs
             .filter((t) => known.has(t.conn))
-            .map((t) =>
-              blankTab({
+            .map((t) => ({
+              ...blankTab({
                 id: nextTabId++,
                 title: t.title,
                 connId: t.conn,
@@ -853,7 +896,8 @@ export const useApp = create<State>()((set, get) => {
                 sql: t.sql,
                 browse: t.browse,
               }),
-            );
+              pinned: t.pinned,
+            }));
           for (const t of restored) {
             const n = /^Query (\d+)$/.exec(t.title)?.[1];
             if (n) nextQuery = Math.max(nextQuery, Number(n) + 1);
@@ -867,6 +911,20 @@ export const useApp = create<State>()((set, get) => {
           lastSaved = JSON.stringify(workspaceOf(get().tabs, get().activeTabId));
           break;
         }
+        case "ServerInfo":
+          set((s) =>
+            s.serverInfo?.request === event.request
+              ? {
+                  serverInfo: {
+                    ...s.serverInfo,
+                    loading: false,
+                    rows: event.rows ?? s.serverInfo.rows,
+                    error: event.error,
+                  },
+                }
+              : s,
+          );
+          break;
         case "TableInfo": {
           const pending = structureRequests.get(event.request);
           structureRequests.delete(event.request);
@@ -1095,6 +1153,26 @@ export const useApp = create<State>()((set, get) => {
       });
     },
     closedTabs: [],
+    togglePin: (id) =>
+      set((s) => {
+        const tabs = s.tabs.map((t) => (t.id === id ? { ...t, pinned: !t.pinned } : t));
+        // Stable: pinned first, everything else keeps its order.
+        return { tabs: [...tabs.filter((t) => t.pinned), ...tabs.filter((t) => !t.pinned)] };
+      }),
+    moveTab: (id, index) =>
+      set((s) => {
+        const from = s.tabs.findIndex((t) => t.id === id);
+        const tab = s.tabs[from];
+        if (!tab || from === index) return s;
+        const pinnedCount = s.tabs.filter((t) => t.pinned).length;
+        const [low, high] = tab.pinned ? [0, pinnedCount - 1] : [pinnedCount, s.tabs.length - 1];
+        const target = Math.min(Math.max(index, low), high);
+        if (target === from) return s;
+        const tabs = [...s.tabs];
+        tabs.splice(from, 1);
+        tabs.splice(target, 0, tab);
+        return { tabs };
+      }),
     reopenClosedTab: () => {
       const closed = get().closedTabs;
       // Skip tabs whose connection was deleted since.

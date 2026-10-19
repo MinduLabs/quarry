@@ -98,6 +98,7 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 - The sidebar hides and shows with the toggle next to the window buttons (`Ctrl/⌘ B`). It slides with a `transform`; the content area resizes at once. The toggle is drawn at the window level so it stays reachable while the sidebar is hidden.
 - Above the editor, the toolbar holds what acts on SQL. Right above the grid, the edit bar (only for editable results) groups Add row, Delete rows and the pending changes with Discard / Save, where the eye is while editing. Below the grid, the results bar holds the view switch, result sets, status and pages.
 - Only frequent actions get a button. Occasional ones go in the toolbar's ⋯ menu (`DropdownMenuButton`), the right-click menus and the command palette.
+- Pinned tabs show a pin icon, are narrower and have no close button; they always sit before the unpinned ones.
 - Tabs stay neutral: the environment shows as the badge in the toolbar and a 2px line along the top of the query view, never as a tab color.
 - No tabs open → centered empty state in the content area.
 

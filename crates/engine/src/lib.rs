@@ -21,7 +21,7 @@ use quarry_driver_api::{
 };
 use quarry_model::{
     BrowseQuery, ConnId, ConnectionConfig, Environment, Favorite, HistoryEntry, RowChange,
-    SchemaChange, TableRef, Value, Workspace,
+    SchemaChange, ServerInfoKind, TableRef, Value, Workspace,
 };
 use quarry_store::{
     ConfigStore, FavoritesStore, HistoryStore, SecretKind, SecretStore, WorkspaceStore,
@@ -267,6 +267,11 @@ impl Engine {
                 conn,
                 table,
             } => self.load_table_info(request, conn, table).await,
+            Command::LoadServerInfo {
+                request,
+                conn,
+                kind,
+            } => self.load_server_info(request, conn, kind).await,
             Command::Run {
                 tab,
                 conn,
@@ -905,6 +910,28 @@ impl Engine {
         self.emit(Event::TableInfo {
             request,
             info,
+            error,
+        });
+    }
+
+    async fn load_server_info(&self, request: RequestId, conn: ConnId, kind: ServerInfoKind) {
+        let result = match self.meta_session(conn).await {
+            Ok(meta) => meta
+                .lock()
+                .await
+                .server_info(kind)
+                .await
+                .map_err(|e| describe(&e)),
+            Err(error) => Err(error),
+        };
+        let (rows, error) = match result {
+            Ok(rows) => (Some(rows), None),
+            Err(error) => (None, Some(error)),
+        };
+        self.emit(Event::ServerInfo {
+            request,
+            kind,
+            rows,
             error,
         });
     }
@@ -1764,6 +1791,7 @@ mod tests {
                 database: None,
                 sql: "SELECT 1".into(),
                 browse: None,
+                pinned: false,
             }],
             active: Some(0),
         };
@@ -2005,6 +2033,23 @@ mod mysql_tests {
         };
         assert_eq!(error, None);
         assert_eq!(info.unwrap().primary_key, vec!["id".to_owned()]);
+
+        engine
+            .send(Command::LoadServerInfo {
+                request: 10,
+                conn: id,
+                kind: ServerInfoKind::Variables,
+            })
+            .unwrap();
+        let Event::ServerInfo { rows, error, .. } = next_matching(&events, |e| {
+            matches!(e, Event::ServerInfo { request: 10, .. })
+        })
+        .await
+        else {
+            unreachable!()
+        };
+        assert_eq!(error, None);
+        assert!(rows.unwrap().iter().any(|r| r.name == "max_connections"));
 
         std::fs::remove_dir_all(dir).unwrap();
     }

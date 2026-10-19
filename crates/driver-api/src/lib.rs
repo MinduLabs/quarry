@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaChange, SchemaObject, TableColumns,
-    TableInfo, TableRef, Value,
+    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaChange, SchemaObject,
+    ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -212,6 +212,10 @@ pub trait Session: Send {
     /// Columns, keys, indexes and DDL of one table or view.
     async fn table_info(&mut self, _table: &TableRef) -> Result<TableInfo> {
         Err(DriverError::Unsupported("table structure"))
+    }
+    /// Server variables or status counters, sorted by name.
+    async fn server_info(&mut self, _kind: ServerInfoKind) -> Result<Vec<ServerInfoRow>> {
+        Err(DriverError::Unsupported("server information"))
     }
     /// Change the session's default database (`USE`).
     async fn use_database(&mut self, database: &str) -> Result<()>;

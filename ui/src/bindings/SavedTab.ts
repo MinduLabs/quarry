@@ -6,4 +6,8 @@ export type SavedTab = { title: string, conn: ConnId, database: string | null, s
 /**
  * Set when the tab browses a table opened from the sidebar.
  */
-browse: BrowsePage | null, };
+browse: BrowsePage | null, 
+/**
+ * Pinned tabs sit first and survive "Close other tabs". Missing in older workspaces.
+ */
+pinned: boolean, };

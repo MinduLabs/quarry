@@ -43,6 +43,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Show / hide button on the password fields of the connection dialog (what you typed; saved passwords stay in the keyring).
 - Transactions per tab: begin, commit and roll back from the toolbar. Typed `BEGIN` / `COMMIT` are tracked too, grid edits inside a transaction stay uncommitted, and closing the tab or quitting asks first.
 - SSH tunnels: ssh-agent, key file or password. The server must already be in `~/.ssh/known_hosts`. RSA key files work through ssh-agent only.
+- Pin tabs (right-click a tab): pinned tabs sit first, are smaller, have no close button, survive "Close other tabs" and are restored on the next launch. Drag a tab to reorder it.
+- Server variables and server status of a connection (right-click the connection): filter by name or value, click a row to copy its value.
+- SQL templates in completion: `sel`, `selc`, `selg`, `selj`, `ins`, `upd`, `del`, `ct`, `ci`, `cte`, `dups`. Tab moves between the fields.
+- Query variables: write `{{name}}` in a query and Quarry asks for the values before it runs or explains it. Values are inserted as typed, so add quotes in the query where a text value needs them.
 - Packaging: Flatpak, AppImage and `.deb` on Linux; universal `.dmg` on macOS. Linux packages are built on Ubuntu 22.04 so they also run on older distros; release builds are size-optimized.
 
 ### Fixed

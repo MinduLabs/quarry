@@ -78,6 +78,7 @@ Row count    CountRows{tab, table, query} → RowCount (on the tab's session, so
 Query plan   Explain{tab, sql, json} → same events as Query (one statement; it never runs)
 Transaction  BeginTransaction{tab} / EndTransaction{tab, commit} → TransactionState
 Structure    LoadTableInfo{request, conn, table} → TableInfo
+Server       LoadServerInfo{request, conn, kind} → ServerInfo   (variables or status; Capabilities.server_info)
 Grid edits   ApplyChanges{tab, table, changes} → ChangesApplied | ChangesFailed (one transaction)
 Copy INSERT  InsertSql{request, conn, table, columns, rows} → InsertSql (text only; nothing runs)
 Schema       AlterSchema{request, change, confirmed:false} → SchemaReview{statements, warning}
@@ -145,7 +146,7 @@ that drops data.
 |---|---|
 | Connections | `connections.toml` in the OS config dir (`~/.config/quarry`, `~/Library/Application Support/quarry`). Never contains secrets. Has a `version` field for migrations. |
 | Favorites | `favorites.toml` in the same config dir. Version 2 adds connection favorites; version 1 files load as they are. |
-| Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL, and page with its filters and sort per tab. Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
+| Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL, pinned flag, and page with its filters and sort per tab. Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
 | Query history | `history.jsonl` in the data dir: SQL, connection, database, time, duration, first error line. Newest 5,000 kept. Never passwords. |
 | Secrets | Linux: Secret Service / Secret portal via `oo7`. macOS: Keychain via `security-framework`. Account `<connection uuid>` for the database password, `<connection uuid>:ssh` for the SSH password or key passphrase. |
 | SSH host keys | Read from `~/.ssh/known_hosts`, never written. The Flatpak gets `~/.ssh` read-only and the ssh-agent socket. |

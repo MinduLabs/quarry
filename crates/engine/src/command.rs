@@ -1,8 +1,8 @@
 use std::fmt;
 
 use quarry_model::{
-    BrowseQuery, ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, SchemaChange, TableRef,
-    Value, Workspace,
+    BrowseQuery, ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, SchemaChange,
+    ServerInfoKind, TableRef, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -78,6 +78,13 @@ pub enum Command {
         request: RequestId,
         conn: ConnId,
         table: TableRef,
+    },
+    /// Server variables or status counters of a connection → `Event::ServerInfo`.
+    /// Connects first when the connection is not open yet.
+    LoadServerInfo {
+        request: RequestId,
+        conn: ConnId,
+        kind: ServerInfoKind,
     },
     /// Run SQL on the tab's session (opened on first use).
     /// On staging/production the engine may answer `Event::ConfirmRequired` instead;

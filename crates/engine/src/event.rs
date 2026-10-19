@@ -1,6 +1,6 @@
 use quarry_model::{
     Capabilities, ColumnMeta, ConnId, ConnectionConfig, Favorite, HistoryEntry, SchemaChange,
-    SchemaObject, TableColumns, TableInfo, Value, Workspace,
+    SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -75,6 +75,13 @@ pub enum Event {
         id: ConnId,
         database: String,
         columns: Option<Vec<TableColumns>>,
+        error: Option<String>,
+    },
+    /// Either `rows` or `error` is set.
+    ServerInfo {
+        request: RequestId,
+        kind: ServerInfoKind,
+        rows: Option<Vec<ServerInfoRow>>,
         error: Option<String>,
     },
     /// Either `info` or `error` is set.
