@@ -1,14 +1,16 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, X } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { SortKey } from "@/bindings/SortKey";
 import type { Value } from "@/bindings/Value";
+import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
 import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
 import { cn } from "@/lib/cn";
 import { type CopyFormat, formatCells } from "@/lib/copy";
 import { copyValue, displayValue, isLongValue, isNumericType } from "@/lib/values";
-import { copyText, type Edits } from "@/store/app";
+import { type CellEdit, copyText, type Edits } from "@/store/app";
 import { CellEditor } from "./CellEditor";
 import { ValueDialog } from "./ValueDialog";
 
@@ -32,7 +34,12 @@ function measure(columns: ColumnMeta[], rows: Value[][]): number[] {
 export interface GridEditing {
   edits: Edits;
   onEdit: (row: number, col: number, value: Value) => void;
-  onToggleDelete: (row: number) => void;
+  /** Several cells at once, as one undo step. */
+  onEditCells: (cells: CellEdit[]) => void;
+  /** Mark or unmark rows for deletion, as one undo step. */
+  onToggleDeleteRows: (rows: number[]) => void;
+  onUndo: () => void;
+  onRedo: () => void;
   /** Add a new row (only where rows can be inserted). */
   onInsertRow?: () => void;
 }
@@ -44,6 +51,9 @@ export interface GridSorting {
 }
 
 type Pos = { row: number; col: number };
+
+/** First and last row a selection covers. */
+export type RowSpan = { top: number; bottom: number };
 
 /** A rectangle of cells: `anchor` is where it started, `focus` is the active cell. */
 type Selection = { anchor: Pos; focus: Pos };
@@ -72,7 +82,7 @@ const range = (from: number, to: number) =>
  * selected rows, and new rows follow the loaded ones. Rows are virtualized; columns are all
  * rendered (fine for typical result widths).
  */
-export function ResultGrid({
+export const ResultGrid = memo(function ResultGrid({
   columns,
   rows,
   resetKey,
@@ -81,6 +91,7 @@ export function ResultGrid({
   onCopyInsert,
   onExport,
   onSelectRows,
+  hidden,
 }: {
   columns: ColumnMeta[];
   rows: Value[][];
@@ -91,8 +102,10 @@ export function ResultGrid({
   onCopyInsert?: (columns: string[], rows: Value[][]) => void;
   /** Export the whole result (or table), not just the selection. */
   onExport?: () => void;
-  /** The rows the selection spans, whenever they change (empty when nothing is selected). */
-  onSelectRows?: (rows: number[]) => void;
+  /** The rows the selection spans, when they change (`null` when nothing is selected). */
+  onSelectRows?: (span: RowSpan | null) => void;
+  /** Column positions (in `columns`) not shown. */
+  hidden?: ReadonlySet<number>;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -124,19 +137,34 @@ export function ResultGrid({
     return () => window.removeEventListener("mouseup", stop);
   }, []);
 
+  // Columns on screen, left to right. Selection and focus count in these positions; edits,
+  // values and widths use the column's index in `columns` (`colAt`).
+  const shown = useMemo(
+    () => columns.map((_, c) => c).filter((c) => !hidden?.has(c)),
+    [columns, hidden],
+  );
+  const colAt = (position: number) => shown[position] ?? position;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a changed column set invalidates positions
+  useEffect(() => {
+    setSel(null);
+    setEditor(null);
+  }, [shown]);
+
   const edits = editing?.edits;
   const inserted = edits?.inserts.length ?? 0;
   const count = rows.length + inserted;
-  const lastCol = columns.length - 1;
+  const lastCol = shown.length - 1;
   const deleted = useMemo(() => new Set(edits?.deletes ?? []), [edits?.deletes]);
   const numeric = useMemo(() => columns.map((c) => isNumericType(c.type_name)), [columns]);
-  const template = `${GUTTER}px ${widths.map((w) => `${w}px`).join(" ")}`;
-  const totalWidth = GUTTER + widths.reduce((a, b) => a + b, 0);
+  const shownWidths = shown.map((c) => widths[c] ?? MIN_WIDTH);
+  const template = `${GUTTER}px ${shownWidths.map((w) => `${w}px`).join(" ")}`;
+  const totalWidth = GUTTER + shownWidths.reduce((a, b) => a + b, 0);
   const rect = sel ? rectOf(sel) : null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only when the spanned rows change
   useEffect(() => {
-    onSelectRows?.(rect ? range(rect.top, rect.bottom) : []);
+    onSelectRows?.(rect ? { top: rect.top, bottom: rect.bottom } : null);
   }, [rect?.top, rect?.bottom]);
   const cell = sel?.focus ?? null;
 
@@ -146,6 +174,81 @@ export function ResultGrid({
     estimateSize: () => ROW_HEIGHT,
     overscan: 12,
   });
+
+  // Find in results: cells whose full value contains the text, in the loaded rows only.
+  const [finding, setFinding] = useState(false);
+  /** What is searched: the find bar's text once typing pauses. */
+  const [needle, setNeedle] = useState("");
+  const [matchIndex, setMatchIndex] = useState(0);
+  // Lower-case text of every shown cell, built once per result while the find bar is open, so a
+  // keystroke only scans strings instead of formatting every value again.
+  const searching = finding && needle !== "";
+  const haystack = useMemo(() => {
+    if (!searching) return [];
+    const total = rows.length + (edits?.inserts.length ?? 0);
+    const texts: string[] = new Array(total * shown.length);
+    for (let row = 0; row < total; row++) {
+      for (let col = 0; col < shown.length; col++) {
+        const c = shown[col] ?? col;
+        const value =
+          row >= rows.length
+            ? edits?.inserts[row - rows.length]?.[c]
+            : (edits?.updates[row]?.[c] ?? rows[row]?.[c]);
+        texts[row * shown.length + col] = value ? copyValue(value).toLowerCase() : "";
+      }
+    }
+    return texts;
+  }, [searching, rows, edits, shown]);
+  /** Matching cells as `row * shown.length + position`, in reading order. */
+  const matches = useMemo(() => {
+    const found: number[] = [];
+    if (!needle) return found;
+    for (let i = 0; i < haystack.length; i++) {
+      if (haystack[i]?.includes(needle)) found.push(i);
+    }
+    return found;
+  }, [haystack, needle]);
+  const matchKeys = useMemo(() => new Set(matches), [matches]);
+
+  /** Select match `index` and scroll it into view, both ways. */
+  const goToMatch = (index: number) => {
+    const key = matches[index];
+    if (key === undefined || shown.length === 0) return;
+    const match = { row: Math.floor(key / shown.length), col: key % shown.length };
+    setMatchIndex(index);
+    setSel({ anchor: match, focus: match });
+    virtualizer.scrollToIndex(match.row, { align: "center" });
+    const el = scroller.current;
+    if (!el) return;
+    const left = GUTTER + shownWidths.slice(0, match.col).reduce((a, b) => a + b, 0);
+    const right = left + (shownWidths[match.col] ?? MIN_WIDTH);
+    if (left - GUTTER < el.scrollLeft) el.scrollLeft = left - GUTTER;
+    else if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth;
+  };
+
+  // A new search starts at the first match.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when the matches change
+  useEffect(() => {
+    setMatchIndex(0);
+    if (matches.length > 0) goToMatch(0);
+  }, [matches]);
+
+  const openFind = () => {
+    setFinding(true);
+    // Already open: focus its field again.
+    document.querySelector<HTMLInputElement>('input[aria-label="Find in results"]')?.select();
+  };
+
+  const closeFind = () => {
+    setFinding(false);
+    setNeedle("");
+    scroller.current?.focus();
+  };
+
+  const stepMatch = (step: number) => {
+    if (matches.length === 0) return;
+    goToMatch((matchIndex + step + matches.length) % matches.length);
+  };
 
   // A new row was added: show it.
   useEffect(() => {
@@ -180,21 +283,21 @@ export function ResultGrid({
   const canEdit = (pos: Pos | null): pos is Pos => Boolean(editing && pos && !deleted.has(pos.row));
 
   const commit = (pos: Pos, value: Value) => {
-    editing?.onEdit(pos.row, pos.col, value);
+    editing?.onEdit(pos.row, colAt(pos.col), value);
     setEditor(null);
     scroller.current?.focus();
   };
 
   /** Edit in place, or in the value dialog for values that don't fit one line. */
   const open = (pos: Pos) => {
-    if (canEdit(pos) && !isLongValue(valueAt(pos.row, pos.col))) setEditor(pos);
+    if (canEdit(pos) && !isLongValue(valueAt(pos.row, colAt(pos.col)))) setEditor(pos);
     else setViewer(pos);
   };
 
   /** The selected block: column names (as shown, or as in the table) and values. */
   const block = (sourceNames = false) => {
     if (!rect) return { names: [], values: [] };
-    const cols = range(rect.left, rect.right);
+    const cols = range(rect.left, rect.right).map(colAt);
     const names = cols.map((c) => {
       const column = columns[c];
       return (sourceNames ? column?.source_column : null) ?? column?.name ?? "";
@@ -222,14 +325,24 @@ export function ResultGrid({
   const selectedRows = () => (rect ? range(rect.top, rect.bottom) : []);
 
   const toggleDeleteSelected = () => {
-    if (!editing) return;
-    // New rows are removed by index, so remove from the bottom up.
-    for (const row of selectedRows().reverse()) editing.onToggleDelete(row);
+    editing?.onToggleDeleteRows(selectedRows());
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (editor || viewer) return;
     const mod = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    if (mod && key === "f") {
+      event.preventDefault();
+      openFind();
+      return;
+    }
+    if (mod && editing && (key === "z" || key === "y")) {
+      event.preventDefault();
+      if (key === "y" || event.shiftKey) editing.onRedo();
+      else editing.onUndo();
+      return;
+    }
     if (mod && event.key.toLowerCase() === "a" && count > 0) {
       event.preventDefault();
       setSel({ anchor: { row: 0, col: 0 }, focus: { row: count - 1, col: lastCol } });
@@ -292,12 +405,16 @@ export function ResultGrid({
                 label: "Set NULL",
                 onSelect: () => {
                   if (!rect || !editing) return;
-                  for (const r of range(rect.top, rect.bottom)) {
-                    if (deleted.has(r)) continue;
-                    for (const c of range(rect.left, rect.right)) {
-                      editing.onEdit(r, c, { t: "null" });
-                    }
-                  }
+                  const cells = range(rect.top, rect.bottom)
+                    .filter((r) => !deleted.has(r))
+                    .flatMap((row) =>
+                      range(rect.left, rect.right).map((position) => ({
+                        row,
+                        col: colAt(position),
+                        value: { t: "null" as const },
+                      })),
+                    );
+                  editing.onEditCells(cells);
                 },
               },
             ]
@@ -342,7 +459,7 @@ export function ResultGrid({
       ]
     : [];
 
-  const viewed = viewer && columns[viewer.col];
+  const viewed = viewer && columns[colAt(viewer.col)];
 
   const grid = (
     <div
@@ -350,7 +467,7 @@ export function ResultGrid({
       tabIndex={0}
       role="grid"
       aria-rowcount={count}
-      aria-colcount={columns.length}
+      aria-colcount={shown.length}
       aria-multiselectable
       onKeyDown={onKeyDown}
       className="relative h-full min-h-0 select-none overflow-auto bg-app font-mono text-sm outline-none"
@@ -375,7 +492,8 @@ export function ResultGrid({
             }
             className="sticky left-0 z-10 border-line border-r bg-surface hover:bg-hover"
           />
-          {columns.map((column, i) => {
+          {shown.map((i) => {
+            const column = columns[i] as ColumnMeta;
             const source = column.source_column ?? column.name;
             const key = sorting?.sort.find((k) => k.column === source);
             const Arrow = key?.descending ? ArrowDown : ArrowUp;
@@ -387,7 +505,6 @@ export function ResultGrid({
             );
             return (
               <div
-                // biome-ignore lint/suspicious/noArrayIndexKey: column names may repeat; position is the identity
                 key={`${column.name}:${i}`}
                 role="columnheader"
                 aria-sort={key ? (key.descending ? "descending" : "ascending") : undefined}
@@ -467,21 +584,21 @@ export function ResultGrid({
               >
                 {isNew ? "+" : r + 1}
               </div>
-              {columns.map((_, c) => {
+              {shown.map((c, p) => {
                 const value = valueAt(r, c);
-                const selected = inRect(rect, r, c);
-                const focused = cell?.row === r && cell.col === c;
-                const editingHere = editor?.row === r && editor.col === c;
+                const selected = inRect(rect, r, p);
+                const focused = cell?.row === r && cell.col === p;
+                const editingHere = editor?.row === r && editor.col === p;
+                const found = matchKeys.has(r * shown.length + p);
                 return (
                   <div
-                    // biome-ignore lint/suspicious/noArrayIndexKey: cells are positional
                     key={c}
                     role="gridcell"
                     aria-selected={selected}
                     onMouseDown={(e) => {
-                      const pos = { row: r, col: c };
+                      const pos = { row: r, col: p };
                       // A right-click inside the selection keeps it for the menu.
-                      if (e.button === 2 && inRect(rect, r, c)) return;
+                      if (e.button === 2 && inRect(rect, r, p)) return;
                       if (e.button === 0) dragging.current = true;
                       setSel((s) => ({
                         anchor: e.shiftKey && e.button === 0 && s ? s.anchor : pos,
@@ -490,14 +607,15 @@ export function ResultGrid({
                     }}
                     onMouseEnter={() => {
                       if (dragging.current)
-                        setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: c } });
+                        setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: p } });
                     }}
-                    onDoubleClick={() => open({ row: r, col: c })}
+                    onDoubleClick={() => open({ row: r, col: p })}
                     className={cn(
                       "relative flex items-center overflow-hidden px-2 tabular-nums",
                       numeric[c] && "justify-end",
                       (value === undefined || value.t === "null") && "text-faint italic",
                       isModified(r, c) && "bg-cell-modified",
+                      found && "bg-cell-match",
                       selected && "bg-selected",
                       focused && "outline-1 outline-accent -outline-offset-1",
                     )}
@@ -505,7 +623,7 @@ export function ResultGrid({
                     {editingHere ? (
                       <CellEditor
                         initial={value === undefined ? "" : copyValue(value)}
-                        onCommit={(text) => commit({ row: r, col: c }, { t: "text", v: text })}
+                        onCommit={(text) => commit({ row: r, col: p }, { t: "text", v: text })}
                         onCancel={() => {
                           setEditor(null);
                           scroller.current?.focus();
@@ -527,12 +645,22 @@ export function ResultGrid({
   );
 
   return (
-    <>
+    <div className="relative h-full min-h-0">
       <ContextMenuArea items={menu}>{grid}</ContextMenuArea>
+      {finding && (
+        <FindBar
+          count={matches.length}
+          current={matchIndex}
+          searched={needle !== ""}
+          onSearch={setNeedle}
+          onStep={stepMatch}
+          onClose={closeFind}
+        />
+      )}
       {viewer && viewed && (
         <ValueDialog
           column={viewed}
-          value={valueAt(viewer.row, viewer.col)}
+          value={valueAt(viewer.row, colAt(viewer.col))}
           editable={canEdit(viewer)}
           onSave={(value) => {
             commit(viewer, value);
@@ -544,6 +672,94 @@ export function ResultGrid({
           }}
         />
       )}
-    </>
+    </div>
   );
-}
+});
+
+/** How long typing must pause before the grid searches. */
+const FIND_DELAY_MS = 120;
+
+/**
+ * The find bar. It keeps what is typed itself, so a keystroke re-renders only the bar; the grid
+ * searches once typing pauses, or at once on Enter.
+ */
+const FindBar = memo(function FindBar({
+  count,
+  current,
+  searched,
+  onSearch,
+  onStep,
+  onClose,
+}: {
+  count: number;
+  current: number;
+  searched: boolean;
+  onSearch: (needle: string) => void;
+  onStep: (step: number) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pending = useRef(false);
+  const search = (value: string) => {
+    clearTimeout(timer.current);
+    pending.current = false;
+    onSearch(value.trim().toLowerCase());
+  };
+  useEffect(() => {
+    input.current?.focus();
+    return () => clearTimeout(timer.current);
+  }, []);
+  return (
+    <div className="animate-pop absolute top-1 right-3 z-30 flex items-center gap-1 rounded-lg bg-elevated p-1 font-sans shadow-popover">
+      <Input
+        ref={input}
+        aria-label="Find in results"
+        placeholder="Find in results"
+        value={text}
+        onChange={(e) => {
+          const value = e.target.value;
+          setText(value);
+          pending.current = true;
+          clearTimeout(timer.current);
+          timer.current = setTimeout(() => search(value), FIND_DELAY_MS);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            // Enter right after typing searches first; after that it steps through matches.
+            if (pending.current) search(text);
+            else onStep(e.shiftKey ? -1 : 1);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            onClose();
+          }
+        }}
+        className="w-52"
+      />
+      <span className="min-w-20 px-1 text-center text-muted text-sm tabular-nums">
+        {!searched
+          ? ""
+          : count === 0
+            ? "No results"
+            : `${Math.min(current + 1, count)} of ${count.toLocaleString()}`}
+      </span>
+      <IconButton
+        label="Previous match"
+        size="sm"
+        disabled={count === 0}
+        onClick={() => onStep(-1)}
+      >
+        <ChevronUp size={14} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton label="Next match" size="sm" disabled={count === 0} onClick={() => onStep(1)}>
+        <ChevronDown size={14} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton label="Close" size="sm" onClick={onClose}>
+        <X size={14} strokeWidth={1.75} />
+      </IconButton>
+    </div>
+  );
+});

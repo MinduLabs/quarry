@@ -97,6 +97,15 @@ Favorites    LoadFavorites / SaveFavorite / DeleteFavorite → Favorites (the fu
   Each connection also has a metadata session for introspection.
 - Rows are sent in batches of about 500 and capped at 1000 per result set (`truncated: true` beyond that).
 - Cancel goes around the session (driver cancel handle), so it works while a query is running.
+- Development performance log (`perf.rs`): with `QUARRY_PERF` set, the engine appends one JSON
+  line per timing to `perf.jsonl` from a thread of its own (commands, query phases, history,
+  schema loads). `Pong.perf` tells the client the log is on; the UI then sends its render times
+  as `PerfMarks` once a second, so both sides land in one file. Off by default; never SQL text
+  or values.
+- History reads and writes run on tokio's blocking pool (`spawn_blocking`), so searching a long
+  history never holds one of the two runtime workers that stream results. `record` is awaited, so
+  `HistoryAdded` still arrives before the event that ends the command. A query frees its tab
+  session before it writes the history, so the tab's next query never waits behind a search.
 - A connection over SSH has one tunnel, shared by its metadata session, its tabs and the cancel
   connection. Disconnect closes it. Test Connection opens its own tunnel and drops it after.
 - Table pages can be filtered and sorted. `BrowseQuery` holds column filters (`AND`-ed) and sort
@@ -146,7 +155,7 @@ that drops data.
 |---|---|
 | Connections | `connections.toml` in the OS config dir (`~/.config/quarry`, `~/Library/Application Support/quarry`). Never contains secrets. Has a `version` field for migrations. |
 | Favorites | `favorites.toml` in the same config dir. Version 2 adds connection favorites; version 1 files load as they are. |
-| Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL, pinned flag, and page with its filters and sort per tab. Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
+| Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`): title, connection, database, SQL, page with its filters and sort, and whether the tab is pinned (missing in older files: not pinned). Results are not saved. An unreadable file is moved to `workspace.json.broken`. |
 | Query history | `history.jsonl` in the data dir: SQL, connection, database, time, duration, first error line. Newest 5,000 kept. Never passwords. |
 | Secrets | Linux: Secret Service / Secret portal via `oo7`. macOS: Keychain via `security-framework`. Account `<connection uuid>` for the database password, `<connection uuid>:ssh` for the SSH password or key passphrase. |
 | SSH host keys | Read from `~/.ssh/known_hosts`, never written. The Flatpak gets `~/.ssh` read-only and the ssh-agent socket. |
@@ -161,6 +170,10 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 - **View preferences** (theme, sidebar shown or hidden) are per machine and live in the webview's
   `localStorage`, so they apply before the engine answers. Anything another client would need goes
   through the engine instead.
+- **Tabs:** pinned tabs come first and are closed only from their menu (not by `Ctrl/⌘+W`, the
+  middle button, Close other tabs or Close tabs to the right). Tabs reorder by dragging, within
+  their group. `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle tabs (also on macOS, where `⌘Tab` switches
+  apps); `Ctrl/⌘+1…8` go to a tab and `9` to the last.
 - **Shortcuts** are listed once in `ui/src/lib/shortcuts.ts`; Settings › Keyboard shows that list.
   Settings has one search over every section; shortcuts match by name or by their keys.
   The webview's own reload is turned off: `F5` / `Ctrl/⌘+R` refresh the active tab instead.
@@ -171,8 +184,14 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
   resizable columns. A block of cells is selected by dragging, Shift+click, Shift+arrows, the row
   numbers or `Ctrl/⌘+A`, and copies as TSV, CSV or JSON (`lib/copy.ts`) or as INSERT (the engine
   writes it in the connection's dialect). `Shift+Enter` opens the full value: long text, JSON
-  (formatted on request) or bytes as hex or text. On an editable result: double-click or Enter to
-  edit, Set NULL, add (table pages) and delete rows, then Save (`Ctrl/⌘+S`) or Discard.
+  (formatted on request) or bytes as hex or text. `Ctrl/⌘+F` in the grid finds text in the
+  loaded rows: the bar keeps its own text, the grid searches once typing pauses (120 ms) over a
+  lower-case copy of the shown cells built once per result, and matches are kept as cell indices.
+  Columns can be hidden from the toolbar; they are kept by name per tab, so they stay hidden
+  across pages and runs (not saved on quit), and hidden columns are neither copied nor searched. On an editable result: double-click or Enter to
+  edit, Set NULL, add (table pages) and delete rows, undo and redo each step (`Ctrl/⌘+Z`,
+  `Ctrl/⌘+Shift+Z`; Discard is a step too), then Save (`Ctrl/⌘+S`). The history is per tab and
+  clears when the edits are saved or the result is replaced.
 - **Table tabs:** a Data | Structure switch (columns, indexes, foreign keys, DDL) and a pager of
   1,000 rows without a total count. Structure adds, changes and drops columns and indexes when
   `Capabilities.schema_edit` is set and the connection is writable.
@@ -188,7 +207,11 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
   saves a query tab's SQL, and is filled once it is a favorite.
 - **Quick open:** `Ctrl/⌘+P` finds loaded tables, views, routines and databases, connections and
   favorites; `>` or `Ctrl/⌘+Shift+P` lists commands.
-- **Sidebar:** Connections and Favorites (pinned connections and tables, saved queries), with one
+- **Sidebar:** the connection tree is flattened into lines and virtualized like the grid, so a
+  database with thousands of tables renders only the lines in view; the sidebar is memoized, so
+  typing in a tab never re-renders it. Objects are listed by kind: tables, views, routines,
+  triggers, events (opening a routine, trigger or event shows its `SHOW CREATE`).
+  Connections and Favorites (pinned connections and tables, saved queries), with one
   filter box: by name for favorites; for the tree, connections, databases and the tables of loaded
   databases. Right-click menus pin connections, create databases and tables, refresh a database,
   and rename, empty or drop tables.
@@ -233,3 +256,4 @@ installs its own entry and icon into `~/.local/share` on startup (`src-tauri/src
 | `model`, `sql`, `store`, `engine` | Unit tests (`cargo test --workspace`) |
 | `drivers/mysql`, engine end-to-end | Integration tests against MySQL in Docker (`just db-up && just test-db`) |
 | UI | `pnpm check` (Biome + TypeScript); manual check in light and dark |
+| Performance | `just bench` (release benchmarks); `QUARRY_PERF=1` for a timing log while using the app |

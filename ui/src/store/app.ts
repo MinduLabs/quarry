@@ -25,6 +25,7 @@ import type { TableRef } from "@/bindings/TableRef";
 import type { Value } from "@/bindings/Value";
 import type { Workspace } from "@/bindings/Workspace";
 import { send } from "@/lib/engine";
+import { setPerfEnabled } from "@/lib/perf";
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "@/lib/theme";
 import { quoteIdent } from "@/lib/values";
 
@@ -110,6 +111,43 @@ export interface Edits {
 }
 
 export const noEdits = (): Edits => ({ updates: {}, inserts: [], deletes: [] });
+
+/** Undo steps kept per tab. */
+const UNDO_LIMIT = 200;
+
+/** No pending edits and no undo history: the shown result was saved or replaced. */
+const clearedEdits = () => ({ edits: null, editsPast: [], editsFuture: [] });
+
+/** One cell's new value, for edits applied together as one undo step. */
+export interface CellEdit {
+  row: number;
+  col: number;
+  value: Value;
+}
+
+/** `edits` with `cell` set: a loaded row gets an update, a new row its value. */
+function withCell(edits: Edits, loaded: number, { row, col, value }: CellEdit): Edits {
+  if (row >= loaded) {
+    const inserts = [...edits.inserts];
+    inserts[row - loaded] = { ...inserts[row - loaded], [col]: value };
+    return { ...edits, inserts };
+  }
+  return {
+    ...edits,
+    updates: { ...edits.updates, [row]: { ...edits.updates[row], [col]: value } },
+  };
+}
+
+/** `edits` with `rows` marked for deletion or kept again; new rows are removed outright. */
+function withToggledRows(edits: Edits, loaded: number, rows: number[]): Edits {
+  const removed = new Set(rows.filter((r) => r >= loaded).map((r) => r - loaded));
+  const toggled = new Set(rows.filter((r) => r < loaded));
+  const deletes = [
+    ...edits.deletes.filter((r) => !toggled.has(r)),
+    ...[...toggled].filter((r) => !edits.deletes.includes(r)),
+  ];
+  return { ...edits, inserts: edits.inserts.filter((_, i) => !removed.has(i)), deletes };
+}
 
 export function editCount(edits: Edits | null): number {
   if (!edits) return 0;
@@ -241,6 +279,10 @@ export interface Tab {
   /** The shown results are a page of `browse` (not a typed query), so the pager applies. */
   paged: boolean;
   edits: Edits | null;
+  /** Earlier states of `edits`, oldest first, for Undo; and undone ones, for Redo. Cleared
+   * whenever the edits are saved or the shown result is replaced. */
+  editsPast: Array<Edits | null>;
+  editsFuture: Array<Edits | null>;
   saving: boolean;
   running: boolean;
   sets: ResultSet[];
@@ -261,6 +303,8 @@ export interface Tab {
   lastRun: string | null;
   /** The table the shown query result comes from, which makes it editable. */
   resultTable: ResultTable | null;
+  /** Names of the columns hidden in the grid. Kept across pages and runs; not saved on quit. */
+  hiddenColumns: string[];
 }
 
 function blankTab(
@@ -273,6 +317,8 @@ function blankTab(
     structure: null,
     paged: false,
     edits: null,
+    editsPast: [],
+    editsFuture: [],
     saving: false,
     running: false,
     sets: [],
@@ -286,6 +332,7 @@ function blankTab(
     explain: null,
     lastRun: null,
     resultTable: null,
+    hiddenColumns: [],
   };
 }
 
@@ -379,6 +426,14 @@ interface State {
   closeTab: (id: number, force?: boolean) => void;
   /** Close several tabs; asks once if any has an open transaction, unless `force`. */
   closeTabs: (ids: number[], force?: boolean) => void;
+  /** Close the tabs after `id`, except pinned ones. */
+  closeTabsToRight: (id: number) => void;
+  /** Close the other tabs, except pinned ones. */
+  closeOtherTabs: (id: number) => void;
+  /** Select the next (`1`) or previous (`-1`) tab, wrapping around. */
+  cycleTab: (step: number) => void;
+  /** Select tab number `n` from 1; 9 is always the last tab. */
+  selectTabAt: (n: number) => void;
   /** Tabs closed this session, newest last, for "Reopen closed tab". */
   closedTabs: ClosedTab[];
   reopenClosedTab: () => void;
@@ -405,15 +460,24 @@ interface State {
   refresh: (id: number) => void;
   cancel: (id: number) => void;
   setActiveSet: (id: number, set: number) => void;
+  /** Hide the grid columns named in `names` (all others shown). */
+  setHiddenColumns: (id: number, names: string[]) => void;
   /** Data or Structure, for browse tabs. */
   setView: (id: number, view: TabView) => void;
   answerConfirm: (run: boolean) => void;
 
   editCell: (id: number, row: number, col: number, value: Value) => void;
+  /** Several cells at once (Set NULL on a selection), as one undo step. */
+  editCells: (id: number, cells: CellEdit[]) => void;
   addRow: (id: number) => void;
   /** Mark a loaded row for deletion, or unmark it; removes a new row outright. */
   toggleDeleteRow: (id: number, row: number) => void;
+  /** Mark or unmark several rows (the selection), as one undo step. */
+  toggleDeleteRows: (id: number, rows: number[]) => void;
   discardEdits: (id: number) => void;
+  /** Step back or forward through the pending edits. */
+  undoEdit: (id: number) => void;
+  redoEdit: (id: number) => void;
   saveEdits: (id: number, confirmed?: boolean) => void;
   answerChangesConfirm: (save: boolean) => void;
   /** Copy rows as one INSERT statement (built by the engine for the connection's dialect). */
@@ -571,6 +635,18 @@ export const useApp = create<State>()((set, get) => {
       return { sets };
     });
 
+  /** Change a tab's pending edits as one undo step; a new step drops what was undone. */
+  const changeEdits = (id: number, change: (edits: Edits, loaded: number) => Edits | null) =>
+    patchTab(id, (tab) => {
+      if (tab.saving) return {};
+      const loaded = tab.sets[tab.activeSet]?.rows.length ?? 0;
+      return {
+        edits: change(tab.edits ?? noEdits(), loaded),
+        editsPast: [...tab.editsPast, tab.edits].slice(-UNDO_LIMIT),
+        editsFuture: [],
+      };
+    });
+
   const patchNode = (id: string, patch: (node: ConnNode) => Partial<ConnNode>) =>
     set((s) => {
       const node = s.nodes[id] ?? emptyNode();
@@ -725,6 +801,7 @@ export const useApp = create<State>()((set, get) => {
       switch (event.type) {
         case "Pong":
           set({ engineVersion: event.version });
+          setPerfEnabled(event.perf);
           break;
         case "Notice":
           get().toast(
@@ -904,7 +981,7 @@ export const useApp = create<State>()((set, get) => {
           }
           const active = restored[event.workspace.active ?? -1] ?? restored[0];
           set((s) => ({
-            tabs: [...restored, ...s.tabs],
+            tabs: pinnedFirst([...restored, ...s.tabs]),
             activeTabId: s.activeTabId ?? active?.id ?? null,
           }));
           workspaceRestored = true;
@@ -951,7 +1028,7 @@ export const useApp = create<State>()((set, get) => {
             // values in place instead.
             patchTab(tab.id, (t) => ({ sets: withEdits(t.sets, t.activeSet, t.edits) }));
           }
-          patchTab(event.tab, () => ({ edits: null, saving: false }));
+          patchTab(event.tab, () => ({ ...clearedEdits(), saving: false }));
           get().toast("success", event.message);
           if (tab?.browse && tab.paged) get().browse(tab.id, tab.browse.offset);
           break;
@@ -1099,10 +1176,12 @@ export const useApp = create<State>()((set, get) => {
         get().browse(id, 0);
         return;
       }
-      const sql =
-        kind === "function"
-          ? `SHOW CREATE FUNCTION ${quoteIdent(name)};`
-          : `SHOW CREATE PROCEDURE ${quoteIdent(name)};`;
+      const what: Partial<Record<ObjectKind, string>> = {
+        function: "FUNCTION",
+        trigger: "TRIGGER",
+        event: "EVENT",
+      };
+      const sql = `SHOW CREATE ${what[kind] ?? "PROCEDURE"} ${quoteIdent(name)};`;
       const id = openTab(connId, database, name, sql);
       get().run(id, sql);
     },
@@ -1121,6 +1200,35 @@ export const useApp = create<State>()((set, get) => {
       openTab(t.connId, t.database, `Query ${nextQuery++}`, "");
     },
     selectTab: (id) => set({ activeTabId: id }),
+    closeTabsToRight: (id) => {
+      const { tabs } = get();
+      const at = tabs.findIndex((t) => t.id === id);
+      if (at < 0) return;
+      get().closeTabs(
+        tabs
+          .slice(at + 1)
+          .filter((t) => !t.pinned)
+          .map((t) => t.id),
+      );
+    },
+    closeOtherTabs: (id) =>
+      get().closeTabs(
+        get()
+          .tabs.filter((t) => t.id !== id && !t.pinned)
+          .map((t) => t.id),
+      ),
+    cycleTab: (step) => {
+      const { tabs, activeTabId } = get();
+      if (tabs.length === 0) return;
+      const at = tabs.findIndex((t) => t.id === activeTabId);
+      const next = tabs[(Math.max(at, 0) + step + tabs.length) % tabs.length];
+      if (next) set({ activeTabId: next.id });
+    },
+    selectTabAt: (n) => {
+      const { tabs } = get();
+      const tab = n >= 9 ? tabs[tabs.length - 1] : tabs[n - 1];
+      if (tab) set({ activeTabId: tab.id });
+    },
     closeTab: (id, force = false) => get().closeTabs([id], force),
     closeTabs: (ids, force = false) => {
       const closing = new Set(ids);
@@ -1199,7 +1307,7 @@ export const useApp = create<State>()((set, get) => {
       }
       patchTab(id, () => ({
         paged: false,
-        edits: null,
+        ...clearedEdits(),
         explain: null,
         lastRun: sql,
         resultTable: null,
@@ -1221,7 +1329,7 @@ export const useApp = create<State>()((set, get) => {
         return;
       }
       const browse = { ...tab.browse, offset: Math.max(0, offset) };
-      patchTab(id, () => ({ browse, paged: true, edits: null, explain: null }));
+      patchTab(id, () => ({ browse, paged: true, ...clearedEdits(), explain: null }));
       // The primary key decides whether the page can be edited.
       if (tab.structure === null) loadStructure(id);
       send({
@@ -1274,7 +1382,7 @@ export const useApp = create<State>()((set, get) => {
         get().toast("info", "Save or discard your changes first");
         return;
       }
-      patchTab(id, () => ({ paged: false, edits: null, explain: { sql, json } }));
+      patchTab(id, () => ({ paged: false, ...clearedEdits(), explain: { sql, json } }));
       send({ type: "Explain", tab: id, conn: tab.connId, database: tab.database, sql, json });
     },
     beginTransaction: (id) => {
@@ -1297,6 +1405,7 @@ export const useApp = create<State>()((set, get) => {
       else if (tab.lastRun) get().run(id, tab.lastRun);
     },
     cancel: (id) => send({ type: "Cancel", tab: id }),
+    setHiddenColumns: (id, names) => patchTab(id, () => ({ hiddenColumns: names })),
     setActiveSet: (id, index) => {
       const tab = get().tabs.find((t) => t.id === id);
       if (!tab || tab.activeSet === index) return;
@@ -1304,7 +1413,7 @@ export const useApp = create<State>()((set, get) => {
         get().toast("info", "Save or discard your changes first");
         return;
       }
-      patchTab(id, () => ({ activeSet: index, edits: null }));
+      patchTab(id, () => ({ activeSet: index, ...clearedEdits() }));
       detectResultTable(id);
     },
     setView: (id, view) => {
@@ -1428,42 +1537,38 @@ export const useApp = create<State>()((set, get) => {
       openTab(connId, database, title ?? `Query ${nextQuery++}`, sql);
     },
 
-    editCell: (id, row, col, value) =>
+    editCell: (id, row, col, value) => get().editCells(id, [{ row, col, value }]),
+    editCells: (id, cells) =>
+      changeEdits(id, (edits, loaded) =>
+        cells.reduce((e, cell) => withCell(e, loaded, cell), edits),
+      ),
+    addRow: (id) => changeEdits(id, (edits) => ({ ...edits, inserts: [...edits.inserts, {}] })),
+    toggleDeleteRow: (id, row) => get().toggleDeleteRows(id, [row]),
+    toggleDeleteRows: (id, rows) =>
+      changeEdits(id, (edits, loaded) => withToggledRows(edits, loaded, rows)),
+    discardEdits: (id) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      // Discard can be undone, like any other step.
+      if (tab && editCount(tab.edits) > 0) changeEdits(id, () => null);
+    },
+    undoEdit: (id) =>
       patchTab(id, (tab) => {
-        const edits = tab.edits ?? noEdits();
-        const loaded = tab.sets[tab.activeSet]?.rows.length ?? 0;
-        if (row >= loaded) {
-          const inserts = [...edits.inserts];
-          inserts[row - loaded] = { ...inserts[row - loaded], [col]: value };
-          return { edits: { ...edits, inserts } };
-        }
+        if (tab.saving || tab.editsPast.length === 0) return {};
         return {
-          edits: {
-            ...edits,
-            updates: { ...edits.updates, [row]: { ...edits.updates[row], [col]: value } },
-          },
+          edits: tab.editsPast[tab.editsPast.length - 1] ?? null,
+          editsPast: tab.editsPast.slice(0, -1),
+          editsFuture: [tab.edits, ...tab.editsFuture],
         };
       }),
-    addRow: (id) =>
+    redoEdit: (id) =>
       patchTab(id, (tab) => {
-        const edits = tab.edits ?? noEdits();
-        return { edits: { ...edits, inserts: [...edits.inserts, {}] } };
+        if (tab.saving || tab.editsFuture.length === 0) return {};
+        return {
+          edits: tab.editsFuture[0] ?? null,
+          editsPast: [...tab.editsPast, tab.edits],
+          editsFuture: tab.editsFuture.slice(1),
+        };
       }),
-    toggleDeleteRow: (id, row) =>
-      patchTab(id, (tab) => {
-        const edits = tab.edits ?? noEdits();
-        const loaded = tab.sets[tab.activeSet]?.rows.length ?? 0;
-        if (row >= loaded) {
-          return {
-            edits: { ...edits, inserts: edits.inserts.filter((_, i) => i !== row - loaded) },
-          };
-        }
-        const deletes = edits.deletes.includes(row)
-          ? edits.deletes.filter((r) => r !== row)
-          : [...edits.deletes, row];
-        return { edits: { ...edits, deletes } };
-      }),
-    discardEdits: (id) => patchTab(id, () => ({ edits: null })),
     saveEdits: (id, confirmed = false) => {
       const tab = get().tabs.find((t) => t.id === id);
       const set = tab?.sets[tab.activeSet];
@@ -1604,4 +1709,9 @@ function withEdits(sets: ResultSet[], index: number, edits: Edits | null): Resul
       .filter((_, r) => !deleted.has(r));
     return { ...rs, rows };
   });
+}
+
+/** Pinned tabs first, each group keeping its order. */
+function pinnedFirst(tabs: Tab[]): Tab[] {
+  return [...tabs.filter((t) => t.pinned), ...tabs.filter((t) => !t.pinned)];
 }

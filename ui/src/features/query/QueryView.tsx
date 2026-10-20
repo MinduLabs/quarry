@@ -2,6 +2,7 @@ import { closeCompletion } from "@codemirror/autocomplete";
 import type { EditorView } from "@codemirror/view";
 import {
   AlignLeft,
+  Columns3,
   Ellipsis,
   Filter,
   History,
@@ -9,10 +10,15 @@ import {
   Minus,
   Play,
   Plus,
+  Redo2,
   Square,
   Star,
+  Undo2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, Profiler, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SchemaObject } from "@/bindings/SchemaObject";
+import type { TableColumns } from "@/bindings/TableColumns";
+import type { Value } from "@/bindings/Value";
 import { EnvBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
@@ -23,13 +29,14 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { cn } from "@/lib/cn";
 import { registerEditor } from "@/lib/editors";
 import { statementAt } from "@/lib/engine";
+import { onRender } from "@/lib/perf";
 import { keysOf, shortcutText } from "@/lib/shortcuts";
 import { fillVariables, queryVariables } from "@/lib/variables";
-import { editCount, editTarget, type Tab, useApp } from "@/store/app";
+import { type Edits, editCount, editTarget, type Tab, useApp } from "@/store/app";
 import { formatSql } from "../editor/format";
-import { flashRange, SqlEditor } from "../editor/SqlEditor";
+import { type CompletionSchema, flashRange, SqlEditor } from "../editor/SqlEditor";
 import { SaveQueryDialog } from "../favorites/SaveQueryDialog";
-import { ResultGrid } from "../grid/ResultGrid";
+import { type GridEditing, type GridSorting, ResultGrid, type RowSpan } from "../grid/ResultGrid";
 import { StructureView } from "../structure/StructureView";
 import { ExplainTree } from "./ExplainTree";
 import { FilterBar } from "./FilterBar";
@@ -38,8 +45,42 @@ import { VariablesDialog } from "./VariablesDialog";
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-/** Toolbar + SQL editor + results + status bar for one tab. */
-export function QueryView({ tab }: { tab: Tab }) {
+/** Completion schemas by the database's object and column lists (both come from the store). */
+const schemas = new WeakMap<object, WeakMap<object, CompletionSchema>>();
+const NO_LIST: never[] = [];
+
+/** Table name → column names for completion; the same object for the same lists. */
+function schemaOf(
+  objects: SchemaObject[] | null,
+  columns: TableColumns[] | null,
+): CompletionSchema {
+  const byObjects = objects ?? NO_LIST;
+  const byColumns = columns ?? NO_LIST;
+  let inner = schemas.get(byObjects);
+  if (!inner) {
+    inner = new WeakMap();
+    schemas.set(byObjects, inner);
+  }
+  let schema = inner.get(byColumns);
+  if (!schema) {
+    schema = {};
+    for (const o of byObjects) {
+      if (o.kind === "table" || o.kind === "view") schema[o.name] = [];
+    }
+    for (const t of byColumns) schema[t.table] = t.columns;
+    inner.set(byColumns, schema);
+  }
+  return schema;
+}
+
+/** Pending edits shown when there are none yet; one object, so the grid's props stay equal. */
+const NO_EDITS: Edits = { updates: {}, inserts: [], deletes: [] };
+
+/**
+ * Toolbar, SQL editor, results and status bar for one tab. Memoized on `tab`: the store replaces only the tab that changed, so typing or streaming rows in
+ * one tab never re-renders the others (every tab stays mounted).
+ */
+export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
   const config = useApp((s) => s.connections.find((c) => c.id === tab.connId));
   const db = useApp((s) => s.nodes[tab.connId]?.databases.find((d) => d.name === tab.database));
   const {
@@ -49,7 +90,10 @@ export function QueryView({ tab }: { tab: Tab }) {
     setView,
     editCell,
     addRow,
-    toggleDeleteRow,
+    editCells,
+    toggleDeleteRows,
+    undoEdit,
+    redoEdit,
     saveEdits,
     explain,
     toggleSort,
@@ -75,20 +119,14 @@ export function QueryView({ tab }: { tab: Tab }) {
   /** The values typed last time, so running the same query again needs no retyping. */
   const lastValues = useRef<Record<string, string>>({});
   /** Rows the grid selection spans, for the edit bar's Delete. */
-  const [rows, setRows] = useState<number[]>([]);
+  const [span, setSpan] = useState<RowSpan | null>(null);
 
   useEffect(() => () => registerEditor(tab.id, null), [tab.id]);
 
   const objects = db?.objects;
   const columns = db?.columns;
-  const schema = useMemo(() => {
-    const byTable: Record<string, string[]> = {};
-    for (const o of objects ?? []) {
-      if (o.kind === "table" || o.kind === "view") byTable[o.name] = [];
-    }
-    for (const t of columns ?? []) byTable[t.table] = t.columns;
-    return byTable;
-  }, [objects, columns]);
+  // Shared by every tab on this database, so the editor's completion is built once per load.
+  const schema = schemaOf(objects ?? null, columns ?? null);
 
   /** The selection, or the statement under the cursor (briefly highlighted). */
   const currentStatement = useCallback(async (): Promise<string | null> => {
@@ -171,13 +209,86 @@ export function QueryView({ tab }: { tab: Tab }) {
   })();
   const grids = tab.sets.map((set, index) => ({ set, index })).filter(({ set }) => set.columns);
   const { transfer } = useApp.getState();
-  const exportResult = () =>
-    transfer(
-      "export",
-      tab.browse && tab.paged
-        ? { kind: "table", conn: tab.connId, table: tab.browse.table }
-        : { kind: "result", tab: tab.id },
+  const exportResult = useCallback(
+    () =>
+      transfer(
+        "export",
+        tab.browse && tab.paged
+          ? { kind: "table", conn: tab.connId, table: tab.browse.table }
+          : { kind: "result", tab: tab.id },
+      ),
+    [tab.id, tab.connId, tab.browse, tab.paged, transfer],
+  );
+  // The grid is memoized: its props only change when what they show changes, so typing in the
+  // editor or moving the toolbar never re-renders the visible cells.
+  const editable = target !== null && !tab.running;
+  const canInsert = target?.canInsert ?? false;
+  const editing = useMemo<GridEditing | undefined>(
+    () =>
+      editable
+        ? {
+            edits: tab.edits ?? NO_EDITS,
+            onEdit: (row, col, value) => editCell(tab.id, row, col, value),
+            onEditCells: (cells) => editCells(tab.id, cells),
+            onToggleDeleteRows: (rows) => toggleDeleteRows(tab.id, rows),
+            onUndo: () => undoEdit(tab.id),
+            onRedo: () => redoEdit(tab.id),
+            onInsertRow: canInsert ? () => addRow(tab.id) : undefined,
+          }
+        : undefined,
+    [
+      editable,
+      canInsert,
+      tab.edits,
+      tab.id,
+      editCell,
+      editCells,
+      toggleDeleteRows,
+      undoEdit,
+      redoEdit,
+      addRow,
+    ],
+  );
+  const sort = tab.browse && tab.paged ? tab.browse.query.sort : null;
+  const sorting = useMemo<GridSorting | undefined>(
+    () => (sort ? { sort, onSort: (column) => toggleSort(tab.id, column) } : undefined),
+    [sort, tab.id, toggleSort],
+  );
+  const onCopyInsert = useCallback(
+    (names: string[], rows: Value[][]) => copyInsert(tab.id, names, rows),
+    [tab.id, copyInsert],
+  );
+
+  // Hidden columns are kept by name, so they stay hidden on the next page or run.
+  const shownColumns = active?.columns;
+  const hiddenNames = tab.hiddenColumns;
+  const hidden = useMemo(() => {
+    const names = new Set(hiddenNames);
+    return new Set(
+      (shownColumns ?? []).flatMap((column, i) => (names.has(column.name) ? [i] : [])),
     );
+  }, [shownColumns, hiddenNames]);
+  const { setHiddenColumns } = useApp.getState();
+  const columnItems: MenuItem[] = [
+    {
+      label: "Show all",
+      disabled: hiddenNames.length === 0,
+      onSelect: () => setHiddenColumns(tab.id, []),
+    },
+    ...(shownColumns ?? []).map((column, i) => ({
+      label: column.name,
+      checked: !hidden.has(i),
+      separatorBefore: i === 0,
+      onSelect: () =>
+        setHiddenColumns(
+          tab.id,
+          hidden.has(i)
+            ? hiddenNames.filter((name) => name !== column.name)
+            : [...hiddenNames, column.name],
+        ),
+    })),
+  ];
+
   // Actions used now and then: one menu instead of a button each.
   const moreItems: MenuItem[] = [
     ...(capabilities?.explain && !structure
@@ -317,6 +428,23 @@ export function QueryView({ tab }: { tab: Tab }) {
             <Filter {...ICON} />
           </IconButton>
         )}
+        {active?.columns && !structure && planText === null && (
+          <DropdownMenuButton
+            items={columnItems}
+            trigger={
+              <IconButton
+                label={
+                  tab.hiddenColumns.length > 0
+                    ? `Columns (${tab.hiddenColumns.length} hidden)`
+                    : "Columns"
+                }
+                className={cn(tab.hiddenColumns.length > 0 && "text-accent-text")}
+              >
+                <Columns3 {...ICON} />
+              </IconButton>
+            }
+          />
+        )}
         <div className="flex-1" />
         <FavoriteButton tab={tab} onSaveQuery={() => setSaving(true)} />
         <DropdownMenuButton
@@ -392,7 +520,7 @@ export function QueryView({ tab }: { tab: Tab }) {
 
       {/* Edit bar: right above the grid, where the eye is while editing. */}
       {target && !structure && active?.columns && planText === null && (
-        <EditBar tab={tab} canInsert={target.canInsert} matchAll={target.matchAll} rows={rows} />
+        <EditBar tab={tab} canInsert={target.canInsert} matchAll={target.matchAll} span={span} />
       )}
 
       {/* Results */}
@@ -409,32 +537,19 @@ export function QueryView({ tab }: { tab: Tab }) {
           </pre>
         )}
         {active?.columns && planText === null && (
-          <ResultGrid
-            columns={active.columns}
-            rows={active.rows}
-            resetKey={tab.runId * 100 + tab.activeSet}
-            editing={
-              target && !tab.running
-                ? {
-                    edits: tab.edits ?? { updates: {}, inserts: [], deletes: [] },
-                    onEdit: (row, col, value) => editCell(tab.id, row, col, value),
-                    onToggleDelete: (row) => toggleDeleteRow(tab.id, row),
-                    onInsertRow: target.canInsert ? () => addRow(tab.id) : undefined,
-                  }
-                : undefined
-            }
-            sorting={
-              tab.browse && tab.paged
-                ? {
-                    sort: tab.browse.query.sort,
-                    onSort: (column) => toggleSort(tab.id, column),
-                  }
-                : undefined
-            }
-            onCopyInsert={(names, rows) => copyInsert(tab.id, names, rows)}
-            onExport={exportResult}
-            onSelectRows={setRows}
-          />
+          <Profiler id="grid" onRender={onRender}>
+            <ResultGrid
+              columns={active.columns}
+              rows={active.rows}
+              resetKey={tab.runId * 100 + tab.activeSet}
+              editing={editing}
+              sorting={sorting}
+              onCopyInsert={onCopyInsert}
+              onExport={exportResult}
+              onSelectRows={setSpan}
+              hidden={hidden}
+            />
+          </Profiler>
         )}
         {!tab.running && !tab.error && tab.sets.length > 0 && grids.length === 0 && (
           <p className="animate-fade p-4 text-base text-muted">
@@ -516,7 +631,7 @@ export function QueryView({ tab }: { tab: Tab }) {
       )}
     </div>
   );
-}
+});
 
 function plural(n: number, word: string): string {
   return `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
@@ -589,14 +704,18 @@ function EditBar({
   tab,
   canInsert,
   matchAll,
-  rows,
+  span,
 }: {
   tab: Tab;
   canInsert: boolean;
   matchAll: boolean;
-  rows: number[];
+  span: RowSpan | null;
 }) {
-  const { addRow, toggleDeleteRow, discardEdits, saveEdits } = useApp.getState();
+  const rows = span
+    ? Array.from({ length: span.bottom - span.top + 1 }, (_, i) => span.top + i)
+    : [];
+  const { addRow, toggleDeleteRows, discardEdits, saveEdits, undoEdit, redoEdit } =
+    useApp.getState();
   const pending = editCount(tab.edits);
   const deletes = tab.edits?.deletes ?? [];
   const loaded = tab.sets[tab.activeSet]?.rows.length ?? 0;
@@ -616,14 +735,29 @@ function EditBar({
         variant="ghost"
         disabled={busy || rows.length === 0}
         title={rows.length === 0 ? "Select rows in the grid first" : undefined}
-        onClick={() => {
-          // New rows are removed by position, so go from the bottom up.
-          for (const row of [...rows].reverse()) toggleDeleteRow(tab.id, row);
-        }}
+        onClick={() => toggleDeleteRows(tab.id, rows)}
       >
         <Minus size={14} strokeWidth={1.75} />
         {keeping ? `Keep ${count}` : `Delete ${count}`}
       </Button>
+      <IconButton
+        label="Undo change"
+        shortcut={keysOf("undoEdit")}
+        size="sm"
+        disabled={busy || tab.editsPast.length === 0}
+        onClick={() => undoEdit(tab.id)}
+      >
+        <Undo2 size={14} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
+        label="Redo change"
+        shortcut={keysOf("redoEdit")}
+        size="sm"
+        disabled={busy || tab.editsFuture.length === 0}
+        onClick={() => redoEdit(tab.id)}
+      >
+        <Redo2 size={14} strokeWidth={1.75} />
+      </IconButton>
       {pending > 0 && (
         <div className="ml-2 flex items-center gap-1.5 border-line border-l pl-3">
           <span className="text-fg">

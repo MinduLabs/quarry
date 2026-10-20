@@ -64,6 +64,16 @@ async fn connects_and_lists_schema() {
             .iter()
             .any(|o| o.name == "paid_orders" && o.kind == ObjectKind::View)
     );
+    assert!(
+        objects
+            .iter()
+            .any(|o| o.name == "products_touch" && o.kind == ObjectKind::Trigger)
+    );
+    assert!(
+        objects
+            .iter()
+            .any(|o| o.name == "nightly_report" && o.kind == ObjectKind::Event)
+    );
 }
 
 #[tokio::test]

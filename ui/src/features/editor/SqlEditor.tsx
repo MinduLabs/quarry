@@ -6,7 +6,7 @@ import {
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { MySQL, sql } from "@codemirror/lang-sql";
-import { bracketMatching, indentOnInput } from "@codemirror/language";
+import { bracketMatching, indentOnInput, type LanguageSupport } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, StateEffect, StateField } from "@codemirror/state";
 import {
@@ -23,6 +23,26 @@ import { useEffect, useRef } from "react";
 import { formatSql } from "./format";
 import { snippetSource } from "./snippets";
 import { editorHighlight, editorTheme } from "./theme";
+
+/** Table name → column names, for completion. A table whose columns are not loaded maps to []. */
+export type CompletionSchema = Record<string, string[]>;
+
+/**
+ * SQL language with completion for `schema`, built once per schema object and shared by every
+ * editor using it: building it for thousands of tables is slow.
+ */
+// claude: lang-sql 6.10 builds its completion tree in O(tables²) (`CompletionLevel.child` scans
+// the list for each new table), ~100 ms for 5000 tables in a dev build. A completion source of our
+// own keyed by Map would remove it; until then the cache keeps it to once per database load.
+const languages = new WeakMap<CompletionSchema, LanguageSupport>();
+function sqlLanguage(schema: CompletionSchema): LanguageSupport {
+  let language = languages.get(schema);
+  if (!language) {
+    language = sql({ dialect: MySQL, upperCaseKeywords: true, schema });
+    languages.set(schema, language);
+  }
+  return language;
+}
 
 const flashEffect = StateEffect.define<{ from: number; to: number } | null>();
 
@@ -57,8 +77,7 @@ export function SqlEditor({
   onReady,
 }: {
   initialValue: string;
-  /** Table name → column names, for completion. A table whose columns are not loaded maps to []. */
-  schema: Record<string, string[]>;
+  schema: CompletionSchema;
   onChange: (value: string) => void;
   onRun: (all: boolean) => void;
   onReady: (view: EditorView) => void;
@@ -105,7 +124,7 @@ export function SqlEditor({
           closeBrackets(),
           highlightSelectionMatches(),
           autocompletion({ icons: false }),
-          language.current.of(sql({ dialect: MySQL, upperCaseKeywords: true, schema })),
+          language.current.of(sqlLanguage(schema)),
           MySQL.language.data.of({ autocomplete: snippetSource }),
           keymap.of([
             ...closeBracketsKeymap,
@@ -131,11 +150,7 @@ export function SqlEditor({
   }, []);
 
   useEffect(() => {
-    view.current?.dispatch({
-      effects: language.current.reconfigure(
-        sql({ dialect: MySQL, upperCaseKeywords: true, schema }),
-      ),
-    });
+    view.current?.dispatch({ effects: language.current.reconfigure(sqlLanguage(schema)) });
   }, [schema]);
 
   return <div ref={host} className="h-full min-h-0 overflow-hidden" />;

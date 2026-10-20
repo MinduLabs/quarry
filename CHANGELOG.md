@@ -37,6 +37,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Edit query results when all their columns come from one table, and tables without a primary key (rows are matched by their values; a change that would hit more than one row is not saved).
 - Change the schema from Structure and the sidebar: add, edit and drop columns and indexes, create, rename, empty and drop tables, create and drop databases. Every change shows its SQL before it runs.
 - Copy a table's DDL from Structure; copy names and refresh a database from the sidebar.
+- Pin tabs (right-click a tab): pinned tabs stay first, are kept on quit, and are not closed by `Ctrl/⌘+W`, the middle button or Close other tabs. Drag tabs to reorder them; Close tabs to the right; `Ctrl+Tab` / `Ctrl+Shift+Tab` and `Ctrl/⌘+1…9` switch tabs.
+- The sidebar lists triggers and events; opening one shows its definition.
+- Find in results (`Ctrl/⌘+F` in the grid): highlights matching cells in the loaded rows and steps through them with Enter / Shift+Enter.
+- Hide and show grid columns from the Columns button; hidden columns stay hidden on the next page or run of the tab.
+- Undo and redo pending grid edits (`Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`, or the buttons in the edit bar). Set NULL on a selection and deleting several rows are one step each, and Discard can be undone too.
+- For development: `QUARRY_PERF=1` writes a performance log (`perf.jsonl`) with engine timings per command and query phase and the UI's render times; `just bench` runs release benchmarks of the history file and of query latency.
 - Pin connections in Favorites (right-click a connection); opening one connects and shows it in the tree.
 - The sidebar filter now works on the Connections pane: it matches connections, databases and the tables of open databases.
 - Right-click a tab: Reopen closed tab (`Shift+Ctrl/⌘+T`, the last 20 closed tabs with their SQL and page), Close, Close other tabs.
@@ -55,4 +61,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - The Name field of the connection dialog no longer shows the host as its placeholder, which looked like a value already typed in.
 - Safe mode now asks before `EXPLAIN ANALYZE` of a write, which runs the statement. It was treated as a read.
 - `F5` in a table's Structure view reloads the structure instead of switching to Data.
+- Tabs on the same database share one completion schema, so loading the columns of a 5,000-table database with 5 tabs open went from about 850 ms to 360 ms (development build).
+- A database with thousands of tables no longer slows the app: the sidebar tree renders only the rows in view (opening a 5,000-table database went from 1.3 s to about 60 ms in a development build, and typing in the editor while it is open from 1 s to about 10 ms per key).
+- Typing in the editor no longer re-renders the results of every open tab, and dragging a selection no longer re-renders the toolbar and editor. Searching the history no longer slows down a query streaming in another tab.
 - A database refresh that fails keeps the tables already shown in the sidebar.

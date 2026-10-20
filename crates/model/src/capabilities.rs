@@ -14,6 +14,8 @@ pub enum ObjectKind {
     Function,
     Procedure,
     Trigger,
+    /// A scheduled job (MySQL `CREATE EVENT`).
+    Event,
     Sequence,
     Index,
 }

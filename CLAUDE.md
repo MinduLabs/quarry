@@ -55,6 +55,7 @@ just db-up            # test MySQL on 127.0.0.1:13306 (user quarry / password qu
 just test-db          # driver + engine integration tests (QUARRY_TEST_MYSQL=127.0.0.1:13306)
 just db-down
 just bindings         # regenerate ui/src/bindings after Command / Event / model changes
+just bench            # release benchmarks: history file, query latency on the test MySQL (db-up first)
 just appimage         # dist/Quarry_<version>_amd64.AppImage (Docker, Ubuntu 22.04)
 just deb              # dist/Quarry_<version>_amd64.deb (Docker, Ubuntu 22.04)
 just flatpak          # dist/quarry-<version>.flatpak (Docker)
@@ -65,6 +66,7 @@ pnpm format           # Biome format (UI)
 ```
 
 - Runtime log: `QUARRY_LOG=debug just dev` (a `tracing` EnvFilter, default `info`).
+- Performance log: `QUARRY_PERF=1 just dev` writes `perf.jsonl` in the data dir (or `QUARRY_PERF=<path>`): engine timings per command and query phase, and UI render times. Durations and counts only, never SQL text or values.
 - Integration tests skip themselves unless `QUARRY_TEST_MYSQL` is set. A skipped run proves nothing about MySQL.
 - Every package lands flat in `dist/`: one command, one file (`.AppImage`, `.deb`, `.flatpak`, `.dmg`), nothing else. Each build prints the full path.
 - Linux package builds keep their caches inside Docker (BuildKit layers and cache mounts), never in the repo. `docker builder prune` clears them.
@@ -98,7 +100,8 @@ pnpm format           # Biome format (UI)
 
 ## Performance pitfalls
 
-- The grid is virtualized (`@tanstack/react-virtual`). Never render all rows, and never put per-row state in React state that re-renders the whole list.
+- The grid and the sidebar tree are virtualized (`@tanstack/react-virtual`). Never render all rows, and never put per-row state in React state that re-renders the whole list.
+- Every tab stays mounted, so big components (`QueryView`, `ResultGrid`, `Sidebar`) are memoized with stable props: a keystroke must not re-render other tabs, the grid's cells or the tree.
 - WebKitGTK on Linux is slow at layout animation: animate `opacity` and `transform` only. No `transition: all`, no `backdrop-filter`, no big blurred shadows.
 - Do not hold the engine's `Mutex` across an `.await`.
 - Drain rows past the limit from the socket without sending them; do not buffer them.

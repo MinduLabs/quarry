@@ -65,6 +65,11 @@ export function TabBar() {
         disabled: others.length === 0,
         onSelect: () => closeTabs(others),
       },
+      {
+        label: "Close tabs to the right",
+        disabled: !tabs.slice(tabs.findIndex((t) => t.id === id) + 1).some((t) => !t.pinned),
+        onSelect: () => useApp.getState().closeTabsToRight(id),
+      },
     ];
   };
 

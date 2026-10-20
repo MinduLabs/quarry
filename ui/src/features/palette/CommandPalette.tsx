@@ -292,6 +292,13 @@ function useCommandItems(): Item[] {
           run: () => s.refresh(id),
         },
         {
+          id: "pin",
+          label: activeTab.pinned ? "Unpin tab" : "Pin tab",
+          detail: activeTab.title,
+          icon,
+          run: () => s.togglePin(id),
+        },
+        {
           id: "close",
           label: "Close tab",
           detail: activeTab.title,

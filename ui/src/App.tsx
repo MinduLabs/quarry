@@ -1,9 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useState } from "react";
+import { Profiler, useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/Toaster";
 import { TooltipProvider } from "@/components/ui/Tooltip";
 import { cn } from "@/lib/cn";
 import { send, subscribe } from "@/lib/engine";
+import { onRender } from "@/lib/perf";
 import { isMac } from "@/lib/platform";
 import { pendingWork, saveWorkspace, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
@@ -94,14 +95,19 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      const { openDialog, newQuery, closeTab, activeTabId, dialog } = useApp.getState();
+      const { openDialog, newQuery, closeTab, activeTabId, dialog, tabs } = useApp.getState();
       if (dialog) return;
       const key = e.key.toLowerCase();
-      if (key === "n") openDialog({ mode: "new" });
+      // Ctrl+Tab on every platform: ⌘Tab belongs to the macOS app switcher.
+      if (key === "tab" && e.ctrlKey) useApp.getState().cycleTab(e.shiftKey ? -1 : 1);
+      else if (/^[1-9]$/.test(key) && !e.shiftKey) useApp.getState().selectTabAt(Number(key));
+      else if (key === "n") openDialog({ mode: "new" });
       else if (key === "t" && e.shiftKey) useApp.getState().reopenClosedTab();
       else if (key === "t") newQuery();
-      else if (key === "w" && activeTabId !== null) closeTab(activeTabId);
-      else if (key === "b") useApp.getState().toggleSidebar();
+      else if (key === "w" && activeTabId !== null) {
+        // A pinned tab is closed on purpose only: from its menu.
+        if (!tabs.find((t) => t.id === activeTabId)?.pinned) closeTab(activeTabId);
+      } else if (key === "b") useApp.getState().toggleSidebar();
       else if (key === ",") useApp.getState().setSettingsOpen(true);
       else if (key === "p") useApp.getState().setPalette(e.shiftKey ? "commands" : "open");
       else if (key === (isMac ? "y" : "h") && !e.shiftKey) useApp.getState().setHistoryOpen(true);
@@ -138,7 +144,9 @@ export function App() {
           )}
         >
           <div className="min-w-0 flex-1">
-            <Sidebar />
+            <Profiler id="sidebar" onRender={onRender}>
+              <Sidebar />
+            </Profiler>
           </div>
           <div
             role="separator"
@@ -170,7 +178,9 @@ export function App() {
                   key={tab.id}
                   className={tab.id === activeId ? "flex min-h-0 flex-1 flex-col" : "hidden"}
                 >
-                  <QueryView tab={tab} />
+                  <Profiler id="tab" onRender={onRender}>
+                    <QueryView tab={tab} />
+                  </Profiler>
                 </div>
               ))}
             </>

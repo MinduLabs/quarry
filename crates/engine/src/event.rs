@@ -39,6 +39,8 @@ pub enum Event {
     Pong {
         id: u32,
         version: String,
+        /// The performance log is on: the client may send its own timings (`PerfMarks`).
+        perf: bool,
     },
     /// General message, shown as a toast.
     Notice {

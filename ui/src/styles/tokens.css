@@ -51,6 +51,8 @@
   --cell-modified: rgb(245 158 11 / 0.16);
   --cell-inserted: rgb(22 163 74 / 0.14);
   --cell-deleted: rgb(220 38 38 / 0.12);
+  /* Find in results */
+  --cell-match: rgb(234 179 8 / 0.32);
 
   /* SQL syntax */
   --syntax-keyword: #8b2fc9;
@@ -114,6 +116,7 @@
   --cell-modified: rgb(245 158 11 / 0.2);
   --cell-inserted: rgb(34 197 94 / 0.18);
   --cell-deleted: rgb(239 68 68 / 0.18);
+  --cell-match: rgb(250 204 21 / 0.26);
 
   --syntax-keyword: #c792ea;
   --syntax-string: #e5b567;
@@ -160,6 +163,7 @@
   --color-cell-modified: var(--cell-modified);
   --color-cell-inserted: var(--cell-inserted);
   --color-cell-deleted: var(--cell-deleted);
+  --color-cell-match: var(--cell-match);
 
   --font-sans: "Inter Variable", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;

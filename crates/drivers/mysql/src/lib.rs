@@ -52,6 +52,8 @@ impl Driver for MysqlDriver {
                 ObjectKind::View,
                 ObjectKind::Function,
                 ObjectKind::Procedure,
+                ObjectKind::Trigger,
+                ObjectKind::Event,
             ],
         }
     }
@@ -120,6 +122,20 @@ struct MysqlSession {
     id: u32,
     opts: Opts,
     version: String,
+}
+
+impl MysqlSession {
+    /// One column of names for `database`, or none when the query fails (missing privilege,
+    /// older server); the failure is logged.
+    async fn names(&mut self, sql: &str, database: &str) -> Vec<String> {
+        match self.conn.exec(sql, (database,)).await {
+            Ok(names) => names,
+            Err(err) => {
+                tracing::debug!(%err, "optional object list");
+                Vec::new()
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -197,6 +213,23 @@ impl Session for MysqlSession {
             .await
             .map_err(map_err)?;
 
+        // Triggers and events are listed when the user may see them; a server or account that
+        // refuses the query just shows none, rather than failing the whole tree.
+        let triggers = self
+            .names(
+                "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS \
+                 WHERE TRIGGER_SCHEMA = ? ORDER BY TRIGGER_NAME",
+                database,
+            )
+            .await;
+        let events = self
+            .names(
+                "SELECT EVENT_NAME FROM information_schema.EVENTS \
+                 WHERE EVENT_SCHEMA = ? ORDER BY EVENT_NAME",
+                database,
+            )
+            .await;
+
         let objects = tables
             .into_iter()
             .map(|(name, kind)| SchemaObject {
@@ -214,6 +247,14 @@ impl Session for MysqlSession {
                 } else {
                     ObjectKind::Procedure
                 },
+            }))
+            .chain(triggers.into_iter().map(|name| SchemaObject {
+                name,
+                kind: ObjectKind::Trigger,
+            }))
+            .chain(events.into_iter().map(|name| SchemaObject {
+                name,
+                kind: ObjectKind::Event,
             }))
             .collect();
         Ok(objects)

@@ -59,7 +59,14 @@ just check          # Biome + tsc + cargo fmt/clippy/test (just check-docker wit
 just db-up          # start the test MySQL on 127.0.0.1:13306
 just test-db        # driver and engine integration tests
 just bindings       # regenerate ui/src/bindings after changing Command/Event or model types
+just bench          # release benchmarks (history file; query latency needs just db-up)
 ```
+
+### Measuring performance
+
+`QUARRY_PERF=1 just dev` writes one JSON line per timing to `perf.jsonl` in the data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`), or to the path you give (`QUARRY_PERF=/tmp/perf.jsonl`). The log is local only: any `*perf*.jsonl` in the repo is git-ignored. The engine logs every command, each query's phases (`wait_ms`, `prepare_ms`, `first_rows_ms`, `execute_ms`, rows, batches), history and schema loads; the UI adds its render times (`render.tab`, `render.grid`, `render.sidebar`, development builds only). `QUARRY_LOG=quarry::perf=debug` prints the same lines in the terminal. The log never holds SQL text or values.
+
+`just bench` runs the benchmarks in a release build; compare its numbers before and after a change that touches a hot path.
 
 ## Pull requests
 

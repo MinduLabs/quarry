@@ -8,13 +8,14 @@ mod browse;
 mod command;
 mod edit;
 mod event;
+mod perf;
 mod schema;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use quarry_driver_api::{
     DriverError, DriverRegistry, ExecItem, ExecOpts, ResolvedConfig, Session, SharedCancel,
@@ -28,7 +29,7 @@ use quarry_store::{
 };
 use quarry_tunnel::{Tunnel, TunnelSpec};
 
-pub use command::{Command, Password, RequestId, TabId};
+pub use command::{Command, Password, PerfMark, RequestId, TabId};
 pub use event::{ConnState, Event, NoticeKind};
 /// Pure SQL text helpers (statement splitting, …), shared with clients.
 pub use quarry_sql as sql;
@@ -61,6 +62,8 @@ pub struct EngineOptions {
     pub known_hosts: Option<PathBuf>,
     /// Do not touch the system keyring (tests, environments without one).
     pub disable_keyring: bool,
+    /// Performance log (`perf.jsonl`); `None` = the `QUARRY_PERF` environment variable decides.
+    pub perf_log: Option<PathBuf>,
 }
 
 /// Sending side of the engine. Cheap to clone; the engine stops when every handle is dropped.
@@ -134,7 +137,9 @@ struct Engine {
     favorite_store: Option<FavoritesStore>,
     favorites: Mutex<Vec<Favorite>>,
     workspace: Option<WorkspaceStore>,
-    history: Option<HistoryStore>,
+    /// File IO, so it runs on the blocking pool (`spawn_blocking`), never on the runtime's two
+    /// workers that stream query results.
+    history: Option<Arc<HistoryStore>>,
     secrets: Option<SecretStore>,
     connections: Mutex<Vec<ConnectionConfig>>,
     /// Secrets entered during this run (also when not saved to the keyring).
@@ -148,6 +153,8 @@ struct Engine {
     tabs: Mutex<HashMap<TabId, Arc<tokio::sync::Mutex<Option<TabSession>>>>>,
     /// Per-tab cancel handles, kept apart so a busy session can still be cancelled.
     cancels: Mutex<HashMap<TabId, (ConnId, SharedCancel)>>,
+    /// Development performance log; `None` when off.
+    perf: Option<perf::PerfLog>,
 }
 
 /// These `std` mutexes are only held briefly; a poisoned lock still holds valid data.
@@ -178,10 +185,20 @@ impl Engine {
             .data_dir
             .map(Ok)
             .unwrap_or_else(quarry_store::default_data_dir);
+        let perf = options
+            .perf_log
+            .or_else(|| perf::path_from_env(data_dir.as_deref().ok()))
+            .and_then(|path| match perf::PerfLog::open(path) {
+                Ok(log) => Some(log),
+                Err(err) => {
+                    tracing::warn!(%err, "performance log unavailable");
+                    None
+                }
+            });
         let (workspace, history) = match data_dir {
             Ok(dir) => (
                 Some(WorkspaceStore::new(&dir)),
-                Some(HistoryStore::new(dir)),
+                Some(Arc::new(HistoryStore::new(dir))),
             ),
             Err(err) => {
                 tracing::error!(%err, "no data directory; open tabs and history will not be saved");
@@ -209,6 +226,14 @@ impl Engine {
             meta: Mutex::new(HashMap::new()),
             tabs: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
+            perf,
+        }
+    }
+
+    /// Log a timing when the performance log is on.
+    fn perf(&self, name: &str, started: std::time::Instant, fields: serde_json::Value) {
+        if let Some(log) = &self.perf {
+            log.record("engine", name, perf::ms_since(started), fields);
         }
     }
 
@@ -225,11 +250,34 @@ impl Engine {
     }
 
     async fn handle(self: Arc<Self>, command: Command) {
+        let timed = self.perf.is_some() && command_kind(&command) != "PerfMarks";
+        let kind = command_kind(&command);
+        let started = std::time::Instant::now();
+        self.clone().dispatch(command).await;
+        if timed {
+            self.perf("command", started, serde_json::json!({ "command": kind }));
+        }
+    }
+
+    async fn dispatch(self: Arc<Self>, command: Command) {
         match command {
             Command::Ping { id } => self.emit(Event::Pong {
                 id,
                 version: VERSION.to_owned(),
+                perf: self.perf.is_some(),
             }),
+            Command::PerfMarks { marks } => {
+                if let Some(log) = &self.perf {
+                    for mark in marks {
+                        log.record(
+                            "ui",
+                            &mark.name,
+                            mark.ms,
+                            serde_json::json!({ "detail": mark.detail }),
+                        );
+                    }
+                }
+            }
             Command::LoadConnections => self.load_connections(),
             Command::SaveConnection {
                 config,
@@ -399,9 +447,9 @@ impl Engine {
                 query,
                 conn,
                 limit,
-            } => self.load_history(request, query.as_deref(), conn, limit),
+            } => self.load_history(request, query, conn, limit).await,
             Command::ClearHistory { request } => {
-                if let Some(Err(err)) = self.history.as_ref().map(HistoryStore::clear) {
+                if let Some(Err(err)) = self.with_history(|h| h.clear()).await {
                     self.notice(
                         NoticeKind::Error,
                         format!("Couldn't clear the history: {err}"),
@@ -583,15 +631,40 @@ impl Engine {
 
     // ---------- History ----------
 
-    fn load_history(
+    /// Run `work` on the history file off the async runtime. `None` when there is no history
+    /// store (no data directory) or the blocking task did not finish.
+    async fn with_history<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&HistoryStore) -> quarry_store::Result<T> + Send + 'static,
+    ) -> Option<quarry_store::Result<T>> {
+        let history = self.history.clone()?;
+        match tokio::task::spawn_blocking(move || work(&history)).await {
+            Ok(result) => Some(result),
+            Err(err) => {
+                tracing::warn!(%err, "history task");
+                None
+            }
+        }
+    }
+
+    async fn load_history(
         &self,
         request: RequestId,
-        query: Option<&str>,
+        query: Option<String>,
         conn: Option<ConnId>,
         limit: u32,
     ) {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-        let entries = match self.history.as_ref().map(|h| h.search(query, conn, limit)) {
+        let started = Instant::now();
+        let search = move |h: &HistoryStore| h.search(query.as_deref(), conn, limit);
+        let found = self.with_history(search).await;
+        let count = found.as_ref().and_then(|r| r.as_ref().ok()).map(Vec::len);
+        self.perf(
+            "history.search",
+            started,
+            serde_json::json!({ "entries": count }),
+        );
+        let entries = match found {
             Some(Ok(entries)) => entries,
             Some(Err(err)) => {
                 self.notice(
@@ -605,11 +678,16 @@ impl Engine {
         self.emit(Event::History { request, entries });
     }
 
-    fn record(&self, entry: HistoryEntry) {
-        let Some(history) = &self.history else { return };
-        match history.append(&entry) {
-            Ok(()) => self.emit(Event::HistoryAdded { entry }),
-            Err(err) => tracing::warn!(%err, "history append"),
+    /// Append to the history, then report it. Awaited, so events keep their order.
+    async fn record(&self, entry: HistoryEntry) {
+        let line = entry.clone();
+        let started = Instant::now();
+        let appended = self.with_history(move |h| h.append(&line)).await;
+        self.perf("history.append", started, serde_json::Value::Null);
+        match appended {
+            Some(Ok(())) => self.emit(Event::HistoryAdded { entry }),
+            Some(Err(err)) => tracing::warn!(%err, "history append"),
+            None => {}
         }
     }
 
@@ -845,7 +923,14 @@ impl Engine {
                 error,
             });
         };
+        let started = Instant::now();
         let result = meta.lock().await.list_objects(&database).await;
+        let count = result.as_ref().map(Vec::len).ok();
+        self.perf(
+            "schema.objects",
+            started,
+            serde_json::json!({ "objects": count }),
+        );
         let (objects, error) = match result {
             Ok(objects) => (Some(objects), None),
             Err(err) => (None, Some(describe(&err))),
@@ -868,7 +953,14 @@ impl Engine {
                 error,
             });
         };
+        let started = Instant::now();
         let result = meta.lock().await.list_columns(&database).await;
+        let count = result.as_ref().map(Vec::len).ok();
+        self.perf(
+            "schema.columns",
+            started,
+            serde_json::json!({ "tables": count }),
+        );
         let (columns, error) = match result {
             Ok(columns) => (Some(columns), None),
             Err(err) => (None, Some(describe(&err))),
@@ -894,6 +986,7 @@ impl Engine {
     }
 
     async fn load_table_info(&self, request: RequestId, conn: ConnId, table: TableRef) {
+        let started = Instant::now();
         let result = match self.meta_session(conn).await {
             Ok(meta) => meta
                 .lock()
@@ -907,6 +1000,11 @@ impl Engine {
             Ok(info) => (Some(info), None),
             Err(error) => (None, Some(error)),
         };
+        self.perf(
+            "schema.table_info",
+            started,
+            serde_json::json!({ "columns": info.as_ref().map(|i| i.columns.len()) }),
+        );
         self.emit(Event::TableInfo {
             request,
             info,
@@ -986,6 +1084,7 @@ impl Engine {
             from_user,
         } = query;
         self.emit(Event::QueryStarted { tab });
+        let started = Instant::now();
         let failed = |error: String| Event::QueryFailed {
             tab,
             error,
@@ -993,6 +1092,8 @@ impl Engine {
         };
         let slot = self.tab_slot(tab);
         let mut slot = slot.lock().await;
+        // Time spent waiting for the tab (a previous command still holding it).
+        let wait_ms = perf::ms_since(started);
         if let Err(error) = self.ensure_tab_session(&mut slot, tab, conn).await {
             return self.emit(failed(error));
         }
@@ -1008,13 +1109,23 @@ impl Engine {
             tab_session.database = Some(db);
         }
 
+        // Opening the session and switching the database, if this query had to.
+        let prepare_ms = perf::ms_since(started) - wait_ms;
         let events = self.events.clone();
         let mut set = 0u32;
         let mut elapsed = Duration::ZERO;
+        let mut first_rows: Option<Instant> = None;
+        let mut rows_sent = 0usize;
+        let mut batches = 0u32;
         let mut sink = |item: ExecItem| {
             let event = match item {
                 ExecItem::Columns(columns) => Event::ResultColumns { tab, set, columns },
-                ExecItem::Rows(rows) => Event::ResultRows { tab, set, rows },
+                ExecItem::Rows(rows) => {
+                    first_rows.get_or_insert_with(Instant::now);
+                    rows_sent += rows.len();
+                    batches += 1;
+                    Event::ResultRows { tab, set, rows }
+                }
                 ExecItem::SetDone {
                     affected,
                     rows,
@@ -1046,12 +1157,34 @@ impl Engine {
             ..ExecOpts::default()
         };
         let ran_at = chrono::Utc::now();
+        let executing = Instant::now();
         let result = if params.is_empty() {
             session.execute(&sql, &opts, &mut sink).await
         } else {
             session.query(&sql, &params, &opts, &mut sink).await
         };
         drop(session);
+        if self.perf.is_some() {
+            // Durations and counts only: never the SQL text or its values.
+            self.perf(
+                "query",
+                started,
+                serde_json::json!({
+                    "tab": tab,
+                    "from_user": from_user,
+                    "statement": quarry_sql::first_keyword(&sql),
+                    "sql_bytes": sql.len(),
+                    "wait_ms": round(wait_ms),
+                    "prepare_ms": round(prepare_ms),
+                    "first_rows_ms": first_rows.map(|t| round(perf::ms_between(executing, t))),
+                    "execute_ms": round(perf::ms_since(executing)),
+                    "rows": rows_sent,
+                    "batches": batches,
+                    "sets": set,
+                    "ok": result.is_ok(),
+                }),
+            );
+        }
         let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         let error = match result {
             Ok(()) => {
@@ -1080,14 +1213,18 @@ impl Engine {
             }
         };
         if from_user {
-            self.record(HistoryEntry {
+            let entry = HistoryEntry {
                 sql,
                 conn,
                 database: tab_session.database.clone(),
                 ran_at,
                 elapsed_ms,
                 error,
-            });
+            };
+            // Free the tab before writing the history: the write can wait behind history searches,
+            // and the tab's next query must not wait with it.
+            drop(slot);
+            self.record(entry).await;
         }
     }
 
@@ -1256,7 +1393,8 @@ impl Engine {
                 error: failed
                     .as_ref()
                     .map(|e| e.lines().next().unwrap_or_default().to_owned()),
-            });
+            })
+            .await;
             if failed.is_some() {
                 error = failed;
                 break;
@@ -1465,6 +1603,47 @@ impl Engine {
     }
 }
 
+/// Milliseconds rounded to microseconds, for the performance log.
+fn round(ms: f64) -> f64 {
+    (ms * 1000.0).round() / 1000.0
+}
+
+/// The command's name for the performance log (never its fields: some hold passwords).
+fn command_kind(command: &Command) -> &'static str {
+    match command {
+        Command::Ping { .. } => "Ping",
+        Command::LoadConnections => "LoadConnections",
+        Command::SaveConnection { .. } => "SaveConnection",
+        Command::DeleteConnection { .. } => "DeleteConnection",
+        Command::TestConnection { .. } => "TestConnection",
+        Command::Connect { .. } => "Connect",
+        Command::Disconnect { .. } => "Disconnect",
+        Command::LoadObjects { .. } => "LoadObjects",
+        Command::LoadColumns { .. } => "LoadColumns",
+        Command::LoadTableInfo { .. } => "LoadTableInfo",
+        Command::LoadServerInfo { .. } => "LoadServerInfo",
+        Command::Run { .. } => "Run",
+        Command::Browse { .. } => "Browse",
+        Command::CountRows { .. } => "CountRows",
+        Command::Explain { .. } => "Explain",
+        Command::BeginTransaction { .. } => "BeginTransaction",
+        Command::EndTransaction { .. } => "EndTransaction",
+        Command::ApplyChanges { .. } => "ApplyChanges",
+        Command::InsertSql { .. } => "InsertSql",
+        Command::AlterSchema { .. } => "AlterSchema",
+        Command::Cancel { .. } => "Cancel",
+        Command::CloseTab { .. } => "CloseTab",
+        Command::LoadFavorites => "LoadFavorites",
+        Command::SaveFavorite { .. } => "SaveFavorite",
+        Command::DeleteFavorite { .. } => "DeleteFavorite",
+        Command::LoadHistory { .. } => "LoadHistory",
+        Command::ClearHistory { .. } => "ClearHistory",
+        Command::PerfMarks { .. } => "PerfMarks",
+        Command::LoadWorkspace => "LoadWorkspace",
+        Command::SaveWorkspace { .. } => "SaveWorkspace",
+    }
+}
+
 /// SQL for a tab, with its parameters.
 #[derive(Debug, Clone)]
 struct Query {
@@ -1582,6 +1761,7 @@ mod tests {
             data_dir: Some(dir),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap()
     }
@@ -1650,7 +1830,7 @@ mod tests {
         let (engine, events) = test_engine();
         engine.send(Command::Ping { id: 7 }).unwrap();
         match events.recv().await.unwrap() {
-            Event::Pong { id, version } => {
+            Event::Pong { id, version, .. } => {
                 assert_eq!(id, 7);
                 assert_eq!(version, VERSION);
             }
@@ -1868,6 +2048,7 @@ mod mysql_tests {
             data_dir: Some(dir.clone()),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap();
 
@@ -1974,6 +2155,7 @@ mod mysql_tests {
             data_dir: Some(dir.clone()),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap();
         engine
@@ -2065,6 +2247,7 @@ mod mysql_tests {
             data_dir: Some(dir.clone()),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap();
         engine
@@ -2204,6 +2387,7 @@ mod mysql_tests {
             data_dir: Some(dir.clone()),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap();
         engine
@@ -2348,6 +2532,7 @@ mod mysql_tests {
             data_dir: Some(dir.clone()),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap();
         engine
@@ -2525,6 +2710,7 @@ mod mysql_tests {
             data_dir: Some(dir.clone()),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap();
         engine
@@ -2576,6 +2762,7 @@ mod mysql_tests {
             data_dir: Some(dir.clone()),
             known_hosts: None,
             disable_keyring: true,
+            perf_log: None,
         })
         .unwrap();
         engine
@@ -2737,6 +2924,7 @@ mod mysql_tests {
                 data_dir: Some(dir.clone()),
                 known_hosts: Some(hosts.clone()),
                 disable_keyring: true,
+                perf_log: None,
             })
             .unwrap();
             engine

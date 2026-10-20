@@ -3,4 +3,4 @@
 /**
  * Kind of object in the schema tree.
  */
-export type ObjectKind = "database" | "schema" | "table" | "view" | "materialized_view" | "function" | "procedure" | "trigger" | "sequence" | "index";
+export type ObjectKind = "database" | "schema" | "table" | "view" | "materialized_view" | "function" | "procedure" | "trigger" | "event" | "sequence" | "index";

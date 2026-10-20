@@ -41,6 +41,10 @@ CREATE TABLE all_types (
 
 CREATE VIEW paid_orders AS SELECT * FROM orders WHERE status = 'paid';
 
+-- A trigger and a disabled event, so the tree lists both kinds. Neither changes data.
+CREATE TRIGGER products_touch BEFORE UPDATE ON products FOR EACH ROW SET NEW.name = NEW.name;
+CREATE EVENT nightly_report ON SCHEDULE EVERY 1 DAY DISABLE DO SELECT 1;
+
 INSERT INTO customers (email, full_name, country) VALUES
   ('an@example.com', 'Nguyễn Văn An', 'VN'),
   ('binh@example.com', 'Trần Thị Bình', 'VN'),

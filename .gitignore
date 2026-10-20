@@ -11,3 +11,5 @@
 /ui/dist
 /src-tauri/gen
 /packaging/flatpak/local.json
+# Development performance logs (QUARRY_PERF); local only
+*perf*.jsonl

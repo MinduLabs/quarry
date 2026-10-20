@@ -41,6 +41,11 @@ db-down:
 test-db:
     QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_SSH=127.0.0.1:12222 cargo test -p quarry-driver-mysql -p quarry-engine
 
+# Benchmarks in a release build: the history file, and query latency on the test MySQL (`just db-up` first)
+bench:
+    cargo test --release -q -p quarry-store --test bench -- --ignored --nocapture
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
+
 # macOS universal .dmg → dist/Quarry_<version>_universal.dmg. macOS only: Tauri cannot cross-build it.
 [macos]
 dmg:

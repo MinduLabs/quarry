@@ -195,6 +195,11 @@ pub enum Command {
     ClearHistory {
         request: RequestId,
     },
+    /// Timings measured by the client (renders, …), written to the performance log next to the
+    /// engine's own. Ignored when the log is off (`Event::Pong.perf`).
+    PerfMarks {
+        marks: Vec<PerfMark>,
+    },
     /// Read the tabs saved at the last quit → `Event::Workspace`.
     LoadWorkspace,
     /// Save the open tabs → `Event::WorkspaceSaved` with the same `request`.
@@ -202,4 +207,15 @@ pub enum Command {
         request: RequestId,
         workspace: Workspace,
     },
+}
+
+/// One client timing for the performance log.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PerfMark {
+    /// What was measured, e.g. `render.grid`.
+    pub name: String,
+    pub ms: f64,
+    /// Short context, e.g. `update`. Never SQL or values.
+    pub detail: Option<String>,
 }

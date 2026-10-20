@@ -1,5 +1,6 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
@@ -10,6 +11,8 @@ export interface MenuItem {
   /** A line above this item; ignored on the first item, so optional items above it can go. */
   separatorBefore?: boolean;
   disabled?: boolean;
+  /** A checkbox item (dropdown menus only): shows a check and keeps the menu open. */
+  checked?: boolean;
 }
 
 const CONTENT = "animate-pop z-50 min-w-44 rounded-lg bg-elevated p-1 shadow-popover";
@@ -58,19 +61,46 @@ export function DropdownMenuButton({ items, trigger }: { items: MenuItem[]; trig
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" sideOffset={4} className={CONTENT}>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={4}
+          // Long lists (a table's columns) scroll inside the menu.
+          className={cn(
+            CONTENT,
+            "max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto",
+          )}
+        >
           {items.map((item, index) => (
             <div key={item.label}>
               {item.separatorBefore && index > 0 && (
                 <DropdownMenu.Separator className="my-1 h-px bg-line" />
               )}
-              <DropdownMenu.Item
-                onSelect={item.onSelect}
-                disabled={item.disabled}
-                className={itemClass(item)}
-              >
-                {item.label}
-              </DropdownMenu.Item>
+              {item.checked === undefined ? (
+                <DropdownMenu.Item
+                  onSelect={item.onSelect}
+                  disabled={item.disabled}
+                  className={itemClass(item)}
+                >
+                  {item.label}
+                </DropdownMenu.Item>
+              ) : (
+                <DropdownMenu.CheckboxItem
+                  checked={item.checked}
+                  disabled={item.disabled}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    item.onSelect();
+                  }}
+                  className={cn(itemClass(item), "gap-2 pl-1.5")}
+                >
+                  <span className="flex size-4 shrink-0 items-center justify-center">
+                    <DropdownMenu.ItemIndicator>
+                      <Check size={14} strokeWidth={2} />
+                    </DropdownMenu.ItemIndicator>
+                  </span>
+                  <span className="truncate">{item.label}</span>
+                </DropdownMenu.CheckboxItem>
+              )}
             </div>
           ))}
         </DropdownMenu.Content>

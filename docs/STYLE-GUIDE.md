@@ -47,6 +47,7 @@ Use through Tailwind (`bg-surface`, `text-muted`, `border-line`, …) or `var(--
 | `bg-danger-solid` | Destructive button fill (white text) |
 | `bg-env-local`, `bg-env-staging`, `bg-env-production` | Environment badges, dots, and the 2px line along the top of a staging or production query view |
 | `bg-cell-modified`, `bg-cell-inserted`, `bg-cell-deleted` | Pending grid edits |
+| `bg-cell-match` | Cells matching Find in results |
 | `bg-kbd`, `text-kbd-fg`, `border-kbd-border`, `kbd-edge` | Key caps (`Kbd`) |
 
 Text/background pairs meet WCAG AA (4.5:1) except `text-faint`, which is for non-essential text only.
@@ -99,6 +100,7 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 - Above the editor, the toolbar holds what acts on SQL. Right above the grid, the edit bar (only for editable results) groups Add row, Delete rows and the pending changes with Discard / Save, where the eye is while editing. Below the grid, the results bar holds the view switch, result sets, status and pages.
 - Only frequent actions get a button. Occasional ones go in the toolbar's ⋯ menu (`DropdownMenuButton`), the right-click menus and the command palette.
 - Pinned tabs show a pin icon, are narrower and have no close button; they always sit before the unpinned ones.
+- Every tab stays mounted, so `QueryView` and `ResultGrid` are memoized and get stable props (`useMemo` / `useCallback`): typing in one tab re-renders neither the other tabs nor the visible cells.
 - Tabs stay neutral: the environment shows as the badge in the toolbar and a 2px line along the top of the query view, never as a tab color.
 - No tabs open → centered empty state in the content area.
 
