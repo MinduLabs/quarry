@@ -42,4 +42,4 @@ The UI and the engine share one contract. Rust owns it; TypeScript is generated.
 
 ## Tests
 
-`crates/engine/src/lib.rs` has unit tests (`safety_check` rules, tagged-JSON shape, ping) that spawn an engine with a temp config dir and `disable_keyring: true`, plus a `mysql_tests` module gated by `QUARRY_TEST_MYSQL`. Safe-mode logic is the `safety_check` function; a change to it needs a case in `safe_mode_rules`. A new command path gets a unit test where it can run without a database, and an integration test when real MySQL behavior matters.
+`crates/engine/src/tests.rs` has unit tests (`safety_check` rules, tagged-JSON shape, ping) that spawn an engine with a temp config dir and `disable_keyring: true`, plus `mysql_tests.rs` gated by `QUARRY_TEST_MYSQL`. Safe-mode logic is the `safety_check` function; a change to it needs a case in `safe_mode_rules`. A new command path gets a unit test where it can run without a database, and an integration test when real MySQL behavior matters.

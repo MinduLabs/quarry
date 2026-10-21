@@ -22,7 +22,7 @@ paths:
 
 1. New crate `crates/drivers/<name>`, workspace member, `quarry-driver-<name>` dependency entry, AGPL exception in `deny.toml`.
 2. Implement `Driver`, `Session`, `Dialect`; map native values to `Value` (unknown types → the `Other` fallback, never a failure).
-3. Register it in `Engine::new` (`crates/engine/src/lib.rs`). Nowhere else.
+3. Register it in `Engine::new` (`crates/engine/src/engine.rs`). Nowhere else.
 4. Add a service to `tests/docker-compose.yml`, fixtures in `tests/fixtures/<name>/`, an integration test gated by `QUARRY_TEST_<NAME>`, and a CI job step.
 5. Update the crate table in `docs/ARCHITECTURE.md` and add a CHANGELOG line.
 

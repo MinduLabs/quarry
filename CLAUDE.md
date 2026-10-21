@@ -24,7 +24,7 @@ Quarry is an open-source database client for Linux and macOS (AGPL-3.0-or-later,
 - `crates/sql`: `split`, `statement_at`, `classify` (read / write / DDL / destructive).
 - `crates/store`: `connections.toml` and `favorites.toml` (config dir, no secrets), `workspace.json` and `history.jsonl` (data dir), `SecretStore` (keyring: `oo7` on Linux, `security-framework` on macOS).
 - `crates/tunnel`: SSH local port forwarding (`russh`): agent, key file or password; host key must be in `known_hosts`.
-- `crates/engine`: owns the tokio runtime and all state. `command.rs`, `event.rs`, `lib.rs` (`Engine`, `EngineHandle`). The only crate that knows a concrete driver (registered in `lib.rs`).
+- `crates/engine`: owns the tokio runtime and all state. `command.rs`, `event.rs`, `lib.rs` (`EngineHandle`), `engine.rs` (`Engine` state), and one module per concern (`connections`, `query`, `session`, `changes`, `metadata`, `favorites`, `history`, `workspace`, `dispatch`). The only crate that knows a concrete driver (registered in `lib.rs`).
 - `src-tauri/`: thin bridge, no business logic. Commands `engine_send`, `engine_subscribe`, `statement_at`. `desktop.rs` installs the Linux desktop entry for unpackaged runs.
 - `ui/src/`: `features/{sidebar,connections,tabs,editor,query,grid,welcome,window}`, `components/ui/` (primitives), `store/app.ts` (zustand; engine events are reduced here), `lib/engine.ts` (bridge), `styles/tokens.css`. `bindings/` is generated.
 - `docker/linux.Dockerfile` (AppImage, `.deb`, `check-docker`), `docker/flatpak.Dockerfile`, `packaging/` (Flatpak manifest, desktop entry, metainfo). `tests/`: MySQL compose file and fixtures.
@@ -84,7 +84,7 @@ pnpm format           # Biome format (UI)
 - **The engine and drivers never block.** No blocking IO on the tokio runtime; the UI never waits on IO.
 - **Integers that do not fit a JS number are strings or `#[ts(type = "number")]` on purpose.** Do not widen a `u64` field without checking the TS type.
 - **A refresh never clears what it refreshes.** Fetch, then replace; keep good data on failure.
-- **New driver = new crate under `crates/drivers/`**, registered only in `crates/engine/src/lib.rs`, with `Capabilities` filled in honestly. Add its integration test and compose service.
+- **New driver = new crate under `crates/drivers/`**, registered only in `crates/engine/src/engine.rs`, with `Capabilities` filled in honestly. Add its integration test and compose service.
 - **UI strings and shortcuts:** sentence case, "…" on actions that open a dialog, shortcuts drawn with `Kbd`, never plain text.
 - **A new color is a token** in `tokens.css` (light and dark), never a hex in a component.
 - **Dependencies:** a new crate or npm package needs a reason in the PR. `cargo deny` blocks bad licenses (third-party GPL / AGPL is out because Quarry keeps the option to relicense) and yanked crates.
