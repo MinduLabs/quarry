@@ -20,7 +20,7 @@ export function Welcome() {
       data-tauri-drag-region
       className="animate-fade flex h-full flex-col items-center justify-center gap-6"
     >
-      <img src="/icon.svg" alt="" className="size-20" draggable={false} />
+      <img src="/icon.png" alt="" className="size-20" draggable={false} />
       <div className="flex flex-col items-center gap-1">
         <h1 className="font-semibold text-2xl text-fg">Quarry</h1>
         <p className="text-base text-muted">

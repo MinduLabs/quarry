@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.svg" width="128" alt="Quarry logo">
+  <img src="src-tauri/icons/icon.png" width="128" alt="Quarry logo">
 </p>
 
 <h1 align="center">Quarry</h1>

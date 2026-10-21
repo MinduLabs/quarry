@@ -11,7 +11,6 @@ use std::{env, fs, io};
 
 const APP_ID: &str = "io.github.mindulabs.Quarry";
 const ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
-const ICON_SVG: &[u8] = include_bytes!("../icons/icon.svg");
 
 pub fn integrate() {
     if env::var_os("FLATPAK_ID").is_some() || installed_by_package() {
@@ -75,12 +74,6 @@ fn install_user_entry() -> io::Result<()> {
             .join("icons/hicolor/512x512/apps")
             .join(format!("{APP_ID}.png")),
         ICON_PNG,
-    )?;
-    write_if_changed(
-        &data
-            .join("icons/hicolor/scalable/apps")
-            .join(format!("{APP_ID}.svg")),
-        ICON_SVG,
     )?;
     write_if_changed(
         &data.join("applications").join(format!("{APP_ID}.desktop")),
