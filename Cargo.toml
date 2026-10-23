@@ -49,7 +49,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # SSH tunnels: ring for crypto (rustls already uses it), no compression. No `rsa` feature: the
 # `rsa` crate has an unfixed timing side channel (RUSTSEC-2023-0071). RSA keys still work through
 # ssh-agent, which signs outside Quarry.
-russh = { version = "0.63", default-features = false, features = ["ring"] }
+russh = { version = "0.64", default-features = false, features = ["ring"] }
 
 # Desktop shell
 tauri = { version = "2.12", features = [] }
