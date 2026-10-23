@@ -5,44 +5,28 @@ import {
   completionKeymap,
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { MySQL, sql } from "@codemirror/lang-sql";
-import { bracketMatching, indentOnInput, type LanguageSupport } from "@codemirror/language";
+import { MySQL } from "@codemirror/lang-sql";
+import { bracketMatching, indentOnInput, LanguageSupport } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, StateEffect, StateField } from "@codemirror/state";
+import { EditorState, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
+  hoverTooltip,
   keymap,
   lineNumbers,
   placeholder,
 } from "@codemirror/view";
 import { useEffect, useRef } from "react";
+import { type SqlSchema, sqlCompletion } from "./completion";
+import { problemAt, sqlDiagnostics } from "./diagnostics";
 import { formatSql } from "./format";
+import { runErrorAt, runMarks } from "./runMarks";
 import { snippetSource } from "./snippets";
 import { editorHighlight, editorTheme } from "./theme";
-
-/** Table name → column names, for completion. A table whose columns are not loaded maps to []. */
-export type CompletionSchema = Record<string, string[]>;
-
-/**
- * SQL language with completion for `schema`, built once per schema object and shared by every
- * editor using it: building it for thousands of tables is slow.
- */
-// claude: lang-sql 6.10 builds its completion tree in O(tables²) (`CompletionLevel.child` scans
-// the list for each new table), ~100 ms for 5000 tables in a dev build. A completion source of our
-// own keyed by Map would remove it; until then the cache keeps it to once per database load.
-const languages = new WeakMap<CompletionSchema, LanguageSupport>();
-function sqlLanguage(schema: CompletionSchema): LanguageSupport {
-  let language = languages.get(schema);
-  if (!language) {
-    language = sql({ dialect: MySQL, upperCaseKeywords: true, schema });
-    languages.set(schema, language);
-  }
-  return language;
-}
 
 const flashEffect = StateEffect.define<{ from: number; to: number } | null>();
 
@@ -69,22 +53,50 @@ export function flashRange(view: EditorView, from: number, to: number) {
   setTimeout(() => view.dispatch({ effects: flashEffect.of(null) }), 450);
 }
 
+/** The message of an error mark under the pointer: the last run's error first. */
+const problemTooltip = hoverTooltip((view, pos) => {
+  const problem = runErrorAt(view.state, pos) ?? problemAt(view.state, pos);
+  if (!problem) return null;
+  return {
+    pos: problem.from,
+    end: problem.to,
+    above: true,
+    create: () => {
+      const dom = document.createElement("div");
+      dom.className = "cm-problem-tooltip";
+      dom.textContent = problem.message;
+      return { dom };
+    },
+  };
+});
+
+/** MySQL highlighting from lang-sql. Its completion (a flat keyword list) is left out:
+ * `completion.ts` knows what fits where. */
+const mysql = new LanguageSupport(MySQL.language);
+
 export function SqlEditor({
   initialValue,
   schema,
+  database,
   onChange,
   onRun,
   onReady,
 }: {
   initialValue: string;
-  schema: CompletionSchema;
+  /** Database → table → column names, for completion. A table whose columns are not loaded
+   * maps to []. */
+  schema: SqlSchema;
+  /** The tab's database: its tables complete without a prefix. */
+  database: string | null;
   onChange: (value: string) => void;
   onRun: (all: boolean) => void;
   onReady: (view: EditorView) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
-  const language = useRef(new Compartment());
+  // The completion source reads the current schema without being rebuilt.
+  const completion = useRef({ schema, database });
+  completion.current = { schema, database };
   // Keep callbacks current without recreating the editor.
   const handlers = useRef({ onChange, onRun });
   handlers.current = { onChange, onRun };
@@ -123,9 +135,14 @@ export function SqlEditor({
           bracketMatching(),
           closeBrackets(),
           highlightSelectionMatches(),
-          autocompletion({ icons: false }),
-          language.current.of(sqlLanguage(schema)),
+          // Rust answers in microseconds, so the wait after a keystroke can be half of
+          // CodeMirror's default 100 ms.
+          autocompletion({ icons: false, activateOnTypingDelay: 50 }),
+          mysql,
           MySQL.language.data.of({ autocomplete: snippetSource }),
+          MySQL.language.data.of({
+            autocomplete: sqlCompletion(() => completion.current),
+          }),
           keymap.of([
             ...closeBracketsKeymap,
             ...defaultKeymap,
@@ -138,6 +155,9 @@ export function SqlEditor({
           editorTheme,
           editorHighlight,
           flashField,
+          runMarks,
+          sqlDiagnostics,
+          problemTooltip,
           EditorView.updateListener.of((update) => {
             if (update.docChanged) handlers.current.onChange(update.state.doc.toString());
           }),
@@ -148,10 +168,6 @@ export function SqlEditor({
     view.current.focus();
     return () => view.current?.destroy();
   }, []);
-
-  useEffect(() => {
-    view.current?.dispatch({ effects: language.current.reconfigure(sqlLanguage(schema)) });
-  }, [schema]);
 
   return <div ref={host} className="h-full min-h-0 overflow-hidden" />;
 }

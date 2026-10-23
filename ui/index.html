@@ -4,8 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Quarry</title>
+    <!-- Before the first paint: the theme (boot.js), its colors (tokens.css) and the splash, so
+         the window shows the logo on the app's background while the code loads, never white. -->
+    <script src="/boot.js"></script>
+    <link rel="stylesheet" href="/src/styles/tokens.css" />
+    <!-- A file, not an inline <style>: Tauri adds a hash for inline styles to the CSP, which turns
+         off 'unsafe-inline' and blocks the styles CodeMirror inserts at run time. -->
+    <link rel="stylesheet" href="/src/styles/splash.css" />
   </head>
   <body>
+    <div id="splash" aria-hidden="true">
+      <img src="/icon.png" alt="" draggable="false" />
+      <span>Quarry</span>
+    </div>
+    <script src="/show.js"></script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

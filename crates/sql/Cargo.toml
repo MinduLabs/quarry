@@ -9,7 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-
+quarry-model.workspace = true
 
 [lints]
 workspace = true

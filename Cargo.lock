@@ -3774,6 +3774,9 @@ dependencies = [
 [[package]]
 name = "quarry-sql"
 version = "0.0.1"
+dependencies = [
+ "quarry-model",
+]
 
 [[package]]
 name = "quarry-store"

@@ -1,11 +1,12 @@
 //! Running and paging queries, counting rows, explain and safe mode.
 
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use quarry_driver_api::{DriverError, ExecItem, ExecOpts, Session};
 use quarry_model::{BrowseQuery, ConnId, Environment, HistoryEntry, TableRef, Value};
 
-use crate::engine::{Engine, describe, round};
+use crate::engine::{Engine, TabSession, describe, is_lost, round};
 use crate::session::transaction_after;
 use crate::{Event, NoticeKind, TabId, browse, perf};
 
@@ -100,6 +101,8 @@ impl Engine {
             tab,
             error,
             cancelled: false,
+            statement: None,
+            location: None,
         };
         let slot = self.tab_slot(tab);
         let mut slot = slot.lock().await;
@@ -111,10 +114,12 @@ impl Engine {
         let Some(tab_session) = slot.as_mut() else {
             return;
         };
+        tab_session.stopped.store(false, Ordering::SeqCst);
         let mut session = tab_session.session.lock().await;
 
         if let Some(db) = database.filter(|db| tab_session.database.as_ref() != Some(db)) {
             if let Err(err) = session.use_database(&db).await {
+                tab_session.is_lost |= is_lost(&err);
                 return self.emit(failed(describe(&err)));
             }
             tab_session.database = Some(db);
@@ -122,58 +127,86 @@ impl Engine {
 
         // Opening the session and switching the database, if this query had to.
         let prepare_ms = perf::ms_since(started) - wait_ms;
-        let events = self.events.clone();
-        let mut set = 0u32;
-        let mut elapsed = Duration::ZERO;
-        let mut first_rows: Option<Instant> = None;
-        let mut rows_sent = 0usize;
-        let mut batches = 0u32;
-        let mut sink = |item: ExecItem| {
-            let event = match item {
-                ExecItem::Columns(columns) => Event::ResultColumns { tab, set, columns },
-                ExecItem::Rows(rows) => {
-                    first_rows.get_or_insert_with(Instant::now);
-                    rows_sent += rows.len();
-                    batches += 1;
-                    Event::ResultRows { tab, set, rows }
-                }
-                ExecItem::SetDone {
-                    affected,
-                    rows,
-                    truncated,
-                } => {
-                    let event = Event::ResultDone {
-                        tab,
-                        set,
-                        affected,
-                        rows,
-                        truncated,
-                    };
-                    set += 1;
-                    event
-                }
-                ExecItem::Notice(message) => Event::Notice {
-                    kind: NoticeKind::Info,
-                    message,
-                },
-                ExecItem::Done { elapsed: e } => {
-                    elapsed = e;
-                    return;
-                }
-            };
-            let _ = events.try_send(event);
+        // A typed script runs one statement at a time, so the client can tell which one runs,
+        // and which one a result or an error belongs to.
+        let statements: Vec<&str> = match quarry_sql::script(&sql) {
+            ranges if from_user && params.is_empty() && !ranges.is_empty() => {
+                ranges.into_iter().map(|r| &sql[r]).collect()
+            }
+            _ => vec![sql.as_str()],
         };
+        let count = u32::try_from(statements.len()).unwrap_or(u32::MAX);
         let opts = ExecOpts {
             row_limit: Some(row_limit),
             ..ExecOpts::default()
         };
         let ran_at = chrono::Utc::now();
         let executing = Instant::now();
-        let result = if params.is_empty() {
-            session.execute(&sql, &opts, &mut sink).await
-        } else {
-            session.query(&sql, &params, &opts, &mut sink).await
-        };
+        let mut set = 0u32;
+        let mut elapsed = Duration::ZERO;
+        let mut first_rows: Option<Instant> = None;
+        let mut rows_sent = 0usize;
+        let mut batches = 0u32;
+        let mut result = Ok(());
+        let mut done = 0;
+        for (index, statement) in (0u32..).zip(&statements) {
+            if index > 0 && tab_session.stopped.load(Ordering::SeqCst) {
+                result = Err(DriverError::Cancelled);
+                break;
+            }
+            self.emit(Event::StatementStarted { tab, index, count });
+            let events = self.events.clone();
+            let mut sink = |item: ExecItem| {
+                let event = match item {
+                    ExecItem::Columns(columns) => Event::ResultColumns {
+                        tab,
+                        set,
+                        statement: index,
+                        columns,
+                    },
+                    ExecItem::Rows(rows) => {
+                        first_rows.get_or_insert_with(Instant::now);
+                        rows_sent += rows.len();
+                        batches += 1;
+                        Event::ResultRows { tab, set, rows }
+                    }
+                    ExecItem::SetDone {
+                        affected,
+                        rows,
+                        truncated,
+                    } => {
+                        let event = Event::ResultDone {
+                            tab,
+                            set,
+                            statement: index,
+                            affected,
+                            rows,
+                            truncated,
+                        };
+                        set += 1;
+                        event
+                    }
+                    ExecItem::Notice(message) => Event::Notice {
+                        kind: NoticeKind::Info,
+                        message,
+                    },
+                    ExecItem::Done { elapsed: e } => {
+                        elapsed += e;
+                        return;
+                    }
+                };
+                let _ = events.try_send(event);
+            };
+            result = if params.is_empty() {
+                session.execute(statement, &opts, &mut sink).await
+            } else {
+                session.query(statement, &params, &opts, &mut sink).await
+            };
+            if result.is_err() {
+                break;
+            }
+            done += 1;
+        }
         drop(session);
         if self.perf.is_some() {
             // Durations and counts only: never the SQL text or its values.
@@ -184,6 +217,7 @@ impl Engine {
                     "tab": tab,
                     "from_user": from_user,
                     "statement": quarry_sql::first_keyword(&sql),
+                    "statements": count,
                     "sql_bytes": sql.len(),
                     "wait_ms": round(wait_ms),
                     "prepare_ms": round(prepare_ms),
@@ -196,29 +230,45 @@ impl Engine {
                 }),
             );
         }
+
+        // Statements that ran before a failure stay applied, transactions they began included.
+        if from_user {
+            let ran = statements[..done].join(";\n");
+            let open = transaction_after(tab_session.in_transaction, &ran);
+            if open != tab_session.in_transaction {
+                tab_session.in_transaction = open;
+                self.emit(Event::TransactionState {
+                    tab,
+                    open,
+                    error: None,
+                });
+            }
+        }
         let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         let error = match result {
             Ok(()) => {
                 self.emit(Event::QueryFinished { tab, elapsed_ms });
-                if from_user {
-                    let open = transaction_after(tab_session.in_transaction, &sql);
-                    if open != tab_session.in_transaction {
-                        tab_session.in_transaction = open;
-                        self.emit(Event::TransactionState {
-                            tab,
-                            open,
-                            error: None,
-                        });
-                    }
-                }
                 None
             }
             Err(err) => {
-                let error = describe(&err);
+                let failed_at = statements.get(done).copied().unwrap_or_default();
+                let mut error = describe(&err);
+                if is_lost(&err) {
+                    error.push('\n');
+                    error.push_str(&self.reconnect(&mut slot, tab, conn, failed_at).await);
+                }
+                let cancelled = matches!(err, DriverError::Cancelled);
+                let location = match err {
+                    DriverError::Query { location, .. } => location,
+                    _ => None,
+                };
                 self.emit(Event::QueryFailed {
                     tab,
-                    cancelled: matches!(err, DriverError::Cancelled),
+                    cancelled,
                     error: error.clone(),
+                    statement: (count > 1 || location.is_some())
+                        .then(|| u32::try_from(done).unwrap_or(u32::MAX)),
+                    location,
                 });
                 Some(error.lines().next().unwrap_or_default().to_owned())
             }
@@ -227,7 +277,7 @@ impl Engine {
             let entry = HistoryEntry {
                 sql,
                 conn,
-                database: tab_session.database.clone(),
+                database: slot.as_ref().and_then(|t| t.database.clone()),
                 ran_at,
                 elapsed_ms,
                 error,
@@ -237,6 +287,57 @@ impl Engine {
             drop(slot);
             self.record(entry).await;
         }
+    }
+
+    /// Replace the tab's dead session with a new one, once, and say what that means for the
+    /// user's work. `failed_at` is the statement that was running when the connection went.
+    async fn reconnect(
+        &self,
+        slot: &mut Option<TabSession>,
+        tab: TabId,
+        conn: ConnId,
+        failed_at: &str,
+    ) -> String {
+        let had_transaction = slot.as_ref().is_some_and(|t| t.in_transaction);
+        if let Some(tab_session) = slot.as_mut() {
+            tab_session.is_lost = true;
+        }
+        let database = slot.as_ref().and_then(|t| t.database.clone());
+        if had_transaction {
+            self.emit(Event::TransactionState {
+                tab,
+                open: false,
+                error: None,
+            });
+        }
+        let was_commit = matches!(
+            quarry_sql::transaction_effect(failed_at),
+            Some(quarry_sql::TransactionEffect::End)
+        );
+        let lost_work = match (had_transaction, was_commit) {
+            (true, true) => {
+                " The commit may or may not have been saved: check the data before running it \
+                 again."
+            }
+            (true, false) => {
+                " The open transaction is gone: the server rolls back uncommitted changes when \
+                 a connection drops."
+            }
+            (false, _) => "",
+        };
+        if let Err(error) = self.ensure_tab_session(slot, tab, conn).await {
+            return format!("Reconnecting failed: {error}{lost_work}");
+        }
+        if let Some(tab_session) = slot.as_mut()
+            && let Some(db) = database
+        {
+            let mut session = tab_session.session.lock().await;
+            if session.use_database(&db).await.is_ok() {
+                drop(session);
+                tab_session.database = Some(db);
+            }
+        }
+        format!("Quarry opened a new connection for this tab. Run the query again.{lost_work}")
     }
 
     /// `SELECT` for one page of `table`, in the dialect of the connection's driver.
@@ -333,7 +434,11 @@ impl Engine {
         } else {
             session.query(&sql, &clauses.params, &opts, &mut sink).await
         };
-        result.map_err(|e| describe(&e))?;
+        drop(session);
+        if let Err(err) = result {
+            tab_session.is_lost |= is_lost(&err);
+            return Err(describe(&err));
+        }
         match first {
             Some(Value::Int(n)) => u64::try_from(n).map_err(|_| "Unexpected row count".to_owned()),
             Some(Value::UInt(n)) => Ok(n),

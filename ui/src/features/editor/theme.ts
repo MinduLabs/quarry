@@ -25,6 +25,18 @@ export const editorTheme = EditorView.theme({
     backgroundColor: "var(--accent-soft)",
     transition: "background-color 400ms ease-out",
   },
+  ".cm-run-active": { backgroundColor: "var(--accent-soft)" },
+  ".cm-sql-problem": {
+    textDecoration: "underline wavy var(--danger)",
+    textDecorationSkipInk: "none",
+    textUnderlineOffset: "3px",
+  },
+  ".cm-problem-tooltip": {
+    maxWidth: "480px",
+    padding: "6px 10px",
+    fontSize: "var(--text-sm)",
+    whiteSpace: "pre-wrap",
+  },
   ".cm-tooltip": {
     border: "none",
     backgroundColor: "var(--elevated)",

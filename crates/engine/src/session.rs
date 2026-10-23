@@ -1,12 +1,12 @@
 //! Per-tab sessions: open, cancel, close and the transactions a tab holds.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use quarry_driver_api::Session;
 use quarry_model::ConnId;
 
 use crate::connections::TunnelUse;
-use crate::engine::{Engine, TabSession, close_shared, describe, lock};
+use crate::engine::{Engine, TabCancel, TabSession, close_shared, describe, is_lost, lock};
 use crate::{Event, TabId};
 
 /// Whether a transaction is open after `sql` ran successfully, given whether one was open.
@@ -27,16 +27,18 @@ impl Engine {
         lock(&self.tabs).entry(tab).or_default().clone()
     }
 
-    /// Open the tab's session on `conn`, replacing one on another connection.
+    /// Open the tab's session on `conn`, replacing one on another connection or one whose
+    /// connection is gone.
     pub(crate) async fn ensure_tab_session(
         &self,
         slot: &mut Option<TabSession>,
         tab: TabId,
         conn: ConnId,
     ) -> Result<(), String> {
-        if slot.as_ref().is_some_and(|t| t.conn != conn)
+        if slot.as_ref().is_some_and(|t| t.conn != conn || t.is_lost)
             && let Some(old) = slot.take()
         {
+            lock(&self.cancels).remove(&tab);
             close_shared(old.session).await;
         }
         if slot.is_some() {
@@ -47,12 +49,19 @@ impl Engine {
             .ok_or_else(|| "Connection not found".to_owned())?;
         let (resolved, _) = self.resolve(config, None, None, TunnelUse::Shared).await?;
         let session = self.open_session(&resolved).await?;
-        lock(&self.cancels).insert(tab, (conn, session.cancel_handle()));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let cancel = TabCancel {
+            driver: session.cancel_handle(),
+            stopped: stopped.clone(),
+        };
+        lock(&self.cancels).insert(tab, (conn, Arc::new(cancel)));
         *slot = Some(TabSession {
             conn,
             session: Arc::new(tokio::sync::Mutex::new(session)),
             database: None,
             in_transaction: false,
+            stopped,
+            is_lost: false,
         });
         Ok(())
     }
@@ -107,6 +116,7 @@ impl Engine {
         let mut session = tab_session.session.lock().await;
         if let Some(db) = database.filter(|db| tab_session.database.as_ref() != Some(db)) {
             if let Err(err) = session.use_database(&db).await {
+                tab_session.is_lost |= is_lost(&err);
                 return self.emit(state(false, Some(describe(&err))));
             }
             tab_session.database = Some(db);
@@ -116,7 +126,10 @@ impl Engine {
                 tab_session.in_transaction = true;
                 self.emit(state(true, None));
             }
-            Err(err) => self.emit(state(false, Some(describe(&err)))),
+            Err(err) => {
+                tab_session.is_lost |= is_lost(&err);
+                self.emit(state(false, Some(describe(&err))));
+            }
         }
     }
 
@@ -138,6 +151,18 @@ impl Engine {
             Ok(()) => {
                 tab_session.in_transaction = false;
                 self.emit(state(false, None));
+            }
+            // The connection went with the transaction: the server keeps nothing uncommitted,
+            // but a commit may have landed before the answer was lost.
+            Err(err) if is_lost(&err) => {
+                tab_session.is_lost = true;
+                tab_session.in_transaction = false;
+                let outcome = if commit {
+                    "The commit may or may not have been saved: check the data."
+                } else {
+                    "The server rolled the transaction back."
+                };
+                self.emit(state(false, Some(format!("{}\n{outcome}", describe(&err)))));
             }
             // A failed COMMIT leaves the transaction open; the user can retry or roll back.
             Err(err) => self.emit(state(tab_session.in_transaction, Some(describe(&err)))),

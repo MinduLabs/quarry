@@ -1,9 +1,8 @@
 //! Grid edits and schema changes: review, confirm, then run in one transaction.
 
-use quarry_driver_api::Session;
 use quarry_model::{ConnId, HistoryEntry, RowChange, SchemaChange, TableRef};
 
-use crate::engine::{Engine, describe};
+use crate::engine::{Engine, describe, is_lost};
 use crate::query::run_plain;
 use crate::{Event, RequestId, TabId, edit, schema};
 
@@ -67,6 +66,7 @@ impl Engine {
             session.begin().await
         };
         if let Err(err) = started {
+            tab_session.is_lost |= is_lost(&err);
             return self.emit(failed(describe(&err)));
         }
         for statement in &statements {
@@ -84,7 +84,10 @@ impl Engine {
                 Ok(n) => Some(format!(
                     "A change would affect {n} rows instead of one. Nothing was saved."
                 )),
-                Err(err) => Some(format!("{}\nNothing was saved.", describe(&err))),
+                Err(err) => {
+                    tab_session.is_lost |= is_lost(&err);
+                    Some(format!("{}\nNothing was saved.", describe(&err)))
+                }
             };
             if let Some(error) = error {
                 let undone = if in_transaction {
@@ -100,6 +103,7 @@ impl Engine {
         }
         if in_transaction {
             if let Err(err) = run_plain(&mut **session, EDIT_RELEASE).await {
+                tab_session.is_lost |= is_lost(&err);
                 return self.emit(failed(describe(&err)));
             }
             return self.emit(Event::ChangesApplied {
@@ -108,6 +112,7 @@ impl Engine {
             });
         }
         if let Err(err) = session.commit().await {
+            tab_session.is_lost |= is_lost(&err);
             if let Err(err) = session.rollback().await {
                 tracing::warn!(%err, "rollback after failed commit");
             }

@@ -1,6 +1,7 @@
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnId, ConnectionConfig, Favorite, HistoryEntry, SchemaChange,
-    SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, Value, Workspace,
+    Capabilities, ColumnMeta, ConnId, ConnectionConfig, ErrorLocation, Favorite, HistoryEntry,
+    SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, Value,
+    Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -104,10 +105,20 @@ pub enum Event {
     QueryStarted {
         tab: TabId,
     },
-    /// Start of result set number `set` (from 0) in the current run.
+    /// Statement `index` (from 0) of the `count` the run sends starts. A typed script runs its
+    /// statements one at a time, in the order of `quarry_sql::script`; anything else is one
+    /// statement.
+    StatementStarted {
+        tab: TabId,
+        index: u32,
+        count: u32,
+    },
+    /// Start of result set number `set` (from 0) in the current run, produced by statement
+    /// `statement` (see `StatementStarted`).
     ResultColumns {
         tab: TabId,
         set: u32,
+        statement: u32,
         columns: Vec<ColumnMeta>,
     },
     ResultRows {
@@ -118,6 +129,7 @@ pub enum Event {
     ResultDone {
         tab: TabId,
         set: u32,
+        statement: u32,
         #[ts(type = "number")]
         affected: u64,
         #[ts(type = "number")]
@@ -129,10 +141,14 @@ pub enum Event {
         #[ts(type = "number")]
         elapsed_ms: u64,
     },
+    /// The run stopped. `statement` is the statement that failed, when the run had several or
+    /// the error has a `location` in it; the statements before it stay applied.
     QueryFailed {
         tab: TabId,
         error: String,
         cancelled: bool,
+        statement: Option<u32>,
+        location: Option<ErrorLocation>,
     },
 
     /// Answer to `CountRows`: either `count` or `error` is set.

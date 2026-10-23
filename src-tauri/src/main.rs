@@ -4,6 +4,9 @@
 //! - `engine_send(command)`: forward a [`Command`] to the engine;
 //! - `engine_subscribe(on_event)`: stream every engine [`Event`] to the UI over a channel.
 //!
+//! plus pure text helpers that convert offsets between bytes and UTF-16 (`statement_at`,
+//! `script_statements`, `completion_context`).
+//!
 //! All application logic lives in `quarry-engine`; nothing here talks to a database.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -48,6 +51,35 @@ fn statement_at(text: String, offset: usize) -> Option<(usize, usize)> {
     ))
 }
 
+/// UTF-16 ranges of the statements a `Run` of `text` sends, in order (`quarry_sql::script`),
+/// so the UI can point at the statement an event names.
+#[tauri::command]
+fn script_statements(text: String) -> Vec<(usize, usize)> {
+    quarry_engine::sql::script(&text)
+        .into_iter()
+        .map(|range| {
+            (
+                byte_to_utf16(&text, range.start),
+                byte_to_utf16(&text, range.end),
+            )
+        })
+        .collect()
+}
+
+/// What fits at UTF-16 `offset` of `text` in a SQL editor (`quarry_sql::completion_context`),
+/// with `word_start` in UTF-16 units. Pure and fast enough to answer every keystroke.
+#[tauri::command]
+fn completion_context(
+    text: String,
+    offset: usize,
+) -> Option<quarry_engine::sql::CompletionContext> {
+    let byte = utf16_to_byte(&text, offset);
+    let mut context = quarry_engine::sql::completion_context(&text, byte)?;
+    let word_start = usize::try_from(context.word_start).unwrap_or(text.len());
+    context.word_start = u32::try_from(byte_to_utf16(&text, word_start)).unwrap_or(u32::MAX);
+    Some(context)
+}
+
 fn utf16_to_byte(text: &str, utf16: usize) -> usize {
     let mut units = 0;
     for (byte, ch) in text.char_indices() {
@@ -88,8 +120,20 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             engine_send,
             engine_subscribe,
-            statement_at
+            statement_at,
+            script_statements,
+            completion_context
         ])
+        // The window opens hidden and the page shows it once the splash is drawn
+        // (`ui/public/show.js`), so it never shows an empty white window. A page that failed to
+        // run that still gets its window shown when it has loaded.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && let Err(err) = webview.window().show()
+            {
+                tracing::warn!(%err, "show window");
+            }
+        })
         .setup(move |app| {
             // Forward engine events to whichever webview subscribed last.
             tauri::async_runtime::spawn(async move {
@@ -133,5 +177,13 @@ mod tests {
             statement_at(text.to_owned(), utf16 + 1),
             Some((utf16, utf16 + 8))
         );
+        assert_eq!(
+            script_statements(text.to_owned()),
+            [(0, 11), (utf16, utf16 + 8)]
+        );
+        let typed = format!("{text} WHERE x");
+        let end = typed.encode_utf16().count();
+        let context = completion_context(typed, end).expect("a context");
+        assert_eq!(context.word_start as usize, end - 1);
     }
 }

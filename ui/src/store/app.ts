@@ -10,6 +10,7 @@ import type { CellValue } from "@/bindings/CellValue";
 import type { ColumnInfo } from "@/bindings/ColumnInfo";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
+import type { ErrorLocation } from "@/bindings/ErrorLocation";
 import type { Event } from "@/bindings/Event";
 import type { Favorite } from "@/bindings/Favorite";
 import type { HistoryEntry } from "@/bindings/HistoryEntry";
@@ -59,6 +60,21 @@ export interface ResultSet {
   rows: Value[][];
   affected: number;
   truncated: boolean;
+  /** The statement of the run (from 0) that produced it. */
+  statement: number;
+}
+
+/** Where the run is in its statements. */
+export interface RunProgress {
+  /** The statement running now, or the last one that started. */
+  index: number;
+  count: number;
+}
+
+/** The statement a failed run stopped at, and where the database found the error in it. */
+export interface RunFailure {
+  statement: number | null;
+  location: ErrorLocation | null;
 }
 
 /** Structure of the table a browse tab shows, loaded the first time the Structure view opens. */
@@ -289,6 +305,8 @@ export interface Tab {
   activeSet: number;
   elapsedMs: number | null;
   error: string | null;
+  progress: RunProgress | null;
+  failure: RunFailure | null;
   /** Bumped on every run so views can reset scroll/selection. */
   runId: number;
   /** An exact row count of the browsed table (with its filters) is being computed. */
@@ -325,6 +343,8 @@ function blankTab(
     activeSet: 0,
     elapsedMs: null,
     error: null,
+    progress: null,
+    failure: null,
     runId: 0,
     counting: false,
     rowCount: null,
@@ -418,6 +438,8 @@ interface State {
   toggleConnection: (id: string) => void;
   disconnect: (id: string) => void;
   toggleDatabase: (connId: string, database: string) => void;
+  /** Load a database's tables and columns for completion, unless they are loaded or loading. */
+  loadCompletion: (connId: string, database: string) => void;
   openObject: (connId: string, database: string, name: string, kind: ObjectKind) => void;
 
   newQuery: (target?: { connId: string; database: string | null }) => void;
@@ -629,7 +651,7 @@ export const useApp = create<State>()((set, get) => {
     patchTab(id, (tab) => {
       const sets = [...tab.sets];
       while (sets.length <= index)
-        sets.push({ columns: null, rows: [], affected: 0, truncated: false });
+        sets.push({ columns: null, rows: [], affected: 0, truncated: false, statement: 0 });
       const current = sets[index] as ResultSet;
       sets[index] = { ...current, ...patch(current) };
       return { sets };
@@ -927,11 +949,19 @@ export const useApp = create<State>()((set, get) => {
             activeSet: 0,
             elapsedMs: null,
             error: null,
+            progress: null,
+            failure: null,
             runId: t.runId + 1,
           }));
           break;
+        case "StatementStarted":
+          patchTab(event.tab, () => ({ progress: { index: event.index, count: event.count } }));
+          break;
         case "ResultColumns":
-          patchSet(event.tab, event.set, () => ({ columns: event.columns }));
+          patchSet(event.tab, event.set, () => ({
+            columns: event.columns,
+            statement: event.statement,
+          }));
           break;
         case "ResultRows":
           patchSet(event.tab, event.set, (rs) => ({ rows: rs.rows.concat(event.rows) }));
@@ -940,6 +970,7 @@ export const useApp = create<State>()((set, get) => {
           patchSet(event.tab, event.set, () => ({
             affected: event.affected,
             truncated: event.truncated,
+            statement: event.statement,
           }));
           break;
         case "QueryFinished":
@@ -957,6 +988,9 @@ export const useApp = create<State>()((set, get) => {
           patchTab(event.tab, () => ({
             running: false,
             error: event.cancelled ? "Query cancelled" : event.error,
+            failure: event.cancelled
+              ? null
+              : { statement: event.statement, location: event.location },
           }));
           break;
         case "Workspace": {
@@ -1042,10 +1076,11 @@ export const useApp = create<State>()((set, get) => {
             favorites: [...event.favorites].sort((a, b) => a.name.localeCompare(b.name)),
           });
           break;
-        case "History":
+        case "History": {
           if (event.request !== historyRequest) break;
           set((s) => ({ history: { ...s.history, entries: event.entries, loaded: true } }));
           break;
+        }
         case "HistoryAdded":
           set((s) => {
             const { history } = s;
@@ -1150,6 +1185,12 @@ export const useApp = create<State>()((set, get) => {
       }
     },
     disconnect: (id) => send({ type: "Disconnect", id }),
+    loadCompletion: (connId, database) => {
+      const db = get().nodes[connId]?.databases.find((d) => d.name === database);
+      if (!db || db.objects !== null || db.loading) return;
+      patchDb(connId, database, () => ({ loading: true, error: null }));
+      send({ type: "LoadObjects", id: connId, database });
+    },
     toggleDatabase: (connId, database) => {
       set({ active: { connId, database } });
       const db = get().nodes[connId]?.databases.find((d) => d.name === database);

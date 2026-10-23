@@ -10,6 +10,9 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./ui/src", import.meta.url)) } },
   clearScreen: false,
   server: { port: 5173, strictPort: true },
+  // Only the SQL parser worker imports it, and Vite's scan starts from index.html, so it would be
+  // found mid-session and reload the webview, which the app does not survive in dev.
+  optimizeDeps: { include: ["dt-sql-parser"] },
   build: {
     outDir: "dist",
     emptyOutDir: true,

@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use quarry_driver_api::{DriverError, DriverRegistry, Session, SharedCancel};
+use quarry_driver_api::{CancelHandle, DriverError, DriverRegistry, Session, SharedCancel};
 use quarry_model::{ConnId, ConnectionConfig, Favorite};
 use quarry_store::{
     ConfigStore, FavoritesStore, HistoryStore, SecretKind, SecretStore, WorkspaceStore,
@@ -21,6 +22,24 @@ pub(crate) struct TabSession {
     pub(crate) database: Option<String>,
     /// A transaction is open on `session` (started by the user, not by grid edits).
     pub(crate) in_transaction: bool,
+    /// Set by `Cancel`: the statements of the running script that have not started yet stay
+    /// unrun.
+    pub(crate) stopped: Arc<AtomicBool>,
+    /// The connection is gone; the next command on the tab opens a new session.
+    pub(crate) is_lost: bool,
+}
+
+/// Stops a tab's script: the running statement through the driver, the rest through `stopped`.
+pub(crate) struct TabCancel {
+    pub(crate) driver: SharedCancel,
+    pub(crate) stopped: Arc<AtomicBool>,
+}
+
+impl CancelHandle for TabCancel {
+    fn cancel(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.driver.cancel();
+    }
 }
 
 pub(crate) struct Engine {
@@ -59,6 +78,11 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Milliseconds rounded to microseconds, for the performance log.
 pub(crate) fn round(ms: f64) -> f64 {
     (ms * 1000.0).round() / 1000.0
+}
+
+/// The session's connection is gone, so the session cannot be used again.
+pub(crate) fn is_lost(err: &DriverError) -> bool {
+    matches!(err, DriverError::ConnectionLost(_))
 }
 
 /// A user-facing error message.

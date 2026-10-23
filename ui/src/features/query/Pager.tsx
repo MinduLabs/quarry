@@ -30,11 +30,10 @@ export function Pager({ tab }: { tab: Tab }) {
     <div className="flex items-center gap-1">
       <IconButton
         label="Previous page"
-        size="sm"
         disabled={tab.running || offset === 0}
         onClick={() => browse(tab.id, offset - PAGE_SIZE)}
       >
-        <ChevronLeft size={14} strokeWidth={1.75} />
+        <ChevronLeft size={16} strokeWidth={1.75} />
       </IconButton>
       <span className="tabular-nums">
         {label}
@@ -42,18 +41,17 @@ export function Pager({ tab }: { tab: Tab }) {
       </span>
       <IconButton
         label="Next page"
-        size="sm"
         disabled={tab.running || isLast}
         onClick={() => browse(tab.id, offset + PAGE_SIZE)}
       >
-        <ChevronRight size={14} strokeWidth={1.75} />
+        <ChevronRight size={16} strokeWidth={1.75} />
       </IconButton>
       {tab.rowCount === null && (
         <button
           type="button"
           disabled={tab.running || tab.counting}
           onClick={() => countRows(tab.id)}
-          className="h-5 rounded-sm px-1.5 text-xs transition-colors-fast hover:bg-hover hover:text-fg disabled:opacity-45"
+          className="h-6 rounded-md px-2 text-sm transition-colors-fast hover:bg-hover hover:text-fg disabled:opacity-45"
         >
           {tab.counting ? "Counting…" : "Count rows"}
         </button>

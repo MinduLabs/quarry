@@ -15,8 +15,8 @@ use quarry_driver_api::{
     Result, Session, SharedCancel,
 };
 use quarry_model::{
-    Capabilities, DriverId, ObjectKind, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow,
-    SslMode, TableColumns, TableInfo, TableRef, Value,
+    Capabilities, DriverId, ErrorLocation, ObjectKind, SchemaChange, SchemaObject, ServerInfoKind,
+    ServerInfoRow, SslMode, TableColumns, TableInfo, TableRef, Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
@@ -318,7 +318,14 @@ async fn stream<P: mysql_async::prelude::Protocol>(
     let batch_size = opts.batch_size.max(1);
 
     // One iteration per result set; `next()` moves to the next set when the current one ends.
-    while let Some(columns) = result.columns() {
+    loop {
+        let Some(columns) = result.columns() else {
+            // A later statement of a script that failed is kept as the pending result, which
+            // `columns()` reads as "no more sets". `next()` hands its error over and clears it;
+            // left there, it would fail the session's next query instead.
+            result.next().await.map_err(map_err)?;
+            break;
+        };
         if columns.is_empty() {
             let affected = result.affected_rows();
             result.next().await.map_err(map_err)?;
@@ -464,20 +471,72 @@ impl Dialect for MysqlDialect {
 }
 
 fn map_err(err: mysql_async::Error) -> DriverError {
+    use mysql_async::DriverError as Native;
     match err {
         // 1317: query interrupted by KILL QUERY
         mysql_async::Error::Server(e) if e.code == 1317 => DriverError::Cancelled,
+        // 1053: server shutdown, 1152: connection aborted, 1927: connection killed,
+        // 4031: closed for inactivity (MySQL 8.0.24+).
+        mysql_async::Error::Server(e) if matches!(e.code, 1053 | 1152 | 1927 | 4031) => {
+            DriverError::ConnectionLost(format!(
+                "The server closed the connection: {} (MySQL {}).",
+                e.message, e.code
+            ))
+        }
         mysql_async::Error::Server(e) => DriverError::Query {
+            location: syntax_location(&e.message),
             message: format!("{} (MySQL {}, SQLSTATE {})", e.message, e.code, e.state),
-            position: None,
         },
+        mysql_async::Error::Io(e) => {
+            DriverError::ConnectionLost(format!("The connection to the server was lost: {e}."))
+        }
+        mysql_async::Error::Driver(
+            e @ (Native::ConnectionClosed
+            | Native::PacketOutOfOrder
+            | Native::UnexpectedPacket { .. }),
+        ) => DriverError::ConnectionLost(format!("The connection to the server was lost: {e}")),
         other => DriverError::Other(Box::new(other)),
     }
+}
+
+/// The spot a MySQL / MariaDB syntax error points at: `… near 'SELEC 2' at line 1`.
+fn syntax_location(message: &str) -> Option<ErrorLocation> {
+    const NEAR: &str = "near '";
+    const AT_LINE: &str = "' at line ";
+    let tail = message.rfind(AT_LINE)?;
+    let line = message[tail + AT_LINE.len()..]
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()?;
+    let start = message[..tail].find(NEAR)? + NEAR.len();
+    Some(ErrorLocation {
+        line,
+        near: message[start..tail].to_owned(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_syntax_error_location() {
+        let at = |m| syntax_location(m).map(|l| (l.line, l.near));
+        assert_eq!(
+            at(
+                "You have an error in your SQL syntax; check the manual that corresponds to your \
+                MySQL server version for the right syntax to use near 'SELEC 2' at line 1"
+            ),
+            Some((1, "SELEC 2".to_owned()))
+        );
+        assert_eq!(
+            at("… for the right syntax to use near 'it's' at line 3' at line 12"),
+            Some((12, "it's' at line 3".to_owned()))
+        );
+        assert_eq!(at("… to use near '' at line 2"), Some((2, String::new())));
+        assert_eq!(at("Table 'shop.nope' doesn't exist"), None);
+    }
 
     #[test]
     fn quotes_identifiers() {

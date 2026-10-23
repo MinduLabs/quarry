@@ -2,7 +2,6 @@
 
 use std::time::Instant;
 
-use quarry_driver_api::Session;
 use quarry_model::{ConnId, ServerInfoKind, TableRef};
 
 use crate::engine::{Engine, SharedSession, describe, lock};
@@ -70,6 +69,8 @@ impl Engine {
     }
 
     /// The connection's metadata session, connecting first when needed.
+    // claude: the metadata session has no lost-connection recovery yet: after a server restart
+    // the schema tree keeps failing until Disconnect + Connect. Same `is_lost` idea as tabs.
     pub(crate) async fn meta_session(&self, id: ConnId) -> Result<SharedSession, String> {
         if let Some(meta) = lock(&self.meta).get(&id).cloned() {
             return Ok(meta);

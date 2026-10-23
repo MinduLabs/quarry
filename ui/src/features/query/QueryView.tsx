@@ -28,13 +28,15 @@ import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { cn } from "@/lib/cn";
 import { registerEditor } from "@/lib/editors";
-import { statementAt } from "@/lib/engine";
+import { scriptStatements, statementAt } from "@/lib/engine";
 import { onRender } from "@/lib/perf";
 import { keysOf, shortcutText } from "@/lib/shortcuts";
 import { fillVariables, queryVariables } from "@/lib/variables";
 import { type Edits, editCount, editTarget, type Tab, useApp } from "@/store/app";
+import type { SqlSchema } from "../editor/completion";
 import { formatSql } from "../editor/format";
-import { type CompletionSchema, flashRange, SqlEditor } from "../editor/SqlEditor";
+import { type Span, setActiveStatement, setRunError, setRunStatements } from "../editor/runMarks";
+import { flashRange, SqlEditor } from "../editor/SqlEditor";
 import { SaveQueryDialog } from "../favorites/SaveQueryDialog";
 import { type GridEditing, type GridSorting, ResultGrid, type RowSpan } from "../grid/ResultGrid";
 import { StructureView } from "../structure/StructureView";
@@ -45,15 +47,15 @@ import { VariablesDialog } from "./VariablesDialog";
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
+/** Table name → column names of one database. */
+type DatabaseSchema = SqlSchema[string];
+
 /** Completion schemas by the database's object and column lists (both come from the store). */
-const schemas = new WeakMap<object, WeakMap<object, CompletionSchema>>();
+const schemas = new WeakMap<object, WeakMap<object, DatabaseSchema>>();
 const NO_LIST: never[] = [];
 
 /** Table name → column names for completion; the same object for the same lists. */
-function schemaOf(
-  objects: SchemaObject[] | null,
-  columns: TableColumns[] | null,
-): CompletionSchema {
+function schemaOf(objects: SchemaObject[] | null, columns: TableColumns[] | null): DatabaseSchema {
   const byObjects = objects ?? NO_LIST;
   const byColumns = columns ?? NO_LIST;
   let inner = schemas.get(byObjects);
@@ -82,7 +84,7 @@ const NO_EDITS: Edits = { updates: {}, inserts: [], deletes: [] };
  */
 export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
   const config = useApp((s) => s.connections.find((c) => c.id === tab.connId));
-  const db = useApp((s) => s.nodes[tab.connId]?.databases.find((d) => d.name === tab.database));
+  const databases = useApp((s) => s.nodes[tab.connId]?.databases);
   const {
     setSql,
     run,
@@ -123,24 +125,50 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
 
   useEffect(() => () => registerEditor(tab.id, null), [tab.id]);
 
-  const objects = db?.objects;
-  const columns = db?.columns;
-  // Shared by every tab on this database, so the editor's completion is built once per load.
-  const schema = schemaOf(objects ?? null, columns ?? null);
+  // Every database loaded so far completes (`other_db.table`); the tab's own without a prefix.
+  // Each database's part is shared by every tab on it (`schemaOf`), so this only regroups them.
+  const schema = useMemo(() => {
+    const byDatabase: SqlSchema = {};
+    for (const db of databases ?? []) {
+      if (db.objects) byDatabase[db.name] = schemaOf(db.objects, db.columns);
+    }
+    return byDatabase;
+  }, [databases]);
 
-  /** The selection, or the statement under the cursor (briefly highlighted). */
-  const currentStatement = useCallback(async (): Promise<string | null> => {
-    const view = editor.current;
-    if (!view) return null;
-    closeCompletion(view);
-    const selection = view.state.selection.main;
-    if (!selection.empty) return view.state.sliceDoc(selection.from, selection.to);
-    const text = view.state.doc.toString();
-    const range = await statementAt(text, selection.head);
-    if (!range) return null;
-    flashRange(view, range[0], range[1]);
-    return text.slice(range[0], range[1]);
-  }, []);
+  // The tab's database completes even when the sidebar never opened it.
+  const isConnected = connStatus?.kind === "connected";
+  const hasDatabase = Boolean(databases?.some((d) => d.name === tab.database));
+  useEffect(() => {
+    if (isConnected && hasDatabase && tab.database) {
+      useApp.getState().loadCompletion(tab.connId, tab.database);
+    }
+  }, [isConnected, hasDatabase, tab.connId, tab.database]);
+
+  /** The selection, or the statement under the cursor (briefly highlighted), or with `all`
+   * and no selection the whole text; with where it starts in the editor. */
+  const currentText = useCallback(
+    async (all: boolean): Promise<{ from: number; text: string } | null> => {
+      const view = editor.current;
+      if (!view) return null;
+      closeCompletion(view);
+      const selection = view.state.selection.main;
+      if (!selection.empty) {
+        return { from: selection.from, text: view.state.sliceDoc(selection.from, selection.to) };
+      }
+      const text = view.state.doc.toString();
+      if (all) return { from: 0, text };
+      const range = await statementAt(text, selection.head);
+      if (!range) return null;
+      flashRange(view, range[0], range[1]);
+      return { from: range[0], text: text.slice(range[0], range[1]) };
+    },
+    [],
+  );
+
+  /** The statements of a run started from the editor, until its `QueryStarted` arrives. */
+  const pendingRun = useRef<{ sql: string; spans: Span[]; texts: string[] } | null>(null);
+  /** The statements of the run shown now, as typed, when it started from the editor. */
+  const [runTexts, setRunTexts] = useState<string[]>([]);
 
   /** Run `sql` now, or ask for its `{{variables}}` first. */
   const withVariables = useCallback((sql: string, then: (sql: string) => void) => {
@@ -151,21 +179,56 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
 
   const runFromEditor = useCallback(
     async (all: boolean) => {
-      const view = editor.current;
-      if (!view) return;
-      if (all && view.state.selection.main.empty) {
-        return withVariables(view.state.doc.toString(), (sql) => run(tab.id, sql));
-      }
-      const sql = await currentStatement();
-      if (sql) withVariables(sql, (filled) => run(tab.id, filled));
+      const current = await currentText(all);
+      if (!current?.text.trim()) return;
+      const { from, text } = current;
+      const ranges = await scriptStatements(text);
+      withVariables(text, (sql) => {
+        pendingRun.current = {
+          sql,
+          spans: ranges.map(([start, end]) => ({ from: from + start, to: from + end })),
+          texts: ranges.map(([start, end]) => text.slice(start, end)),
+        };
+        run(tab.id, sql);
+      });
     },
-    [tab.id, run, currentStatement, withVariables],
+    [tab.id, run, currentText, withVariables],
   );
 
   const explainFromEditor = useCallback(async () => {
-    const sql = await currentStatement();
-    if (sql) withVariables(sql, (filled) => explain(tab.id, filled, true));
-  }, [tab.id, explain, currentStatement, withVariables]);
+    const current = await currentText(false);
+    if (current) withVariables(current.text, (filled) => explain(tab.id, filled, true));
+  }, [tab.id, explain, currentText, withVariables]);
+
+  // A new run: point the editor at its statements when it came from the editor. A refresh runs
+  // the same text again, so the marks of the run before still fit.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new run resets the marks
+  useEffect(() => {
+    const view = editor.current;
+    if (!view || tab.runId === 0) return;
+    const pending = pendingRun.current;
+    const isTyped = !tab.paged && !tab.explain && pending?.sql === tab.lastRun;
+    if (pending && isTyped) {
+      pendingRun.current = null;
+      view.dispatch({ effects: setRunStatements.of(pending.spans) });
+      setRunTexts(pending.texts);
+    } else if (!isTyped) {
+      view.dispatch({ effects: setRunStatements.of([]) });
+      setRunTexts([]);
+    }
+  }, [tab.runId]);
+
+  const runningIndex = tab.running ? (tab.progress?.index ?? null) : null;
+  useEffect(() => {
+    editor.current?.dispatch({ effects: setActiveStatement.of(runningIndex) });
+  }, [runningIndex]);
+
+  useEffect(() => {
+    const failure = tab.failure;
+    editor.current?.dispatch({
+      effects: setRunError.of(failure && tab.error ? { ...failure, message: tab.error } : null),
+    });
+  }, [tab.failure, tab.error]);
 
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
@@ -475,6 +538,7 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
         <SqlEditor
           initialValue={tab.sql}
           schema={schema}
+          database={tab.database}
           onChange={(sql) => setSql(tab.id, sql)}
           onRun={(all) => void runFromEditor(all)}
           onReady={(view) => {
@@ -527,14 +591,25 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
       <div className={cn("relative min-h-0 flex-1", structure && "hidden")}>
         {planText !== null && <ExplainTree text={planText} />}
         {tab.running && tab.sets.length === 0 && (
-          <div className="animate-fade flex h-full items-center justify-center">
+          <div className="animate-fade flex h-full flex-col items-center justify-center gap-2">
             <Spinner size={18} />
+            {tab.progress && (
+              <p className="max-w-full truncate px-4 text-muted text-sm">
+                {statementLabel(tab.progress.index, tab.progress.count, runTexts)}
+              </p>
+            )}
           </div>
         )}
         {!tab.running && tab.error && (
-          <pre className="animate-fade h-full overflow-auto whitespace-pre-wrap p-4 font-mono text-danger text-sm">
-            {tab.error}
-          </pre>
+          <div className="animate-fade h-full overflow-auto p-4">
+            {tab.failure?.statement != null && tab.progress && (
+              <p className="mb-2 truncate text-muted text-sm">
+                Failed at{" "}
+                {statementLabel(tab.failure.statement, tab.progress.count, runTexts, "statement")}
+              </p>
+            )}
+            <pre className="whitespace-pre-wrap font-mono text-danger text-sm">{tab.error}</pre>
+          </div>
         )}
         {active?.columns && planText === null && (
           <Profiler id="grid" onRender={onRender}>
@@ -579,14 +654,13 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
       </div>
 
       {/* Results bar: everything about the result below the grid, the SQL actions stay above. */}
-      <div className="flex h-8 shrink-0 items-center gap-3 border-line border-t bg-surface px-3 text-sm text-muted">
+      <div className="flex h-9 shrink-0 items-center gap-3 border-line border-t bg-surface px-3 text-base text-muted">
         {tab.browse && (
           <SegmentedTabs
             label="View"
             value={tab.view}
             onChange={(view) => setView(tab.id, view)}
-            size="sm"
-            className="w-36 shrink-0"
+            className="w-40 shrink-0"
             tabs={[
               { value: "data", label: "Data" },
               { value: "structure", label: "Structure" },
@@ -595,23 +669,24 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
         )}
         {!structure && grids.length > 1 && (
           <div className="flex shrink-0 items-center gap-0.5">
-            {grids.map(({ index }, n) => (
+            {grids.map(({ set, index }, n) => (
               <button
                 key={index}
                 type="button"
+                title={runTexts[set.statement] && shorten(runTexts[set.statement] ?? "", 200)}
                 onClick={() => useApp.getState().setActiveSet(tab.id, index)}
                 className={cn(
-                  "h-6 rounded-md px-2 text-sm transition-colors-fast",
+                  "h-7 rounded-md px-2 text-base transition-colors-fast",
                   index === tab.activeSet ? "bg-selected text-fg" : "hover:bg-hover",
                 )}
               >
-                Result {n + 1}
+                {resultLabel(grids, n, (tab.progress?.count ?? 1) > 1)}
               </button>
             ))}
           </div>
         )}
-        {tab.running && <Spinner size={11} />}
-        <span className="min-w-0 truncate">{status(tab)}</span>
+        {tab.running && <Spinner size={14} />}
+        <span className="min-w-0 truncate">{status(tab, runTexts)}</span>
         <div className="flex-1" />
         {!structure && <Pager tab={tab} />}
       </div>
@@ -637,8 +712,40 @@ function plural(n: number, word: string): string {
   return `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 }
 
-function status(tab: Tab): string {
-  if (tab.running) return "Running…";
+/** Whitespace folded, cut to `max` characters. */
+function shorten(sql: string, max: number): string {
+  const flat = sql.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** "Statement 2 of 5 · SELECT …", or the statement alone when the run had one. */
+function statementLabel(index: number, count: number, texts: string[], word = "Statement"): string {
+  const short = shorten(texts[index] ?? "", 60);
+  if (count <= 1) return short;
+  const which = `${word} ${index + 1} of ${count}`;
+  return short ? `${which} · ${short}` : which;
+}
+
+/** "Result 2", or the statement that made it when the run had several. */
+function resultLabel(
+  grids: { set: { statement: number }; index: number }[],
+  n: number,
+  isScript: boolean,
+): string {
+  const set = grids[n]?.set;
+  if (!set || !isScript) return `Result ${n + 1}`;
+  const same = grids.filter((g) => g.set.statement === set.statement);
+  const part =
+    same.length > 1 ? ` · ${same.findIndex((g) => g.index === grids[n]?.index) + 1}` : "";
+  return `Statement ${set.statement + 1}${part}`;
+}
+
+function status(tab: Tab, texts: string[]): string {
+  if (tab.running) {
+    if (!tab.progress) return "Running…";
+    const label = statementLabel(tab.progress.index, tab.progress.count, texts, "statement");
+    return label ? `Running ${label}` : "Running…";
+  }
   if (tab.error) return tab.error.split("\n")[0] ?? "";
   if (tab.elapsedMs === null) return "";
   const time =

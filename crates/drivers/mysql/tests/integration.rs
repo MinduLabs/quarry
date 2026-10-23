@@ -174,6 +174,47 @@ async fn query_error_has_message() {
 }
 
 #[tokio::test]
+async fn session_survives_bad_sql() {
+    let Some(cfg) = config("quarry") else { return };
+    let mut session = MysqlDriver::default().connect(&cfg).await.unwrap();
+    for bad in [
+        "SELEC 1",
+        "SELECT 1; SELEC 2",
+        "SELECT 1; SELECT * FROM nope; SELECT 3",
+    ] {
+        let mut items = Vec::new();
+        let err = session
+            .execute(bad, &ExecOpts::default(), &mut |item| items.push(item))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{bad} succeeded: {items:?}"));
+        let DriverError::Query { location, .. } = &err else {
+            panic!("{bad}: {err:?}");
+        };
+        if bad.contains("SELEC ") {
+            let location = location.as_ref().expect("a syntax error has a location");
+            assert_eq!(
+                (location.line, location.near.as_str()),
+                (1, bad.trim_start_matches("SELECT 1; "))
+            );
+        }
+        let mut after = Vec::new();
+        session
+            .execute("SELECT 42", &ExecOpts::default(), &mut |item| {
+                after.push(item)
+            })
+            .await
+            .unwrap_or_else(|err| panic!("after {bad}: {err:?}"));
+        assert!(
+            after
+                .iter()
+                .any(|i| matches!(i, ExecItem::Rows(r) if r[0][0] == Value::Int(42))),
+            "after {bad}: {after:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn cancel_long_query() {
     let Some(cfg) = config("quarry") else { return };
     let mut session = MysqlDriver::default().connect(&cfg).await.unwrap();

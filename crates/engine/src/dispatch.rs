@@ -155,6 +155,8 @@ impl Engine {
                     tab,
                     error,
                     cancelled: false,
+                    statement: None,
+                    location: None,
                 }),
             },
             Command::CountRows {
@@ -178,6 +180,8 @@ impl Engine {
                     tab,
                     error,
                     cancelled: false,
+                    statement: None,
+                    location: None,
                 }),
             },
             Command::BeginTransaction {

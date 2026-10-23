@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnectionConfig, DriverId, SchemaChange, SchemaObject,
-    ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, TableRef, Value,
+    Capabilities, ColumnMeta, ConnectionConfig, DriverId, ErrorLocation, SchemaChange,
+    SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +26,12 @@ pub enum DriverError {
     #[error("query failed: {message}")]
     Query {
         message: String,
-        position: Option<usize>,
+        location: Option<ErrorLocation>,
     },
+    /// The session's connection is gone (network, server restart, killed). The session cannot
+    /// be used again; the message says what happened.
+    #[error("{0}")]
+    ConnectionLost(String),
     #[error("query was cancelled")]
     Cancelled,
     #[error("not supported by this driver: {0}")]

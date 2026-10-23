@@ -1,5 +1,5 @@
 use quarry_model::{
-    ConnId, ConnectionConfig, Environment, Favorite, RowChange, ServerInfoKind, TableRef, Workspace,
+    ConnId, ConnectionConfig, Environment, Favorite, RowChange, TableRef, Workspace,
 };
 
 use super::*;
@@ -30,6 +30,15 @@ fn safe_mode_rules() {
     assert_eq!(safety_check(Production, "SELECT 1; SHOW TABLES"), None);
     assert!(safety_check(Production, "INSERT INTO t VALUES (1)").is_some());
     assert!(safety_check(Production, "ALTER TABLE t ADD c INT").is_some());
+    // A `DELIMITER` line is not a statement, and the statements after it are still checked.
+    assert_eq!(
+        safety_check(
+            Production,
+            "DELIMITER //\nSELECT 1 //\nDELIMITER ;\nSHOW TABLES"
+        ),
+        None
+    );
+    assert!(safety_check(Staging, "DELIMITER //\nSELECT 1 //\nTRUNCATE t //").is_some());
 }
 
 #[test]

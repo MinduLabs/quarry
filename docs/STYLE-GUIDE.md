@@ -5,7 +5,7 @@ Tokens live in [`ui/src/styles/tokens.css`](../ui/src/styles/tokens.css); this g
 
 ## Direction
 
-Quiet, dense, fast — a modern desktop tool in the spirit of TablePro and TablePlus.
+Quiet, dense, fast — a modern desktop tool.
 
 - **Data first.** The editor and grid get the space; chrome stays thin and neutral.
 - **One accent.** Neutral grays everywhere, blue only for focus, selection and the primary action.
@@ -90,7 +90,7 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 │             ├────────────────────────────────────────────────┤
 │             │ Result grid                                    │
 │             ├────────────────────────────────────────────────┤
-│             │ Results bar: Data|Structure · results · status · pager 32px │
+│             │ Results bar: Data|Structure · results · status · pager 36px │
 └─────────────┴────────────────────────────────────────────────┘
 ```
 

@@ -2,8 +2,8 @@ name: CI
 
 # Every push to main and every PR: lint, unit tests (Linux and macOS), MySQL integration tests,
 # licenses, desktop metadata. Packaging runs in release.yml, which calls this workflow first.
-# Docs-only changes skip CI (paths-ignore, as Beekeeper Studio does).
-# Actions are pinned by commit SHA (as Lapce and GitButler do); the comment names the release.
+# Docs-only changes skip CI (paths-ignore).
+# Actions are pinned by commit SHA; the comment names the release.
 on:
   push:
     branches: [main]

@@ -4,6 +4,7 @@
  */
 export type ThemePref = "system" | "light" | "dark";
 
+/** Also read by ui/public/boot.js before the first paint; change both together. */
 const KEY = "quarry.theme";
 const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
 

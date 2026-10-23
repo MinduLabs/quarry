@@ -1,7 +1,61 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
-@import "./tokens.css";
+/* The tokens themselves load from index.html (tokens.css), before this file. */
+
+/* Tailwind utilities mapped to the tokens (bg-app, text-muted, border-line, …). */
+@theme inline {
+  --color-kbd: var(--kbd-bg);
+  --color-kbd-fg: var(--kbd-fg);
+  --color-kbd-border: var(--kbd-border);
+  --color-kbd-edge: var(--kbd-edge);
+  --color-app: var(--app);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-hover: var(--hover);
+  --color-pressed: var(--pressed);
+  --color-selected: var(--selected);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --color-danger-solid: var(--danger-solid);
+  --color-env-local: var(--env-local);
+  --color-env-staging: var(--env-staging);
+  --color-env-production: var(--env-production);
+  --color-cell-modified: var(--cell-modified);
+  --color-cell-inserted: var(--cell-inserted);
+  --color-cell-deleted: var(--cell-deleted);
+  --color-cell-match: var(--cell-match);
+
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-lg: 15px;
+  --text-xl: 17px;
+  --text-2xl: 20px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --shadow-popover: var(--shadow-popover);
+  --shadow-dialog: var(--shadow-dialog);
+}
 
 html,
 body,

@@ -1,18 +1,54 @@
-//! SQL text helpers: [`split`] (script into statements), [`statement_at`]
-//! (statement under the cursor) and [`classify`] (for safe mode).
+//! SQL text helpers: [`split`] (script into statements), [`script`] (the statements a run
+//! sends), [`statement_at`] (statement under the cursor) and [`classify`] (for safe mode).
 
 use std::ops::Range;
+
+mod completion;
+
+pub use completion::completion_context;
+pub use quarry_model::{CompletionContext, CompletionNames, StatementTable};
 
 /// Split a script into statements on `;`, ignoring `;` inside strings, quoted identifiers
 /// and comments. Returns trimmed byte ranges; empty statements are skipped.
 ///
 /// Handles common MySQL/PostgreSQL/SQLite syntax: `'..'` (with `\'` and `''`), `".."`,
-/// `` `..` ``, `-- `, `#`, `/* */`. `DELIMITER` and `$$` are not supported yet.
+/// `` `..` ``, `-- `, `#`, `/* */`, and `DELIMITER` lines: a line
+/// `DELIMITER //` makes `//` end the statements that follow, and is not a statement itself.
+/// `$$` quoting is not supported yet.
 pub fn split(sql: &str) -> Vec<Range<usize>> {
-    segments(sql)
+    scan(sql)
+        .segments
         .into_iter()
         .filter_map(|seg| trim(sql, seg))
         .collect()
+}
+
+/// The statements a run sends one by one, in order: [`split`], or the whole script as one
+/// statement when it holds a compound statement (a routine, trigger or event with a
+/// `BEGIN … END` body, or `BEGIN NOT ATOMIC`). The server reads the `;` inside such a body as
+/// part of it; `split` cannot without `DELIMITER`, so the script goes as it was written.
+/// A script with `DELIMITER` lines is always split: the server does not know that command.
+pub fn script(sql: &str) -> Vec<Range<usize>> {
+    if scan(sql).has_delimiter {
+        return split(sql);
+    }
+    let statements = split(sql);
+    let is_compound = |range: &Range<usize>| {
+        let words = keywords(&sql[range.clone()]);
+        match words.first().map(String::as_str) {
+            Some("CREATE") => words.iter().any(|w| w == "BEGIN"),
+            Some("BEGIN") => words.get(1).is_some_and(|w| w == "NOT"),
+            _ => false,
+        }
+    };
+    if statements.len() > 1 && statements.iter().any(is_compound) {
+        let whole = Segment {
+            range: 0..sql.len(),
+            terminator: if sql.trim_end().ends_with(';') { 1 } else { 0 },
+        };
+        return trim(sql, whole).into_iter().collect();
+    }
+    statements
 }
 
 /// The statement containing byte `offset`. When the cursor sits in blank space after the
@@ -20,10 +56,11 @@ pub fn split(sql: &str) -> Vec<Range<usize>> {
 pub fn statement_at(sql: &str, offset: usize) -> Option<Range<usize>> {
     let offset = offset.min(sql.len());
     let mut previous = None;
-    for seg in segments(sql) {
-        let trimmed = trim(sql, seg.clone());
+    for seg in scan(sql).segments {
+        let end = seg.range.end;
+        let trimmed = trim(sql, seg);
         // seg.end is just past the `;`, so a cursor right after `;` still belongs to this statement.
-        if offset <= seg.end {
+        if offset <= end {
             return trimmed.or(previous);
         }
         if trimmed.is_some() {
@@ -146,13 +183,45 @@ fn keywords(statement: &str) -> Vec<String> {
     words
 }
 
-/// Raw segments between `;` (including the `;`).
-fn segments(sql: &str) -> Vec<Range<usize>> {
+/// A statement's raw text, up to and including its terminator.
+pub(crate) struct Segment {
+    pub(crate) range: Range<usize>,
+    /// Bytes of the terminator at the end of `range` (0 for the last, unterminated statement).
+    pub(crate) terminator: usize,
+}
+
+pub(crate) struct Scan {
+    pub(crate) segments: Vec<Segment>,
+    pub(crate) has_delimiter: bool,
+}
+
+/// Raw segments between terminators, following `DELIMITER` lines.
+pub(crate) fn scan(sql: &str) -> Scan {
     let bytes = sql.as_bytes();
-    let mut out = Vec::new();
+    let mut segments = Vec::new();
+    let mut has_delimiter = false;
+    let mut delimiter: &[u8] = b";";
     let mut start = 0;
     let mut i = 0;
     while i < bytes.len() {
+        if (i == 0 || bytes[i - 1] == b'\n')
+            && let Some((token, line_end)) = delimiter_line(sql, i)
+        {
+            // The line ends the statement before it, if any.
+            if start < i {
+                segments.push(Segment {
+                    range: start..i,
+                    terminator: 0,
+                });
+            }
+            has_delimiter = true;
+            if !token.is_empty() {
+                delimiter = token.as_bytes();
+            }
+            i = line_end;
+            start = i;
+            continue;
+        }
         match bytes[i] {
             quote @ (b'\'' | b'"' | b'`') => i = skip_quoted(bytes, i, quote),
             b'-' if bytes.get(i + 1) == Some(&b'-') => i = skip_line(bytes, i),
@@ -160,18 +229,40 @@ fn segments(sql: &str) -> Vec<Range<usize>> {
             b'/' if bytes.get(i + 1) == Some(&b'*') => {
                 i = find(bytes, i + 2, b"*/").map_or(bytes.len(), |end| end + 2);
             }
-            b';' => {
-                i += 1;
-                out.push(start..i);
+            _ if bytes[i..].starts_with(delimiter) => {
+                i += delimiter.len();
+                segments.push(Segment {
+                    range: start..i,
+                    terminator: delimiter.len(),
+                });
                 start = i;
             }
             _ => i += 1,
         }
     }
     if start < bytes.len() {
-        out.push(start..bytes.len());
+        segments.push(Segment {
+            range: start..bytes.len(),
+            terminator: 0,
+        });
     }
-    out
+    Scan {
+        segments,
+        has_delimiter,
+    }
+}
+
+/// A `DELIMITER <token>` line starting at byte `line`: the token and where the next line starts.
+fn delimiter_line(sql: &str, line: usize) -> Option<(&str, usize)> {
+    const WORD: &str = "DELIMITER";
+    let line_end = sql[line..].find('\n').map_or(sql.len(), |nl| line + nl + 1);
+    let text = sql[line..line_end].trim_start_matches([' ', '\t']);
+    let rest = text.get(WORD.len()..)?;
+    if !text[..WORD.len()].eq_ignore_ascii_case(WORD) || !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+    let token = rest.split_whitespace().next().unwrap_or_default();
+    Some((token, line_end))
 }
 
 fn skip_quoted(bytes: &[u8], open: usize, quote: u8) -> usize {
@@ -205,10 +296,11 @@ fn find(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|p| p + from)
 }
 
-/// Trim whitespace and the trailing `;`; `None` when only comments/whitespace remain.
-fn trim(sql: &str, seg: Range<usize>) -> Option<Range<usize>> {
+/// Trim whitespace and the terminator; `None` when only comments/whitespace remain.
+fn trim(sql: &str, seg: Segment) -> Option<Range<usize>> {
+    let seg = seg.range.start..seg.range.end - seg.terminator;
     let text = &sql[seg.clone()];
-    let text_no_semi = text.trim_end().strip_suffix(';').unwrap_or(text);
+    let text_no_semi = text.trim_end();
     let start = seg.start + leading_noise(text_no_semi);
     let end = seg.start + text_no_semi.trim_end().len();
     if start >= end || only_comments(&sql[start..end]) {
@@ -345,6 +437,59 @@ mod tests {
             Some("EXPLAIN")
         );
         assert_eq!(first_keyword("  -- only a comment"), None);
+    }
+
+    #[test]
+    fn delimiter_lines_change_the_terminator() {
+        let sql = "DELIMITER //\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\nEND //\n\
+                   delimiter ;\nCALL p(); SELECT ';//'";
+        let body = "CREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\nEND";
+        assert_eq!(texts(sql), [body, "CALL p()", "SELECT ';//'"]);
+        // The server does not know `DELIMITER`: such a script always runs statement by statement.
+        let run: Vec<&str> = script(sql).into_iter().map(|r| &sql[r]).collect();
+        assert_eq!(run, [body, "CALL p()", "SELECT ';//'"]);
+        let inside = sql.find("SELECT 1").unwrap();
+        assert_eq!(statement_at(sql, inside).map(|r| &sql[r]), Some(body));
+        // A delimiter of several characters, and a line that only mentions the word.
+        assert_eq!(
+            texts("DELIMITER $$\nSELECT 1$$ SELECT 2 $$"),
+            ["SELECT 1", "SELECT 2"]
+        );
+        assert_eq!(
+            texts("SELECT 'DELIMITER x';\nSELECT delimiter_x"),
+            ["SELECT 'DELIMITER x'", "SELECT delimiter_x"]
+        );
+        // Malformed lines never panic.
+        for odd in [
+            "DELIMITER",
+            "DELIMITERé x",
+            "DELIMITER \n",
+            "ĐELIMITER x\nSELECT 1",
+            "x\nDELIMITER 👋\nSELECT 1👋",
+        ] {
+            let _ = (split(odd), script(odd), statement_at(odd, odd.len()));
+        }
+        // The line ends an unterminated statement before it.
+        assert_eq!(
+            texts("SELECT 1\nDELIMITER //\nSELECT 2//"),
+            ["SELECT 1", "SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn script_keeps_compound_statements_whole() {
+        let run = |sql| script(sql).into_iter().map(|r| &sql[r]).collect::<Vec<_>>();
+        assert_eq!(run("SELECT 1; SELECT 2;"), ["SELECT 1", "SELECT 2"]);
+        let routine = "CREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND;\nCALL p()";
+        assert_eq!(run(routine), [routine]);
+        let block = "BEGIN NOT ATOMIC SELECT 1; END";
+        assert_eq!(run(block), [block]);
+        assert_eq!(
+            run("BEGIN; SELECT 1; COMMIT"),
+            ["BEGIN", "SELECT 1", "COMMIT"]
+        );
+        assert_eq!(run("CREATE TABLE t (begin_at INT); SELECT 1").len(), 2);
+        assert_eq!(run("-- nothing"), Vec::<&str>::new());
     }
 
     #[test]

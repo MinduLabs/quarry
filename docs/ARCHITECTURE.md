@@ -25,7 +25,7 @@ logic in a headless Rust core. App ID: `io.github.mindulabs.Quarry`.
 └──────────────────────┬───────────────────────┘
                        │ invoke("engine_send") / Channel<Event>   (JSON)
 ┌──────────────────────▼───────────────────────┐
-│ src-tauri/  thin bridge, no business logic   │  engine_send · engine_subscribe · statement_at
+│ src-tauri/  thin bridge, no business logic   │  engine_send · engine_subscribe · statement_at · script_statements
 └──────────────────────┬───────────────────────┘
                        │ Command / Event (async_channel)
 ┌──────────────────────▼───────────────────────┐
@@ -46,8 +46,8 @@ logic in a headless Rust core. App ID: `io.github.mindulabs.Quarry`.
 |---|---|
 | `model` | `Value`, `ColumnMeta`, `SchemaObject`, `ConnectionConfig`, `Capabilities`, `Environment`. Exports TypeScript types (ts-rs). |
 | `driver-api` | `Driver` / `Session` traits (including `table_info`), `Dialect` (quoting, placeholders, paging, literals, DDL for a `SchemaChange`), `ExecItem`, shared error type. |
-| `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls: connect, SSL modes, multi-statement scripts, cancel with `KILL QUERY` on a side connection, introspection through `information_schema`. |
-| `sql` | Statement splitting, statement at cursor, classification (read / write / DDL / destructive), transaction effect (`BEGIN`, `COMMIT`, implicit commits). |
+| `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls: connect, SSL modes, multi-statement scripts, cancel with `KILL QUERY` on a side connection, introspection through `information_schema`, syntax error location (`near '…' at line N`), lost connections as `ConnectionLost`. |
+| `sql` | Statement splitting (with `DELIMITER` lines), the statements a run sends (`script`), statement at cursor, classification (read / write / DDL / destructive), transaction effect (`BEGIN`, `COMMIT`, implicit commits). |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs (`workspace.json`), query history (`history.jsonl`), secrets in the OS keyring. |
 | `tunnel` | SSH local port forwarding via `russh`: ssh-agent, key file or password; the host key must be in `known_hosts`. |
 | `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Exports TypeScript types. |
@@ -72,7 +72,7 @@ Main flows:
 ```
 Connect      Connect{id} → ConnState(Connecting) → ConnState(Connected{capabilities}) → Databases
 Tree         LoadObjects{id, database} → Objects;  LoadColumns{id, database} → Columns (completion)
-Query        Run{tab, sql} → QueryStarted → (ResultColumns → ResultRows* → ResultDone)* → QueryFinished | QueryFailed → HistoryAdded
+Query        Run{tab, sql} → QueryStarted → (StatementStarted → (ResultColumns → ResultRows* → ResultDone)*)* → QueryFinished | QueryFailed → HistoryAdded
 Table page   Browse{tab, table, limit, offset, query} → same events as Query (the engine builds the SELECT for the dialect)
 Row count    CountRows{tab, table, query} → RowCount (on the tab's session, so Cancel stops it)
 Query plan   Explain{tab, sql, json} → same events as Query (one statement; it never runs)
@@ -95,6 +95,19 @@ Favorites    LoadFavorites / SaveFavorite / DeleteFavorite → Favorites (the fu
 - The engine runs a multi-threaded tokio runtime on its own thread; the UI never blocks on IO.
 - Each query tab owns one database session, so a long query in one tab does not block another.
   Each connection also has a metadata session for introspection.
+- A typed script runs one statement at a time, in the order of `quarry_sql::script`, on the tab's
+  session. `StatementStarted{index, count}` says which one runs; result sets carry their statement.
+  The run stops at the first failing statement: `QueryFailed` names it, with the server's error
+  location (line within the statement and the text from there) when there is one, and the
+  statements before it stay applied. `Cancel` also stops the statements not started yet. A script
+  with a compound statement (a `BEGIN … END` body without `DELIMITER`) goes to the server whole,
+  as one statement, since only the server can read where such a body ends. The bridge's
+  `script_statements` gives the UI the same ranges in UTF-16, so it can mark the running statement
+  and the error in the editor.
+- A tab session whose connection is gone (`DriverError::ConnectionLost`) is replaced: a run that
+  hits it opens a new session once and says so (and that an open transaction is gone, or that a
+  commit's outcome is unknown); it never runs the statement again. Other commands mark it, and the
+  next one opens a new session.
 - Rows are sent in batches of about 500 and capped at 1000 per result set (`truncated: true` beyond that).
 - Cancel goes around the session (driver cancel handle), so it works while a query is running.
 - Development performance log (`perf.rs`): with `QUARRY_PERF` set, the engine appends one JSON
@@ -178,8 +191,23 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
   Settings has one search over every section; shortcuts match by name or by their keys.
   The webview's own reload is turned off: `F5` / `Ctrl/⌘+R` refresh the active tab instead.
 
+- **Startup:** the window opens hidden and `index.html` draws a splash (logo and name) before any
+  app code runs: `public/boot.js` sets the theme, the stylesheet gives its colors, and
+  `public/show.js` shows the window. Text on the splash makes WebKit set up its fonts while the
+  code loads, instead of in the app's first layout. `lib/splash.ts` fades it out after the first
+  render.
 - **Editor:** CodeMirror 6 with SQL highlighting and schema-aware completion; `Ctrl/⌘+Enter` runs the
-  statement under the cursor (range computed in Rust by `statement_at`).
+  statement under the cursor (range computed in Rust by `statement_at`). Completion is read in
+  Rust (`quarry_sql::completion_context`, bridge command `completion_context`) from the statement
+  around the cursor: which names fit (tables, columns of the statement's tables and aliases,
+  `db.`, `alias.`), the keywords of the clause (`ORDER BY x` → ASC / DESC, `IS` → NULL,
+  `JOIN t` → ON) and functions, in microseconds; the names come from the loaded schema. The tab's
+  database loads its tables and columns even when the sidebar never opened it. Syntax checks
+  (`editor/diagnostics.ts`) parse with a MySQL grammar (`dt-sql-parser`) in a Web Worker
+  (`editor/sqlParser.worker.ts`) that loads on the first check, 500 ms after typing stops, on the
+  statements on screen only, cached per statement, and never flag the end of the statement being
+  written. The database's error of the last run is underlined where the server located it
+  (`editor/runMarks.ts`). None of this decides anything about safety.
 - **Grid:** row virtualization (`@tanstack/react-virtual`), sticky header and row-number column,
   resizable columns. A block of cells is selected by dragging, Shift+click, Shift+arrows, the row
   numbers or `Ctrl/⌘+A`, and copies as TSV, CSV or JSON (`lib/copy.ts`) or as INSERT (the engine

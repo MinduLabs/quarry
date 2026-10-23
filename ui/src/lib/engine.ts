@@ -8,6 +8,7 @@
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Command } from "@/bindings/Command";
+import type { CompletionContext } from "@/bindings/CompletionContext";
 import type { Event } from "@/bindings/Event";
 
 export function send(command: Command): void {
@@ -25,4 +26,18 @@ export async function subscribe(handler: (event: Event) => void): Promise<void> 
 /** UTF-16 range of the SQL statement under the cursor, or null. */
 export async function statementAt(text: string, offset: number): Promise<[number, number] | null> {
   return invoke<[number, number] | null>("statement_at", { text, offset });
+}
+
+/** UTF-16 ranges of the statements a `Run` of `text` sends, in the order the engine runs them. */
+export async function scriptStatements(text: string): Promise<[number, number][]> {
+  return invoke<[number, number][]>("script_statements", { text });
+}
+
+/** What fits at UTF-16 `offset` of `text` in a SQL editor, read in Rust; `null` where nothing
+ * completes (a string, a comment). */
+export async function completionContext(
+  text: string,
+  offset: number,
+): Promise<CompletionContext | null> {
+  return invoke<CompletionContext | null>("completion_context", { text, offset });
 }

@@ -1,10 +1,9 @@
 name: Release
 
 # Push a tag like v0.1.0 → run CI → build every package on GitHub runners → publish a public
-# GitHub Release with exactly these files: .AppImage, .deb, .flatpak, .dmg (`gh release create`,
-# as Lapce does).
+# GitHub Release with exactly these files: .AppImage, .deb, .flatpak, .dmg (`gh release create`).
 # A PR that changes this file, or a manual run (workflow_dispatch), builds the packages as
-# workflow artifacts without publishing (Lapce runs its release workflow on PRs the same way).
+# workflow artifacts without publishing.
 # Actions are pinned by commit SHA; the comment names the release.
 on:
   push:

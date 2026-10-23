@@ -37,6 +37,9 @@ Editing a build file is not a reason to run the build. Run it only when the user
 - `packaging/flatpak/cargo-sources.json` is generated from `Cargo.lock` (`just flatpak`, CI). A dependency change regenerates it; do not hand-edit.
 - The desktop entry, metainfo and icons live in `packaging/linux/` and `src-tauri/icons/`. CI validates them with `desktop-file-validate` and `appstreamcli`. On Wayland the dock icon comes from the desktop entry named after the app ID; `src-tauri/src/desktop.rs` installs one for unpackaged Linux runs.
 - Linux has no native title bar (`decorations: false` in `tauri.linux.conf.json`); the UI draws the window controls. macOS uses an overlay title bar.
+- `tauri.linux.conf.json` is merged as a JSON merge patch: its `windows` array replaces the whole array of `tauri.conf.json`. A window option for every platform goes in both files (`visible: false` did not, and Linux showed a white window at startup).
+- The main window starts hidden; `ui/public/show.js` shows it once the splash in `index.html` is in the page, and `on_page_load` in `main.rs` shows it when the page has loaded, in case the script could not.
+- The unpackaged Linux desktop entry (`desktop.rs`) names its icon by path, so a new logo shows without logging out; it also removes the SVG that older versions installed.
 - Tauri capabilities in `src-tauri/capabilities/default.json` are least privilege: add a permission only for a window API the UI really calls. The CSP in `tauri.conf.json` stays strict (no remote origins).
 - `ui/dist` must exist for `tauri::generate_context!`; CI makes an empty one for Rust jobs.
 

@@ -6,10 +6,12 @@
 mod browse;
 mod capabilities;
 mod column;
+mod completion;
 mod connection;
 mod ddl;
 mod edit;
 mod environment;
+mod error_location;
 mod favorite;
 mod history;
 mod schema;
@@ -20,10 +22,12 @@ mod workspace;
 pub use browse::{BrowseQuery, ColumnFilter, FilterOp, SortKey};
 pub use capabilities::{Capabilities, ObjectKind};
 pub use column::ColumnMeta;
+pub use completion::{CompletionContext, CompletionNames, StatementTable};
 pub use connection::{ConnId, ConnectionConfig, DriverId, SshAuth, SshConfig, SslMode};
 pub use ddl::{AlterOp, ColumnDef, IndexDef, SchemaChange};
 pub use edit::{CellValue, RowChange};
 pub use environment::Environment;
+pub use error_location::ErrorLocation;
 pub use favorite::{Favorite, FavoriteId, FavoriteItem};
 pub use history::HistoryEntry;
 pub use schema::{

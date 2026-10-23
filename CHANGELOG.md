@@ -22,6 +22,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Favorites: pin tables and save named queries.
 - Format SQL (`Shift+Ctrl/⌘+F` or the toolbar button): formats the selection, or the whole tab when nothing is selected, in one undo step.
 - Completion suggests the columns of every table in the database, not only table names.
+- Completion offers what fits at the cursor, read in Rust on every keystroke: the columns of the tables the statement names (aliases included, `alias.` lists that table's columns), tables after FROM / JOIN, and the keywords that come next: ASC / DESC after `ORDER BY column`, NULL after `IS`, ON after `JOIN table`, and more. Tables of other databases complete after `database.`, and the tab's database completes without opening it in the sidebar.
+- A script runs one statement at a time: the editor highlights the statement running now, the status bar and results say which one it is ("statement 2 of 5"), and each result is labelled with its statement.
+- Syntax errors are underlined in the editor before running, with the message on hover, and the database's own error at the spot it reports after a run.
+- `DELIMITER` lines split scripts with stored routines and triggers.
 - Table tabs: filter rows (=, ≠, <, >, contains, starts with, in list, NULL checks) and sort by clicking a column header. The database does the work, with values sent as parameters; filters and sort are saved with the tab.
 - Table tabs show the estimated row count and can count the matching rows exactly.
 - Explain plan: shows the plan of the statement under the cursor as a tree or as a table, without running it.
@@ -56,6 +60,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Packaging: Flatpak, AppImage and `.deb` on Linux; universal `.dmg` on macOS. Linux packages are built on Ubuntu 22.04 so they also run on older distros; release builds are size-optimized.
 
 ### Fixed
+- The window no longer shows white while the app starts: it opens on a splash with the logo, in the app's theme, and shows the app when it is ready (about 300 ms sooner than before).
+- The top bar and dock show the new logo for unpackaged runs; an icon left by an older version no longer takes its place.
+- A script whose second or later statement failed (`SELECT 1; SELEC 2`) reported success, and the error then failed the next query on the tab. The failing statement now reports its error, and the tab keeps working.
+- A tab whose connection dropped (server restart, timeout, `KILL`) failed every run until it was closed. The next run now opens a new connection once and says what happened to any open transaction.
 - A tab with a running query can be closed: closing stops the query first.
 - Right-click no longer opens the webview's own menu (Reload, Back), which restarted the whole app; `F5` / `Ctrl+R` no longer reload it either.
 - The Name field of the connection dialog no longer shows the host as its placeholder, which looked like a value already typed in.

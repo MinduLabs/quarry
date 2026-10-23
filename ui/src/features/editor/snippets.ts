@@ -1,4 +1,8 @@
-import { completeFromList, snippetCompletion } from "@codemirror/autocomplete";
+import {
+  type CompletionContext,
+  completeFromList,
+  snippetCompletion,
+} from "@codemirror/autocomplete";
 
 /**
  * Built-in templates. Typing the label and pressing Enter or Tab inserts the template; Tab then
@@ -68,9 +72,13 @@ const TEMPLATES: { label: string; detail: string; template: string }[] = [
   },
 ];
 
-/** A completion source for the editor's language data. */
-export const snippetSource = completeFromList(
+const templates = completeFromList(
   TEMPLATES.map((t) =>
-    snippetCompletion(t.template, { label: t.label, detail: t.detail, type: "text", boost: -1 }),
+    snippetCompletion(t.template, { label: t.label, detail: t.detail, type: "text", boost: -99 }),
   ),
 );
+
+/** A completion source for the editor's language data. Templates show once a word is typed and
+ * rank last, so they never push aside what the grammar expects (ASC / DESC after `ORDER BY x`). */
+export const snippetSource = (context: CompletionContext) =>
+  context.matchBefore(/\w+/) ? templates(context) : null;

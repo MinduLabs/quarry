@@ -1,0 +1,34 @@
+/* The startup splash in index.html, loaded before any app code (see lib/splash.ts). */
+
+html {
+  background: var(--app);
+}
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  background: var(--app);
+  transition: opacity var(--duration-slow) var(--ease-out);
+}
+#splash.is-done {
+  opacity: 0;
+}
+#splash img {
+  width: 96px;
+  height: 96px;
+  user-select: none;
+}
+/* Text on the splash also makes WebKit set up its fonts during this first paint, while the
+   code loads, instead of in the app's first layout: the app shows about 300 ms sooner. */
+#splash span {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  user-select: none;
+}

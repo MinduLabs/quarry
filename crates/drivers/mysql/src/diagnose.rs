@@ -8,7 +8,7 @@
 //! Code: ECONNREFUSED (os error 111)                         <- the exact error, to search or report
 //! ```
 //!
-//! The first line is what MySQL clients (mysql, TablePlus, DBeaver) print, so it can be searched
+//! The first line is what MySQL itself reports, so it can be searched
 //! as is; the second line is Quarry's explanation.
 
 use std::io::{self, ErrorKind};
@@ -145,7 +145,7 @@ fn errno_name(kind: ErrorKind) -> &'static str {
 }
 
 fn server_error(target: &Target, code: u16, state: &str, server_message: &str) -> DriverError {
-    // The server's own line, as the `mysql` client prints it.
+    // The server's own line, as MySQL reports it.
     let headline = format!("ERROR {code} ({state}): {server_message}");
     let detail = format!("MySQL error {code}, SQLSTATE {state}");
     match code {

@@ -1,6 +1,6 @@
 //! Integration tests against a real MySQL (`QUARRY_TEST_MYSQL=127.0.0.1:13306`).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use quarry_model::{
     BrowseQuery, ConnId, ConnectionConfig, DriverId, Environment, RowChange, ServerInfoKind,
@@ -988,4 +988,143 @@ async fn connects_through_an_ssh_tunnel() {
         }
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An engine with `config` saved (password `quarry`), not connected yet.
+async fn saved_engine(config: ConnectionConfig) -> (EngineHandle, EngineEvents) {
+    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+        config_dir: Some(dir.clone()),
+        data_dir: Some(dir),
+        known_hosts: None,
+        disable_keyring: true,
+        perf_log: None,
+    })
+    .unwrap();
+    engine
+        .send(Command::SaveConnection {
+            config,
+            password: Some(Password("quarry".into())),
+            ssh_secret: None,
+            remember_password: false,
+        })
+        .unwrap();
+    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    (engine, events)
+}
+
+/// Collects the run's events until it finishes or fails.
+async fn run_events(
+    engine: &EngineHandle,
+    events: &EngineEvents,
+    tab: TabId,
+    conn: ConnId,
+    sql: &str,
+) -> Vec<Event> {
+    engine
+        .send(Command::Run {
+            tab,
+            conn,
+            database: Some("shop".into()),
+            sql: sql.into(),
+            confirmed: false,
+        })
+        .unwrap();
+    let mut seen = Vec::new();
+    loop {
+        let event = next_matching(events, |e| match e {
+            Event::QueryStarted { tab: t }
+            | Event::StatementStarted { tab: t, .. }
+            | Event::ResultColumns { tab: t, .. }
+            | Event::ResultRows { tab: t, .. }
+            | Event::ResultDone { tab: t, .. }
+            | Event::QueryFinished { tab: t, .. }
+            | Event::QueryFailed { tab: t, .. } => *t == tab,
+            _ => false,
+        })
+        .await;
+        let end = matches!(
+            event,
+            Event::QueryFinished { .. } | Event::QueryFailed { .. }
+        );
+        seen.push(event);
+        if end {
+            return seen;
+        }
+    }
+}
+
+#[tokio::test]
+async fn bad_sql_keeps_the_tab_usable_and_names_the_statement() {
+    let Some(config) = config() else { return };
+    let id = config.id;
+    let (engine, events) = saved_engine(config).await;
+
+    // One statement per run, in order; the failing one is named with its location.
+    let seen = run_events(&engine, &events, 5, id, "SELECT 1;\nSELEC 2;\nSELECT 3").await;
+    let started: Vec<(u32, u32)> = seen
+        .iter()
+        .filter_map(|e| match e {
+            Event::StatementStarted { index, count, .. } => Some((*index, *count)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        started,
+        [(0, 3), (1, 3)],
+        "the third statement never starts"
+    );
+    assert!(seen.iter().any(|e| matches!(
+        e,
+        Event::ResultColumns {
+            statement: 0,
+            set: 0,
+            ..
+        }
+    )));
+    let Some(Event::QueryFailed {
+        statement,
+        location,
+        error,
+        ..
+    }) = seen.last()
+    else {
+        panic!("{seen:?}")
+    };
+    assert_eq!(*statement, Some(1), "{error}");
+    let location = location.as_ref().expect("syntax errors have a location");
+    assert_eq!((location.line, location.near.as_str()), (1, "SELEC 2"));
+
+    // The next run on the same tab gets its own result, not the old error.
+    let seen = run_events(&engine, &events, 5, id, "SELECT 42").await;
+    assert!(
+        matches!(seen.last(), Some(Event::QueryFinished { .. })),
+        "{seen:?}"
+    );
+
+    // A dead connection is replaced once, and the tab works again.
+    let seen = run_events(&engine, &events, 5, id, "SELECT CONNECTION_ID()").await;
+    let connection = seen
+        .iter()
+        .find_map(|e| match e {
+            Event::ResultRows { rows, .. } => Some(rows[0][0].display(64)),
+            _ => None,
+        })
+        .expect("the connection id");
+    let kill = format!("KILL {connection}");
+    let seen = run_events(&engine, &events, 6, id, &kill).await;
+    assert!(
+        matches!(seen.last(), Some(Event::QueryFinished { .. })),
+        "{seen:?}"
+    );
+    let seen = run_events(&engine, &events, 5, id, "SELECT 1").await;
+    let Some(Event::QueryFailed { error, .. }) = seen.last() else {
+        panic!("a killed connection fails the next run: {seen:?}")
+    };
+    assert!(error.contains("new connection"), "{error}");
+    let seen = run_events(&engine, &events, 5, id, "SELECT 1").await;
+    assert!(
+        matches!(seen.last(), Some(Event::QueryFinished { .. })),
+        "{seen:?}"
+    );
 }
