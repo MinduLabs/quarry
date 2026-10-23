@@ -54,6 +54,11 @@ fn install_user_entry() -> io::Result<()> {
         Some(image) => PathBuf::from(image),
         None => env::current_exe()?,
     };
+    let icon = data
+        .join("icons/hicolor/512x512/apps")
+        .join(format!("{APP_ID}.png"));
+    // By path, not by name: GNOME Shell keeps an icon it looked up by name for the whole session,
+    // so a new logo would only show after logging out. A path is reloaded when the file changes.
     let entry = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
@@ -61,24 +66,34 @@ fn install_user_entry() -> io::Result<()> {
          GenericName=Database Client\n\
          Comment=Query and edit your databases\n\
          Exec=\"{}\"\n\
-         Icon={APP_ID}\n\
+         Icon={}\n\
          Terminal=false\n\
          Categories=Development;Database;\n\
          StartupWMClass={APP_ID}\n\
          StartupNotify=true\n",
-        exec.display()
+        exec.display(),
+        icon.display()
     );
 
-    write_if_changed(
+    write_if_changed(&icon, ICON_PNG)?;
+    // Versions before the new logo also installed an SVG, which icon themes prefer over any PNG:
+    // left there, the top bar and dock keep showing the old logo.
+    remove_if_present(
         &data
-            .join("icons/hicolor/512x512/apps")
-            .join(format!("{APP_ID}.png")),
-        ICON_PNG,
+            .join("icons/hicolor/scalable/apps")
+            .join(format!("{APP_ID}.svg")),
     )?;
     write_if_changed(
         &data.join("applications").join(format!("{APP_ID}.desktop")),
         entry.as_bytes(),
     )
+}
+
+fn remove_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+        _ => Ok(()),
+    }
 }
 
 fn write_if_changed(path: &Path, bytes: &[u8]) -> io::Result<()> {
