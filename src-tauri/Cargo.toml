@@ -19,6 +19,10 @@ tauri-build.workspace = true
 quarry-engine.workspace = true
 serde.workspace = true
 tauri.workspace = true
+tauri-plugin-window-state.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

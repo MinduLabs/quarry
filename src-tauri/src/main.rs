@@ -80,6 +80,28 @@ fn completion_context(
     Some(context)
 }
 
+/// Two fingers on the touchpad zoom the whole page in WebKitGTK, which turns the app into a
+/// magnified picture (the layout reflows to a fraction of the window and `devicePixelRatio`
+/// jumps). The page gets no zoom event it could cancel, so the gesture is stopped on the webview
+/// before the engine reads it.
+#[cfg(target_os = "linux")]
+fn block_pinch_zoom(window: &tauri::WebviewWindow) {
+    use gtk::glib::Propagation;
+    use gtk::prelude::WidgetExt;
+    let result = window.with_webview(|webview| {
+        webview.inner().connect_event(|_, event| {
+            if event.event_type() == gtk::gdk::EventType::TouchpadPinch {
+                Propagation::Stop
+            } else {
+                Propagation::Proceed
+            }
+        });
+    });
+    if let Err(err) = result {
+        tracing::warn!(%err, "pinch zoom guard");
+    }
+}
+
 fn utf16_to_byte(text: &str, utf16: usize) -> usize {
     let mut units = 0;
     for (byte, ch) in text.char_indices() {
@@ -116,6 +138,18 @@ fn main() {
 
     let forward = subscriber.clone();
     let result = tauri::Builder::default()
+        // Size, position and maximized state come back on the next launch. Not `VISIBLE` (the
+        // plugin would show the window before the splash is drawn, see `ui/public/show.js`) and
+        // not `DECORATIONS` (Linux draws its own window controls).
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .manage(Bridge { engine, subscriber })
         .invoke_handler(tauri::generate_handler![
             engine_send,
@@ -146,6 +180,10 @@ fn main() {
                     }
                 }
             });
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                block_pinch_zoom(&window);
+            }
             // X11 and dev runs on macOS read the icon from the window/app, not the bundle.
             // 256px: GDK silently drops a 512px _NET_WM_ICON.
             if let Some(window) = app.get_webview_window("main")
