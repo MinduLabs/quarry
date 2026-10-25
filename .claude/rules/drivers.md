@@ -32,13 +32,10 @@ paths:
 - `convert.rs` maps MySQL values: `BIGINT` / `BIGINT UNSIGNED` → `Int` / `UInt`, `DECIMAL` → `Decimal(String)`, binary → `Bytes`. Keep exactness; never go through `f64` for integers or decimals.
 - `diagnose.rs` turns raw connect errors into guidance. A new failure mode gets a case and a test.
 - Introspection goes through `information_schema`.
-- Errors: a server error that means the connection is gone maps to `DriverError::ConnectionLost`, never `Query`. A syntax error carries its `ErrorLocation`. After a multi-statement call, read every pending result, errors included: one left behind fails the session's next query.
 
 ## `quarry-sql`
 
-- `split`, `statement_at` and `classify` split on `;` outside `'..'`, `".."`, backticks and `--`, `#`, `/* */` comments, and work in UTF-8 byte offsets. A line `DELIMITER <token>` changes the terminator and is not a statement. `$$` quoting is not supported yet; adding it is a `split` change with tests.
-- `completion_context` reads what fits at a cursor from tokens: pure, linear in the statement, called on every keystroke; a case it gets wrong gets a test in its module.
-- `script` is what the engine runs one by one: `split`, except a script with a compound statement (`CREATE … BEGIN`, `BEGIN NOT ATOMIC`) and no `DELIMITER` line, which goes whole.
+- `split`, `statement_at` and `classify` split on `;` outside `'..'`, `".."`, backticks and `--`, `#`, `/* */` comments, and work in UTF-8 byte offsets. `DELIMITER` and `$$` are not supported yet; adding them is a `split` change with tests.
 - `classify` returns `Read`, `Write`, `Schema` or `Destructive` from the first keyword. Unknown keywords count as `Write` so safe mode errs on the safe side. A change to `classify` is a safe-mode change: add tests for the new keyword and for lookalikes in comments and strings.
 - It must never panic on malformed or huge input.
 

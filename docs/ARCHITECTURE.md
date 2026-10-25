@@ -195,7 +195,8 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
   app code runs: `public/boot.js` sets the theme, the stylesheet gives its colors, and
   `public/show.js` shows the window. Text on the splash makes WebKit set up its fonts while the
   code loads, instead of in the app's first layout. `lib/splash.ts` fades it out after the first
-  render.
+  render. The window's size, position and maximized state are saved on exit and restored at
+  launch (`tauri-plugin-window-state`, without its `VISIBLE` flag, so only `show.js` shows it).
 - **Editor:** CodeMirror 6 with SQL highlighting and schema-aware completion; `Ctrl/⌘+Enter` runs the
   statement under the cursor (range computed in Rust by `statement_at`). Completion is read in
   Rust (`quarry_sql::completion_context`, bridge command `completion_context`) from the statement

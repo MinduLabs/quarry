@@ -21,11 +21,11 @@ Quarry is an open-source database client for Linux and macOS (AGPL-3.0-or-later,
 - `crates/model`: plain types, no IO (`Value`, `ColumnMeta`, `SchemaObject`, `ConnectionConfig`, `Capabilities`, `Environment`). Exports TS types (ts-rs).
 - `crates/driver-api`: `Driver` / `Session` traits, `ExecItem`, `DriverError`, `DriverRegistry`.
 - `crates/drivers/mysql`: MySQL / MariaDB via `mysql_async` + rustls. `convert.rs` (values), `diagnose.rs` (connect error messages).
-- `crates/sql`: `split` (with `DELIMITER` lines), `script` (what a run sends), `statement_at`, `classify` (read / write / DDL / destructive), `completion_context` (what fits at the cursor).
+- `crates/sql`: `split`, `statement_at`, `classify` (read / write / DDL / destructive).
 - `crates/store`: `connections.toml` and `favorites.toml` (config dir, no secrets), `workspace.json` and `history.jsonl` (data dir), `SecretStore` (keyring: `oo7` on Linux, `security-framework` on macOS).
 - `crates/tunnel`: SSH local port forwarding (`russh`): agent, key file or password; host key must be in `known_hosts`.
 - `crates/engine`: owns the tokio runtime and all state. `command.rs`, `event.rs`, `lib.rs` (`EngineHandle`), `engine.rs` (`Engine` state), and one module per concern (`connections`, `query`, `session`, `changes`, `metadata`, `favorites`, `history`, `workspace`, `dispatch`). The only crate that knows a concrete driver (registered in `lib.rs`).
-- `src-tauri/`: thin bridge, no business logic. Commands `engine_send`, `engine_subscribe`, `statement_at`, `script_statements`, `completion_context`. `desktop.rs` installs the Linux desktop entry for unpackaged runs.
+- `src-tauri/`: thin bridge, no business logic. Commands `engine_send`, `engine_subscribe`, `statement_at`. `desktop.rs` installs the Linux desktop entry for unpackaged runs.
 - `ui/src/`: `features/{sidebar,connections,tabs,editor,query,grid,welcome,window}`, `components/ui/` (primitives), `store/app.ts` (zustand; engine events are reduced here), `lib/engine.ts` (bridge), `styles/tokens.css`. `bindings/` is generated.
 - `docker/linux.Dockerfile` (AppImage, `.deb`, `check-docker`), `docker/flatpak.Dockerfile`, `packaging/` (Flatpak manifest, desktop entry, metainfo). `tests/`: MySQL compose file and fixtures.
 - Docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (layers, flows, storage, packaging), [docs/STYLE-GUIDE.md](docs/STYLE-GUIDE.md) (read before touching `ui/`), [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -105,7 +105,7 @@ pnpm format           # Biome format (UI)
 - WebKitGTK on Linux is slow at layout animation: animate `opacity` and `transform` only. No `transition: all`, no `backdrop-filter`, no big blurred shadows.
 - Do not hold the engine's `Mutex` across an `.await`.
 - Drain rows past the limit from the socket without sending them; do not buffer them.
-- `statement_at`, `script_statements` and `completion_context` work in UTF-16 offsets on the UI side and bytes in Rust. Convert at the bridge only (`utf16_to_byte` / `byte_to_utf16`).
+- `statement_at` works in UTF-16 offsets on the UI side and bytes in Rust. Convert at the bridge only (`utf16_to_byte` / `byte_to_utf16`).
 
 ## Every change
 
