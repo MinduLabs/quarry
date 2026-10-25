@@ -1,17 +1,9 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
-import {
-  Database,
-  Eye,
-  Search,
-  Server,
-  SquareFunction,
-  Star,
-  Table2,
-  TerminalSquare,
-} from "lucide-react";
+import { Database, Search, Server, Star, TerminalSquare } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { EnvBadge } from "@/components/ui/Badge";
 import { Kbd } from "@/components/ui/Kbd";
+import { iconKindOf, ObjectIcon } from "@/components/ui/ObjectIcon";
 import { cn } from "@/lib/cn";
 import { keysOf, type ShortcutId } from "@/lib/shortcuts";
 import { type PaletteMode, useApp } from "@/store/app";
@@ -157,12 +149,6 @@ function Palette({ mode }: { mode: PaletteMode }) {
   );
 }
 
-function objectIcon(kind: string) {
-  if (kind === "table") return <Table2 {...ICON} />;
-  if (kind === "view" || kind === "materialized_view") return <Eye {...ICON} />;
-  return <SquareFunction {...ICON} />;
-}
-
 /** Everything quick open can reach. Only what is loaded: open databases' objects. */
 function useObjectItems(): Item[] {
   const connections = useApp((s) => s.connections);
@@ -179,7 +165,7 @@ function useObjectItems(): Item[] {
             id: `o:${config.id}:${db.name}:${object.kind}:${object.name}`,
             label: object.name,
             detail: `${config.name} · ${db.name}`,
-            icon: objectIcon(object.kind),
+            icon: <ObjectIcon kind={iconKindOf(object.kind)} />,
             run: () => openObject(config.id, db.name, object.name, object.kind),
           });
         }

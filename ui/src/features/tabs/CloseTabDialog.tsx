@@ -1,5 +1,4 @@
-import { Button } from "@/components/ui/Button";
-import { Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useApp } from "@/store/app";
 
 /** Closing a tab ends its session, which rolls back a transaction left open. */
@@ -15,22 +14,13 @@ export function CloseTabDialog() {
       : `“${first?.title ?? ""}” has a transaction open. Closing the tab rolls it back. Commit first to keep the changes.`;
 
   return (
-    <Dialog
+    <ConfirmDialog
       open={ids !== null}
-      onClose={() => answer(false)}
       title={ids && ids.length > 1 ? "Close tabs?" : "Close tab?"}
       description={description}
-      width={440}
-      footer={
-        <>
-          <Button autoFocus onClick={() => answer(false)}>
-            Cancel
-          </Button>
-          <Button variant="danger" onClick={() => answer(true)}>
-            Roll back and close
-          </Button>
-        </>
-      }
+      confirmLabel="Roll back and close"
+      onConfirm={() => answer(true)}
+      onCancel={() => answer(false)}
     />
   );
 }

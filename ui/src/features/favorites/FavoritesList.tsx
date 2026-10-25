@@ -1,5 +1,6 @@
-import { FileCode2, Server, Star, Table2 } from "lucide-react";
+import { FileCode2, Server, Star } from "lucide-react";
 import { ContextMenuArea } from "@/components/ui/Menu";
+import { ObjectIcon } from "@/components/ui/ObjectIcon";
 import { TreeRow } from "@/components/ui/TreeRow";
 import { useApp } from "@/store/app";
 
@@ -51,7 +52,7 @@ export function FavoritesList({ query }: { query: string }) {
                 favorite.item.kind === "connection" ? (
                   <Server {...ICON} />
                 ) : favorite.item.kind === "table" ? (
-                  <Table2 {...ICON} />
+                  <ObjectIcon kind="table" />
                 ) : (
                   <FileCode2 {...ICON} />
                 )

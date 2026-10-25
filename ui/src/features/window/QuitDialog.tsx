@@ -1,6 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Button } from "@/components/ui/Button";
-import { Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { saveWorkspace, useApp } from "@/store/app";
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -21,25 +20,14 @@ export function QuitDialog() {
   }
 
   return (
-    <Dialog
+    <ConfirmDialog
       open={Boolean(quit)}
-      onClose={dismiss}
       title="Quit Quarry?"
       description={lines.join(" ")}
+      confirmLabel="Quit"
       width={420}
-      footer={
-        <>
-          <Button autoFocus onClick={dismiss}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            onClick={() => void saveWorkspace().then(() => getCurrentWindow().destroy())}
-          >
-            Quit
-          </Button>
-        </>
-      }
+      onConfirm={() => void saveWorkspace().then(() => getCurrentWindow().destroy())}
+      onCancel={dismiss}
     />
   );
 }

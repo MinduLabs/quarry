@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Added
+- Structure view shows one part at a time (Columns, Indexes, Foreign keys, DDL) as tabs with counts and a filter. An index or foreign key in the sidebar opens its tab with the row marked.
+- Sidebar tree: objects grouped as Tables, Views, Procedures, Functions, Triggers and Events with counts; a table opens to its indexes (primary key first) and foreign keys. Each kind of object has its own icon color.
+- Deleting rows from the grid asks first, from the Delete key, the edit bar and the context menu. Taking a deletion back, or removing a row you just added, does not ask.
 - Desktop app on Tauri 2 (Linux and macOS) with a React + TypeScript UI; the Rust core is shared.
 - MySQL / MariaDB driver (`mysql_async` + rustls): connect, SSL modes, multi-statement scripts, cancel (`KILL QUERY`), schema introspection.
 - Saved connections (`connections.toml` in the OS config dir), passwords in the system keyring (Secret Service on Linux, Keychain on macOS).
@@ -26,6 +29,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - A script runs one statement at a time: the editor highlights the statement running now, the status bar and results say which one it is ("statement 2 of 5"), and each result is labelled with its statement.
 - Syntax errors are underlined in the editor before running, with the message on hover, and the database's own error at the spot it reports after a run.
 - `DELIMITER` lines split scripts with stored routines and triggers.
+- The window keeps its size, position and maximized state between launches.
 - Table tabs: filter rows (=, ≠, <, >, contains, starts with, in list, NULL checks) and sort by clicking a column header. The database does the work, with values sent as parameters; filters and sort are saved with the tab.
 - Table tabs show the estimated row count and can count the matching rows exactly.
 - Explain plan: shows the plan of the statement under the cursor as a tree or as a table, without running it.
@@ -60,6 +64,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Packaging: Flatpak, AppImage and `.deb` on Linux; universal `.dmg` on macOS. Linux packages are built on Ubuntu 22.04 so they also run on older distros; release builds are size-optimized.
 
 ### Fixed
+- The grid tints the row number of every row a selection touches, so the "Delete 6 rows" button matches what you see selected, and its label is red.
+- Pinching the touchpad no longer zooms the whole window on Linux, which turned the app into a magnified picture.
 - The window no longer shows white while the app starts: it opens on a splash with the logo, in the app's theme, and shows the app when it is ready (about 300 ms sooner than before).
 - The top bar and dock show the new logo for unpackaged runs; an icon left by an older version no longer takes its place.
 - A script whose second or later statement failed (`SELECT 1; SELEC 2`) reported success, and the error then failed the next query on the tab. The failing statement now reports its error, and the tab keeps working.

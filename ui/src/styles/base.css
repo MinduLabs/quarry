@@ -31,6 +31,14 @@
   --color-success: var(--success);
   --color-danger-solid: var(--danger-solid);
   --color-env-local: var(--env-local);
+  --color-icon-table: var(--icon-table);
+  --color-icon-view: var(--icon-view);
+  --color-icon-procedure: var(--icon-procedure);
+  --color-icon-function: var(--icon-function);
+  --color-icon-trigger: var(--icon-trigger);
+  --color-icon-index: var(--icon-index);
+  --color-icon-key: var(--icon-key);
+  --color-icon-link: var(--icon-link);
   --color-env-staging: var(--env-staging);
   --color-env-production: var(--env-production);
   --color-cell-modified: var(--cell-modified);

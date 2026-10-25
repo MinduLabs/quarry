@@ -11,6 +11,7 @@ import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections
 import { HistoryDialog } from "./features/history/HistoryDialog";
 import { CommandPalette } from "./features/palette/CommandPalette";
 import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
+import { ConfirmDeleteRowsDialog } from "./features/query/ConfirmDeleteRowsDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { QueryView } from "./features/query/QueryView";
 import { SchemaFormDialog } from "./features/schema/SchemaFormDialog";
@@ -191,6 +192,7 @@ export function App() {
       <DeleteConnectionDialog />
       <ConfirmRunDialog />
       <ConfirmChangesDialog />
+      <ConfirmDeleteRowsDialog />
       <SettingsDialog />
       <SchemaFormDialog />
       <SchemaReviewDialog />

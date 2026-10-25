@@ -1,7 +1,7 @@
 import { type ButtonHTMLAttributes, forwardRef } from "react";
 import { cn } from "@/lib/cn";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Variant = "primary" | "secondary" | "ghost" | "danger" | "danger-ghost";
 type Size = "sm" | "md";
 
 const variants: Record<Variant, string> = {
@@ -9,6 +9,8 @@ const variants: Record<Variant, string> = {
   secondary: "bg-surface text-fg border border-line-strong hover:bg-hover active:bg-pressed",
   ghost: "text-fg hover:bg-hover active:bg-pressed",
   danger: "bg-danger-solid text-white hover:opacity-90",
+  /** For an action that loses data, in a bar of quiet buttons: only its label is red. */
+  "danger-ghost": "text-danger hover:bg-hover active:bg-pressed",
 };
 
 const sizes: Record<Size, string> = {

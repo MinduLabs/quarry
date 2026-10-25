@@ -93,7 +93,7 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
     editCell,
     addRow,
     editCells,
-    toggleDeleteRows,
+    requestDeleteRows,
     undoEdit,
     redoEdit,
     saveEdits,
@@ -293,7 +293,7 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
             edits: tab.edits ?? NO_EDITS,
             onEdit: (row, col, value) => editCell(tab.id, row, col, value),
             onEditCells: (cells) => editCells(tab.id, cells),
-            onToggleDeleteRows: (rows) => toggleDeleteRows(tab.id, rows),
+            onDeleteRows: (rows) => requestDeleteRows(tab.id, rows),
             onUndo: () => undoEdit(tab.id),
             onRedo: () => redoEdit(tab.id),
             onInsertRow: canInsert ? () => addRow(tab.id) : undefined,
@@ -306,7 +306,7 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
       tab.id,
       editCell,
       editCells,
-      toggleDeleteRows,
+      requestDeleteRows,
       undoEdit,
       redoEdit,
       addRow,
@@ -821,7 +821,7 @@ function EditBar({
   const rows = span
     ? Array.from({ length: span.bottom - span.top + 1 }, (_, i) => span.top + i)
     : [];
-  const { addRow, toggleDeleteRows, discardEdits, saveEdits, undoEdit, redoEdit } =
+  const { addRow, requestDeleteRows, discardEdits, saveEdits, undoEdit, redoEdit } =
     useApp.getState();
   const pending = editCount(tab.edits);
   const deletes = tab.edits?.deletes ?? [];
@@ -839,10 +839,10 @@ function EditBar({
       )}
       <Button
         size="sm"
-        variant="ghost"
+        variant={keeping ? "ghost" : "danger-ghost"}
         disabled={busy || rows.length === 0}
         title={rows.length === 0 ? "Select rows in the grid first" : undefined}
-        onClick={() => toggleDeleteRows(tab.id, rows)}
+        onClick={() => requestDeleteRows(tab.id, rows)}
       >
         <Minus size={14} strokeWidth={1.75} />
         {keeping ? `Keep ${count}` : `Delete ${count}`}

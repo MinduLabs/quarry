@@ -86,6 +86,20 @@ export interface TabStructure {
 
 export type TabView = "data" | "structure";
 
+/** What the Structure view shows: one kind of thing at a time. */
+export type StructurePart = "columns" | "indexes" | "foreign_keys" | "ddl";
+
+/** Indexes and foreign keys of a table shown in the sidebar tree. */
+export interface TreeTableInfo {
+  loading: boolean;
+  info: TableInfo | null;
+  error: string | null;
+}
+
+/** Key of a node below a database in `treeOpen`: the group of a kind, a table, or a group of a table. */
+export const treeKey = (conn: string, database: string, rest: string) =>
+  `${conn}/${database}/${rest}`;
+
 export const emptyQuery = (): BrowseQuery => ({ filters: [], sort: [] });
 
 /** The statement whose plan the tab shows, and as what. */
@@ -292,6 +306,9 @@ export interface Tab {
   pinned: boolean;
   view: TabView;
   structure: TabStructure | null;
+  /** The part of the structure shown, and the name of the row to point at (from the sidebar). */
+  structurePart: StructurePart;
+  structureFocus: string | null;
   /** The shown results are a page of `browse` (not a typed query), so the pager applies. */
   paged: boolean;
   edits: Edits | null;
@@ -333,6 +350,8 @@ function blankTab(
     pinned: false,
     view: "data",
     structure: null,
+    structurePart: "columns",
+    structureFocus: null,
     paged: false,
     edits: null,
     editsPast: [],
@@ -413,6 +432,13 @@ interface State {
   changesConfirm: PendingChangesConfirm | null;
   /** Tabs waiting for the user to agree that closing them rolls back an open transaction. */
   closeConfirm: number[] | null;
+  /** Which nodes of the sidebar tree below a database are open, by key (`treeKey`); a node not
+   * listed is closed, except the Tables group. */
+  treeOpen: Record<string, boolean>;
+  /** Indexes and foreign keys of the tables opened in the tree, by `${conn}/${db}/${table}`. */
+  tableInfos: Record<string, TreeTableInfo>;
+  /** Rows of a tab waiting for the answer to "Delete rows?". */
+  deleteConfirm: { tab: number; rows: number[] } | null;
   history: HistoryState;
   favorites: Favorite[];
   toasts: Toast[];
@@ -464,6 +490,11 @@ interface State {
   /** Move a tab to `index`; a tab never crosses the line between pinned and unpinned. */
   moveTab: (id: number, index: number) => void;
   answerCloseConfirm: (close: boolean) => void;
+  /** Open or close a node of the tree below a database; opening a table loads its keys. */
+  toggleTreeNode: (key: string, table?: { conn: string; database: string; name: string }) => void;
+  /** Mark rows for deletion; asks first when that would delete rows of the table. */
+  requestDeleteRows: (id: number, rows: number[]) => void;
+  answerDeleteConfirm: (confirmed: boolean) => void;
   setSql: (id: number, sql: string) => void;
   run: (id: number, sql: string) => void;
   /** Load the page of a browse tab that starts at row `offset`. */
@@ -486,6 +517,7 @@ interface State {
   setHiddenColumns: (id: number, names: string[]) => void;
   /** Data or Structure, for browse tabs. */
   setView: (id: number, view: TabView) => void;
+  setStructurePart: (id: number, part: StructurePart) => void;
   answerConfirm: (run: boolean) => void;
 
   editCell: (id: number, row: number, col: number, value: Value) => void;
@@ -515,7 +547,13 @@ interface State {
   /** Load a database's objects again, keeping the shown ones until the new list arrives. */
   reloadObjects: (connId: string, database: string) => void;
   /** Open a table's Structure view. */
-  openStructure: (connId: string, database: string, name: string) => void;
+  openStructure: (
+    connId: string,
+    database: string,
+    name: string,
+    part?: StructurePart,
+    focus?: string,
+  ) => void;
 
   palette: PaletteMode | null;
   setPalette: (mode: PaletteMode | null) => void;
@@ -584,6 +622,9 @@ let historyRequest = 0;
 /** Table structure requests waiting for `TableInfo`: request id → tab id, and whether the
  * structure is the browsed table's or the source table of a query result. */
 const structureRequests = new Map<number, { tab: number; kind: "browse" | "result" }>();
+
+/** `LoadTableInfo` requests made by the tree, waiting for their answer: request id → table key. */
+const treeInfoRequests = new Map<number, string>();
 
 /** `InsertSql` requests waiting for their text: request id → rows copied. */
 const insertRequests = new Map<number, number>();
@@ -679,6 +720,37 @@ export const useApp = create<State>()((set, get) => {
     patchNode(id, (node) => ({
       databases: node.databases.map((db) => (db.name === database ? { ...db, ...patch(db) } : db)),
     }));
+
+  /** Ask the engine for the indexes and keys of a table opened in the sidebar tree. */
+  const loadTreeTable = (conn: string, database: string, name: string) => {
+    const infoKey = `${conn}/${database}/${name}`;
+    set((s) => ({
+      tableInfos: { ...s.tableInfos, [infoKey]: { loading: true, info: null, error: null } },
+    }));
+    const request = nextRequest++;
+    treeInfoRequests.set(request, infoKey);
+    send({
+      type: "LoadTableInfo",
+      request,
+      conn,
+      table: { database, schema: null, name },
+    });
+  };
+
+  /** Read again what the tree shows of the open tables of a connection, or of one database. */
+  const reloadOpenTables = (conn: string, database?: string) => {
+    const prefix = database === undefined ? `${conn}/` : `${conn}/${database}/`;
+    set((s) => ({
+      tableInfos: Object.fromEntries(
+        Object.entries(s.tableInfos).filter(([key]) => !key.startsWith(prefix)),
+      ),
+    }));
+    for (const [key, open] of Object.entries(get().treeOpen)) {
+      const at = key.indexOf("/table:");
+      if (!open || !key.startsWith(prefix) || at < 0 || key.includes("#")) continue;
+      loadTreeTable(conn, key.slice(`${conn}/`.length, at), key.slice(at + "/table:".length));
+    }
+  };
 
   /** Ask the engine for the structure of a browse tab's table (`TableInfo` fills it in). */
   const loadStructure = (id: number) => {
@@ -793,6 +865,9 @@ export const useApp = create<State>()((set, get) => {
     confirm: null,
     changesConfirm: null,
     closeConfirm: null,
+    deleteConfirm: null,
+    treeOpen: {},
+    tableInfos: {},
     history: { entries: [], loaded: false, query: "", conn: null },
     historyOpen: false,
     setHistoryOpen: (historyOpen) => set({ historyOpen }),
@@ -868,7 +943,14 @@ export const useApp = create<State>()((set, get) => {
           if (state.kind === "Disconnected") {
             set((s) => ({
               tabs: s.tabs.map((t) => (t.connId === event.id ? { ...t, txOpen: false } : t)),
+              // Opened nodes stay open for the next connection; what they showed is read again.
+              tableInfos: Object.fromEntries(
+                Object.entries(s.tableInfos).filter(([key]) => !key.startsWith(`${event.id}/`)),
+              ),
             }));
+          }
+          if (state.kind === "Connected") {
+            reloadOpenTables(event.id);
           }
           patchNode(event.id, (node) => {
             switch (state.kind) {
@@ -1037,6 +1119,17 @@ export const useApp = create<State>()((set, get) => {
           );
           break;
         case "TableInfo": {
+          const treeTable = treeInfoRequests.get(event.request);
+          if (treeTable !== undefined) {
+            treeInfoRequests.delete(event.request);
+            set((s) => ({
+              tableInfos: {
+                ...s.tableInfos,
+                [treeTable]: { loading: false, info: event.info, error: event.error },
+              },
+            }));
+            break;
+          }
           const pending = structureRequests.get(event.request);
           structureRequests.delete(event.request);
           if (pending === undefined) break;
@@ -1333,6 +1426,35 @@ export const useApp = create<State>()((set, get) => {
       const id = openTab(tab.connId, tab.database, tab.title, tab.sql, tab.browse);
       if (tab.browse) get().browse(id, tab.browse.offset);
     },
+    requestDeleteRows: (id, rows) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      const loaded = tab?.sets[tab.activeSet]?.rows.length ?? 0;
+      if (!tab || rows.length === 0) return;
+      const deletes = tab.edits?.deletes ?? [];
+      const existing = rows.filter((r) => r < loaded);
+      const added = rows.filter((r) => r >= loaded);
+      // Rows of the table that this would newly mark for deletion.
+      const fresh = existing.filter((r) => !deletes.includes(r));
+      if (fresh.length === 0) {
+        // Taking a deletion back, or dropping a row that was only just added, loses nothing.
+        get().toggleDeleteRows(id, existing.length > 0 ? existing : added);
+        return;
+      }
+      set({ deleteConfirm: { tab: id, rows: [...fresh, ...added] } });
+    },
+    answerDeleteConfirm: (confirmed) => {
+      const pending = get().deleteConfirm;
+      set({ deleteConfirm: null });
+      if (confirmed && pending) get().toggleDeleteRows(pending.tab, pending.rows);
+    },
+    toggleTreeNode: (key, table) => {
+      const open = !(get().treeOpen[key] ?? key.endsWith("/group:table"));
+      set((s) => ({ treeOpen: { ...s.treeOpen, [key]: open } }));
+      if (!open || !table) return;
+      const known = get().tableInfos[`${table.conn}/${table.database}/${table.name}`];
+      if (known && (known.loading || known.info)) return;
+      loadTreeTable(table.conn, table.database, table.name);
+    },
     answerCloseConfirm: (close) => {
       const ids = get().closeConfirm;
       set({ closeConfirm: null });
@@ -1465,6 +1587,8 @@ export const useApp = create<State>()((set, get) => {
         loadStructure(id);
       }
     },
+    setStructurePart: (id, part) =>
+      patchTab(id, () => ({ structurePart: part, structureFocus: null })),
     answerConfirm: (run) => {
       const pending = get().confirm;
       set({ confirm: null });
@@ -1700,15 +1824,22 @@ export const useApp = create<State>()((set, get) => {
       });
     },
     reloadObjects: (connId, database) => {
+      // What the tree showed of the database's tables may be out of date.
+      reloadOpenTables(connId, database);
       patchDb(connId, database, () => ({ loading: true, error: null }));
       send({ type: "LoadObjects", id: connId, database });
     },
-    openStructure: (connId, database, name) => {
+    openStructure: (connId, database, name, part, focus) => {
       get().openObject(connId, database, name, "table");
       const tab = get().tabs.find(
         (t) => t.connId === connId && t.database === database && t.title === name,
       );
-      if (tab) get().setView(tab.id, "structure");
+      if (!tab) return;
+      get().setView(tab.id, "structure");
+      patchTab(tab.id, (t) => ({
+        structurePart: part ?? t.structurePart,
+        structureFocus: focus ?? null,
+      }));
     },
 
     palette: null,

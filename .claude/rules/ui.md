@@ -13,7 +13,7 @@ Read [docs/STYLE-GUIDE.md](../../docs/STYLE-GUIDE.md) first. It is the source of
 ## Structure
 
 - `ui/src/features/<name>/`: one folder per feature (`sidebar`, `connections`, `tabs`, `editor`, `query`, `grid`, `welcome`, `window`).
-- `ui/src/components/ui/`: shared primitives (`Button`, `IconButton`, `Input`, `Select`, `Switch`, `Dialog`, `Tooltip`, `Badge`, `Menu`, `Kbd`, `Toaster`, `Spinner`, `ErrorNotice`, `SegmentedTabs`, `TreeRow`). Add a primitive here before a one-off.
+- `ui/src/components/ui/`: shared primitives (`Button`, `IconButton`, `Input`, `Select`, `Switch`, `Dialog`, `ConfirmDialog`, `Tooltip`, `Badge`, `Menu`, `Kbd`, `Toaster`, `Spinner`, `ErrorNotice`, `SegmentedTabs`, `TreeRow`, `ObjectIcon`). Add a primitive here before a one-off.
 - `ui/src/store/app.ts`: zustand store. `handleEvent` reduces engine events; actions call `send`. Components read state and call actions.
 - `ui/src/lib/engine.ts`: the only place that calls `invoke`.
 - `ui/src/styles/tokens.css`: design tokens (light and dark). `base.css`: global styles and animation utilities.
@@ -22,6 +22,7 @@ Read [docs/STYLE-GUIDE.md](../../docs/STYLE-GUIDE.md) first. It is the source of
 ## Rules
 
 - Tokens only: no hex / rgb in components, no Tailwind arbitrary colors. A new color is a token in both themes.
+- A question before an action that loses data or may surprise (delete, run on production, close with a transaction open) is a `ConfirmDialog`, never a one-off `Dialog` with Cancel and Run buttons. Delete actions are asked first, also when they are staged until Save.
 - Build from primitives. Icons are `lucide-react`, 16px (14px dense), `strokeWidth={1.75}`.
 - Animate only `opacity` and `transform`. Never `transition: all`, `backdrop-filter` or large blurred shadows. Do not override the global `prefers-reduced-motion` handling.
 - Every interactive element works by keyboard and shows `focus-visible`.

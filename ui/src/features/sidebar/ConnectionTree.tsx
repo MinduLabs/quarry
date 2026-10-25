@@ -1,13 +1,23 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CalendarClock, Database, Eye, Server, SquareFunction, Table2, Zap } from "lucide-react";
+import { Database, Server } from "lucide-react";
 import { memo, useMemo, useRef } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
+import type { ForeignKey } from "@/bindings/ForeignKey";
+import type { IndexInfo } from "@/bindings/IndexInfo";
 import type { SchemaObject } from "@/bindings/SchemaObject";
 import { EnvBadge } from "@/components/ui/Badge";
 import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
+import { iconKindOf, ObjectIcon, type ObjectIconKind } from "@/components/ui/ObjectIcon";
 import { Spinner } from "@/components/ui/Spinner";
 import { TreeRow } from "@/components/ui/TreeRow";
-import { type ConnNode, copyText, type DbNode, useApp } from "@/store/app";
+import {
+  type ConnNode,
+  copyText,
+  type DbNode,
+  type TreeTableInfo,
+  treeKey,
+  useApp,
+} from "@/store/app";
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
 /** `TreeRow` is 28px tall; every line of the tree is one row. */
@@ -17,7 +27,17 @@ const ROW_HEIGHT = 28;
 type Line =
   | { kind: "conn"; key: string; config: ConnectionConfig; node?: ConnNode; expanded?: boolean }
   | { kind: "db"; key: string; config: ConnectionConfig; node: ConnNode; db: DbNode; open: boolean }
-  | { kind: "note"; key: string; text: string; danger: boolean }
+  | { kind: "note"; key: string; text: string; danger: boolean; depth?: number }
+  | {
+      kind: "group";
+      key: string;
+      config: ConnectionConfig;
+      node: ConnNode;
+      db: string;
+      group: Group;
+      count: number;
+      open: boolean;
+    }
   | {
       kind: "object";
       key: string;
@@ -25,7 +45,57 @@ type Line =
       node: ConnNode;
       db: string;
       object: SchemaObject;
+      /** 3 under a group, 2 in a filtered list. */
+      depth: number;
+      /** A table in a group: whether its indexes and keys are shown. */
+      open?: boolean;
+    }
+  | {
+      kind: "table-part";
+      key: string;
+      config: ConnectionConfig;
+      node: ConnNode;
+      db: string;
+      table: string;
+      part: TablePart;
+      count: number;
+      open: boolean;
+    }
+  | {
+      kind: "entry";
+      key: string;
+      config: ConnectionConfig;
+      node: ConnNode;
+      db: string;
+      table: string;
+      entry: { kind: "index"; index: IndexInfo } | { kind: "foreign_key"; foreignKey: ForeignKey };
     };
+
+/** A group of a database's objects, in tree order. */
+interface Group {
+  id: string;
+  label: string;
+  icon: ObjectIconKind;
+  kinds: string[];
+}
+
+const GROUPS: Group[] = [
+  { id: "table", label: "Tables", icon: "table", kinds: ["table"] },
+  { id: "view", label: "Views", icon: "view", kinds: ["view", "materialized_view"] },
+  { id: "procedure", label: "Procedures", icon: "procedure", kinds: ["procedure"] },
+  { id: "function", label: "Functions", icon: "function", kinds: ["function"] },
+  { id: "trigger", label: "Triggers", icon: "trigger", kinds: ["trigger"] },
+  { id: "event", label: "Events", icon: "event", kinds: ["event"] },
+];
+/** Objects of a kind no group lists (a driver's own kinds) are still shown. */
+const OTHER: Group = { id: "other", label: "Other", icon: "function", kinds: [] };
+
+/** What the tree shows under a table. */
+type TablePart = "indexes" | "foreign_keys";
+const PARTS: Array<{ id: TablePart; label: string; icon: ObjectIconKind }> = [
+  { id: "indexes", label: "Indexes", icon: "index" },
+  { id: "foreign_keys", label: "Foreign keys", icon: "foreign_key" },
+];
 
 /** Tree order of kinds: tables, views, routines, triggers, events. */
 const RANK: Record<string, number> = {
@@ -52,6 +122,25 @@ function sortObjects(objects: SchemaObject[]): SchemaObject[] {
   return list;
 }
 
+/** A database's objects split by group, each sorted by name; once per list. */
+const grouped = new WeakMap<SchemaObject[], Map<string, SchemaObject[]>>();
+function groupObjects(objects: SchemaObject[]): Map<string, SchemaObject[]> {
+  let groups = grouped.get(objects);
+  if (!groups) {
+    groups = new Map();
+    const groupOf = new Map<string, string>();
+    for (const g of GROUPS) for (const kind of g.kinds) groupOf.set(kind, g.id);
+    for (const object of sortObjects(objects)) {
+      const id = groupOf.get(object.kind) ?? OTHER.id;
+      const list = groups.get(id);
+      if (list) list.push(object);
+      else groups.set(id, [object]);
+    }
+    grouped.set(objects, groups);
+  }
+  return groups;
+}
+
 /**
  * The lines of the tree. With a filter (`needle`, lower case), a connection whose name matches
  * shows as usual; otherwise only the databases whose name matches, and the loaded objects that
@@ -61,6 +150,8 @@ function linesOf(
   connections: ConnectionConfig[],
   nodes: Record<string, ConnNode>,
   needle: string,
+  treeOpen: Record<string, boolean>,
+  tableInfos: Record<string, TreeTableInfo>,
 ): Line[] {
   const lines: Line[] = [];
   for (const config of connections) {
@@ -99,19 +190,129 @@ function linesOf(
       if (db.objects?.length === 0) {
         lines.push({ kind: "note", key: `${dbKey}#empty`, text: "No tables", danger: false });
       }
-      for (const object of objects ?? sortObjects(db.objects ?? [])) {
+      if (objects) {
+        for (const object of objects) {
+          lines.push({
+            kind: "object",
+            key: `${dbKey}/${object.kind}:${object.name}`,
+            config,
+            node,
+            db: db.name,
+            object,
+            depth: 2,
+          });
+        }
+        continue;
+      }
+      const byGroup = groupObjects(db.objects ?? []);
+      for (const group of [...GROUPS, OTHER]) {
+        const list = byGroup.get(group.id);
+        if (!list) continue;
+        const groupKey = treeKey(config.id, db.name, `group:${group.id}`);
+        const groupOpen = treeOpen[groupKey] ?? group.id === "table";
         lines.push({
-          kind: "object",
-          key: `${dbKey}/${object.kind}:${object.name}`,
+          kind: "group",
+          key: groupKey,
           config,
           node,
           db: db.name,
-          object,
+          group,
+          count: list.length,
+          open: groupOpen,
         });
+        if (!groupOpen) continue;
+        for (const object of list) {
+          const tableKey = treeKey(config.id, db.name, `table:${object.name}`);
+          const tableOpen = object.kind === "table" ? treeOpen[tableKey] === true : undefined;
+          lines.push({
+            kind: "object",
+            key: `${dbKey}/${object.kind}:${object.name}`,
+            config,
+            node,
+            db: db.name,
+            object,
+            depth: 3,
+            open: tableOpen,
+          });
+          if (tableOpen)
+            pushTableParts(lines, config, node, db.name, object.name, treeOpen, tableInfos);
+        }
       }
     }
   }
   return lines;
+}
+
+/** The indexes and foreign keys of an open table, or why they are not there yet. */
+function pushTableParts(
+  lines: Line[],
+  config: ConnectionConfig,
+  node: ConnNode,
+  db: string,
+  table: string,
+  treeOpen: Record<string, boolean>,
+  tableInfos: Record<string, TreeTableInfo>,
+) {
+  const tableKey = treeKey(config.id, db, `table:${table}`);
+  const loaded = tableInfos[`${config.id}/${db}/${table}`];
+  if (!loaded?.info) {
+    const text = loaded?.error ?? "Loading…";
+    lines.push({
+      kind: "note",
+      key: `${tableKey}#note`,
+      text,
+      danger: Boolean(loaded?.error),
+      depth: 3,
+    });
+    return;
+  }
+  const { indexes, foreign_keys } = loaded.info;
+  for (const part of PARTS) {
+    const entries = part.id === "indexes" ? indexes : foreign_keys;
+    const key = `${tableKey}#${part.id}`;
+    const open = treeOpen[key] === true;
+    lines.push({
+      kind: "table-part",
+      key,
+      config,
+      node,
+      db,
+      table,
+      part: part.id,
+      count: entries.length,
+      open,
+    });
+    if (!open) continue;
+    if (part.id === "indexes") {
+      // The primary key first, then the others by name.
+      const ordered = [...indexes].sort(
+        (a, b) => Number(b.primary) - Number(a.primary) || byName(a.name, b.name),
+      );
+      for (const index of ordered) {
+        lines.push({
+          kind: "entry",
+          key: `${key}/${index.name}`,
+          config,
+          node,
+          db,
+          table,
+          entry: { kind: "index", index },
+        });
+      }
+    } else {
+      for (const foreignKey of foreign_keys) {
+        lines.push({
+          kind: "entry",
+          key: `${key}/${foreignKey.name}`,
+          config,
+          node,
+          db,
+          table,
+          entry: { kind: "foreign_key", foreignKey },
+        });
+      }
+    }
+  }
 }
 
 /**
@@ -129,7 +330,12 @@ export const ConnectionTree = memo(function ConnectionTree({
 }) {
   const connections = useApp((s) => s.connections);
   const nodes = useApp((s) => s.nodes);
-  const lines = useMemo(() => linesOf(connections, nodes, needle), [connections, nodes, needle]);
+  const treeOpen = useApp((s) => s.treeOpen);
+  const tableInfos = useApp((s) => s.tableInfos);
+  const lines = useMemo(
+    () => linesOf(connections, nodes, needle, treeOpen, tableInfos),
+    [connections, nodes, needle, treeOpen, tableInfos],
+  );
   const scroller = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: lines.length,
@@ -178,13 +384,20 @@ function TreeLine({
       return <ConnectionLine line={line} active={active} onSelect={onSelect} />;
     case "db":
       return <DatabaseLine line={line} active={active} onSelect={onSelect} />;
+    case "group":
+      return <GroupLine line={line} active={active} onSelect={onSelect} />;
     case "object":
       return <ObjectLine line={line} active={active} onSelect={onSelect} />;
+    case "table-part":
+      return <TablePartLine line={line} active={active} onSelect={onSelect} />;
+    case "entry":
+      return <EntryLine line={line} active={active} onSelect={onSelect} />;
     case "note":
       return (
         <p
           title={line.text}
-          className={`truncate py-1.5 pl-12 text-sm ${line.danger ? "text-danger" : "text-faint"}`}
+          style={line.depth === undefined ? undefined : { paddingLeft: 6 + line.depth * 12 + 22 }}
+          className={`truncate py-1.5 text-sm ${line.depth === undefined ? "pl-12" : ""} ${line.danger ? "text-danger" : "text-faint"}`}
         >
           {line.text}
         </p>
@@ -406,8 +619,19 @@ function ObjectLine({
   return (
     <ContextMenuArea items={menu}>
       <TreeRow
-        depth={2}
-        icon={objectIcon(object.kind)}
+        depth={line.depth}
+        expanded={line.open}
+        onToggle={
+          line.open === undefined
+            ? undefined
+            : () =>
+                s.toggleTreeNode(treeKey(conn, db, `table:${object.name}`), {
+                  conn,
+                  database: db,
+                  name: object.name,
+                })
+        }
+        icon={<ObjectIcon kind={iconKindOf(object.kind)} />}
         label={object.name}
         active={active}
         onClick={() => {
@@ -419,10 +643,130 @@ function ObjectLine({
   );
 }
 
-function objectIcon(kind: string) {
-  if (kind === "table") return <Table2 {...ICON} />;
-  if (kind === "view" || kind === "materialized_view") return <Eye {...ICON} />;
-  if (kind === "trigger") return <Zap {...ICON} />;
-  if (kind === "event") return <CalendarClock {...ICON} />;
-  return <SquareFunction {...ICON} />;
+function GroupLine({
+  line,
+  active,
+  onSelect,
+}: {
+  line: Extract<Line, { kind: "group" }>;
+  active: boolean;
+  onSelect: (key: string) => void;
+}) {
+  const { group } = line;
+  return (
+    <TreeRow
+      depth={2}
+      expanded={line.open}
+      icon={<ObjectIcon kind={group.icon} />}
+      label={group.label}
+      active={active}
+      onClick={() => {
+        onSelect(line.key);
+        useApp.getState().toggleTreeNode(line.key);
+      }}
+      trailing={<span className="text-faint text-sm tabular-nums">{line.count}</span>}
+    />
+  );
+}
+
+function TablePartLine({
+  line,
+  active,
+  onSelect,
+}: {
+  line: Extract<Line, { kind: "table-part" }>;
+  active: boolean;
+  onSelect: (key: string) => void;
+}) {
+  const part = PARTS.find((p) => p.id === line.part);
+  return (
+    <TreeRow
+      depth={4}
+      expanded={line.open}
+      icon={<ObjectIcon kind={part?.icon ?? "index"} />}
+      label={part?.label ?? ""}
+      active={active}
+      onClick={() => {
+        onSelect(line.key);
+        useApp.getState().toggleTreeNode(line.key);
+      }}
+      trailing={<span className="text-faint text-sm tabular-nums">{line.count}</span>}
+    />
+  );
+}
+
+/** An index or a foreign key of a table. Opening one shows the table's structure. */
+function EntryLine({
+  line,
+  active,
+  onSelect,
+}: {
+  line: Extract<Line, { kind: "entry" }>;
+  active: boolean;
+  onSelect: (key: string) => void;
+}) {
+  const { config, db, table, entry } = line;
+  const s = useApp.getState();
+  const open = () => {
+    onSelect(line.key);
+    if (entry.kind === "index") s.openStructure(config.id, db, table, "indexes", entry.index.name);
+    else s.openStructure(config.id, db, table, "foreign_keys", entry.foreignKey.name);
+  };
+  if (entry.kind === "index") {
+    const { index } = entry;
+    const detail = `${index.unique && !index.primary ? "unique · " : ""}${index.columns.join(", ")}`;
+    return (
+      <ContextMenuArea
+        items={[
+          { label: "Open structure", onSelect: open },
+          { label: "Copy name", onSelect: () => copyText(index.name) },
+        ]}
+      >
+        <TreeRow
+          depth={5}
+          icon={<ObjectIcon kind={index.primary ? "primary_key" : "index"} />}
+          label={index.name}
+          title={`${index.primary ? "Primary key" : index.unique ? "Unique index" : "Index"} (${index.columns.join(", ")})`}
+          active={active}
+          onClick={open}
+          trailing={<EntryDetail text={detail} />}
+        />
+      </ContextMenuArea>
+    );
+  }
+  const { foreignKey } = entry;
+  const target = `${foreignKey.references.name}(${foreignKey.referenced_columns.join(", ")})`;
+  return (
+    <ContextMenuArea
+      items={[
+        { label: "Open structure", onSelect: open },
+        {
+          label: `Open ${foreignKey.references.name}`,
+          onSelect: () =>
+            s.openObject(
+              config.id,
+              foreignKey.references.database ?? db,
+              foreignKey.references.name,
+              "table",
+            ),
+        },
+        { label: "Copy name", onSelect: () => copyText(foreignKey.name) },
+      ]}
+    >
+      <TreeRow
+        depth={5}
+        icon={<ObjectIcon kind="foreign_key" />}
+        label={foreignKey.name}
+        title={`${foreignKey.columns.join(", ")} → ${target}`}
+        active={active}
+        onClick={open}
+        trailing={<EntryDetail text={`→ ${target}`} />}
+      />
+    </ContextMenuArea>
+  );
+}
+
+/** What an index or foreign key covers, after its name; it gives way to the name when short of room. */
+function EntryDetail({ text }: { text: string }) {
+  return <span className="max-w-[45%] truncate text-faint text-sm">{text}</span>;
 }

@@ -1,5 +1,4 @@
-import { Button } from "@/components/ui/Button";
-import { Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useApp } from "@/store/app";
 
 /** Safe mode for grid edits: production asks before any change is written. */
@@ -12,24 +11,16 @@ export function ConfirmChangesDialog() {
   const answer = useApp((s) => s.answerChangesConfirm);
 
   return (
-    <Dialog
+    <ConfirmDialog
       open={Boolean(pending)}
-      onClose={() => answer(false)}
       title="Save changes on production?"
       description={pending?.message}
+      confirmLabel="Save"
       width={460}
-      footer={
-        <>
-          <Button autoFocus onClick={() => answer(false)}>
-            Cancel
-          </Button>
-          <Button variant="danger" onClick={() => answer(true)}>
-            Save
-          </Button>
-        </>
-      }
+      onConfirm={() => answer(true)}
+      onCancel={() => answer(false)}
     >
       <p className="text-sm text-muted">Connection: {name}</p>
-    </Dialog>
+    </ConfirmDialog>
   );
 }

@@ -2,6 +2,7 @@ import { History } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { HistoryEntry } from "@/bindings/HistoryEntry";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Kbd } from "@/components/ui/Kbd";
@@ -221,28 +222,17 @@ function HistoryBrowser({ onClose }: { onClose: () => void }) {
         </Button>
       </div>
 
-      <Dialog
+      <ConfirmDialog
         open={confirmClear}
-        onClose={() => setConfirmClear(false)}
         title="Clear query history?"
         description="Every saved query of every connection is removed. This can't be undone."
+        confirmLabel="Clear"
         width={400}
-        footer={
-          <>
-            <Button autoFocus onClick={() => setConfirmClear(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                clearHistory();
-                setConfirmClear(false);
-              }}
-            >
-              Clear
-            </Button>
-          </>
-        }
+        onConfirm={() => {
+          clearHistory();
+          setConfirmClear(false);
+        }}
+        onCancel={() => setConfirmClear(false)}
       />
     </div>
   );

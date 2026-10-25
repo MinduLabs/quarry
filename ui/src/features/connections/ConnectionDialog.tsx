@@ -5,6 +5,7 @@ import type { Environment } from "@/bindings/Environment";
 import type { SshAuth } from "@/bindings/SshAuth";
 import type { SslMode } from "@/bindings/SslMode";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Dialog } from "@/components/ui/Dialog";
 import { ErrorNotice } from "@/components/ui/ErrorNotice";
 import { Field, Input, PasswordInput } from "@/components/ui/Input";
@@ -342,22 +343,14 @@ export function DeleteConnectionDialog() {
     dialog?.mode === "delete" ? connections.find((c) => c.id === dialog.id) : undefined;
 
   return (
-    <Dialog
+    <ConfirmDialog
       open={Boolean(target)}
-      onClose={() => openDialog(null)}
       title="Delete connection?"
       description={`“${target?.name ?? ""}” and its saved password will be removed. The database itself is not affected.`}
+      confirmLabel="Delete"
       width={400}
-      footer={
-        <>
-          <Button autoFocus onClick={() => openDialog(null)}>
-            Cancel
-          </Button>
-          <Button variant="danger" onClick={() => target && deleteConnection(target.id)}>
-            Delete
-          </Button>
-        </>
-      }
+      onConfirm={() => target && deleteConnection(target.id)}
+      onCancel={() => openDialog(null)}
     />
   );
 }

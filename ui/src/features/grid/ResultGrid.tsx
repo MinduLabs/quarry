@@ -37,7 +37,7 @@ export interface GridEditing {
   /** Several cells at once, as one undo step. */
   onEditCells: (cells: CellEdit[]) => void;
   /** Mark or unmark rows for deletion, as one undo step. */
-  onToggleDeleteRows: (rows: number[]) => void;
+  onDeleteRows: (rows: number[]) => void;
   onUndo: () => void;
   onRedo: () => void;
   /** Add a new row (only where rows can be inserted). */
@@ -325,7 +325,7 @@ export const ResultGrid = memo(function ResultGrid({
   const selectedRows = () => (rect ? range(rect.top, rect.bottom) : []);
 
   const toggleDeleteSelected = () => {
-    editing?.onToggleDeleteRows(selectedRows());
+    editing?.onDeleteRows(selectedRows());
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -582,7 +582,11 @@ export const ResultGrid = memo(function ResultGrid({
                   rowSelected && "text-fg",
                 )}
               >
-                {isNew ? "+" : r + 1}
+                {/* The tint is a layer, not a background: this column is opaque so cells that
+                    scroll under it stay hidden. It shows which rows Delete and the copy
+                    commands act on, also when only some of their cells are selected. */}
+                {rowSelected && <span aria-hidden className="absolute inset-0 bg-selected" />}
+                <span className="relative">{isNew ? "+" : r + 1}</span>
               </div>
               {shown.map((c, p) => {
                 const value = valueAt(r, c);

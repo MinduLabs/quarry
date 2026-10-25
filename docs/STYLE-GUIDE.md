@@ -17,7 +17,7 @@ Quiet, dense, fast — a modern desktop tool.
 ## Rules for contributors and agents
 
 1. Use tokens only. No hex/rgb values in components, no Tailwind arbitrary colors (`bg-[#fff]`). Need a new color? Add a token to `tokens.css` (light **and** dark) and list it below.
-2. Build from `ui/src/components/ui/`. Reuse `Button`, `IconButton`, `Input`, `Select`, `Switch`, `Dialog`, `Tooltip`, `Badge`, `Menu`; add a primitive there before inventing a one-off.
+2. Build from `ui/src/components/ui/`. Reuse `Button`, `IconButton`, `Input`, `Select`, `Switch`, `Dialog`, `ConfirmDialog`, `Tooltip`, `Badge`, `Menu`; add a primitive there before inventing a one-off.
 3. Every interactive element works with the keyboard and shows `focus-visible` styling.
 4. Icons: `lucide-react`, 16px (14px in dense rows), `strokeWidth={1.75}`, color `currentColor`.
 5. Animate only `opacity` and `transform` (WebKitGTK on Linux is slow at layout animations). Never `transition: all`. No `backdrop-filter`, no large blurred shadows.
@@ -133,7 +133,7 @@ Patterns (utility classes in `base.css`):
 
 **Inputs** — 28px, `bg-app`, 1px `border-line-strong`, 6px radius, focus: accent border + 3px `accent-soft` ring. Labels above inputs, 12px muted.
 
-**Sidebar tree** — rows 28px, 8px indent per level plus a 12px chevron column, 16px icon, label truncates with ellipsis. Hover `bg-hover`, active `bg-selected`. Connected connections show a 6px green dot; staging/production show a text badge (`STAGING`, `PROD`) — never color alone.
+**Sidebar tree** — a database lists its objects in groups with counts (Tables, Views, Procedures, Functions, Triggers, Events); a table opens to its Indexes (the primary key first) and Foreign keys, loaded when first opened. Each kind of object has its own icon color (`--icon-*` tokens, `ObjectIcon`); the label stays in text color. Rows 28px, 8px indent per level plus a 12px chevron column, 16px icon, label truncates with ellipsis. Hover `bg-hover`, active `bg-selected`. Connected connections show a 6px green dot; staging/production show a text badge (`STAGING`, `PROD`) — never color alone.
 
 **Tab bar** — tabs 28px tall inside the 36px bar, max 220px wide, title truncates; active tab `bg-app` with a hairline, inactive `text-muted`. Running tabs show a spinner instead of the close icon.
 
@@ -144,6 +144,10 @@ Patterns (utility classes in `base.css`):
 **Dialogs** — 12px radius, 24px padding, title 15px semibold, footer buttons right-aligned (secondary then primary). Destructive confirmations default focus to **Cancel**.
 
 **Toasts** — bottom-right, `bg-elevated`, max 360px, auto-dismiss after 4s (errors stay until dismissed).
+
+**Confirm dialog** — `ConfirmDialog`: the title asks the action ("Delete 6 rows?"), the description says what happens and what brings it back, the confirming button repeats the action in the user's words ("Delete 6 rows", not "OK"). Cancel has the focus, so Enter never confirms; the confirming button is red when data is lost or changed. In a bar of quiet buttons, a button that loses data has a red label (`danger-ghost`).
+
+**Row numbers** — a row any selected cell touches has its number tinted, so the count on Delete matches what is highlighted.
 
 **Environment badge** — 11px semibold uppercase on `env-*` background, white text (staging: dark text).
 

@@ -1,19 +1,23 @@
-import { Copy, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { Copy, Plus } from "lucide-react";
+import { useState } from "react";
 import type { TableInfo } from "@/bindings/TableInfo";
 import { Button } from "@/components/ui/Button";
 import { ErrorNotice } from "@/components/ui/ErrorNotice";
-import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
+import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { Spinner } from "@/components/ui/Spinner";
-import { cn } from "@/lib/cn";
-import { copyText, type Tab, useApp } from "@/store/app";
+import { copyText, type StructurePart, type Tab, useApp } from "@/store/app";
+import { ColumnsTab } from "./ColumnsTab";
+import { ForeignKeysTab } from "./ForeignKeysTab";
+import { IndexesTab } from "./IndexesTab";
+import type { PartProps } from "./StructureTable";
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 /**
- * Columns, indexes, foreign keys and DDL of the table a browse tab shows. Columns and indexes
- * can be added, changed and dropped when the driver supports it and the connection is writable;
- * every change is shown as SQL before it runs.
+ * The table a browse tab shows, one part at a time: columns, indexes, foreign keys or DDL, each
+ * with its count and a filter. Columns and indexes can be added, changed and dropped when the
+ * driver supports it and the connection is writable; every change is shown as SQL before it runs.
  */
 export function StructureView({ tab }: { tab: Tab }) {
   const structure = tab.structure;
@@ -36,257 +40,100 @@ export function StructureView({ tab }: { tab: Tab }) {
       </div>
     );
   }
-  const info = structure.info;
-  return <Structure info={info} conn={tab.connId} canEdit={canChange && !info.view} />;
+  return (
+    <Structure
+      tab={tab.id}
+      info={structure.info}
+      conn={tab.connId}
+      part={tab.structurePart}
+      focus={tab.structureFocus}
+      canEdit={canChange && !structure.info.view}
+    />
+  );
 }
 
-function Structure({ info, conn, canEdit }: { info: TableInfo; conn: string; canEdit: boolean }) {
-  const { openSchemaForm, alterSchema } = useApp.getState();
-  const keyColumns = new Set(info.primary_key);
+function Structure({
+  tab,
+  info,
+  conn,
+  part,
+  focus,
+  canEdit,
+}: {
+  tab: number;
+  info: TableInfo;
+  conn: string;
+  part: StructurePart;
+  focus: string | null;
+  canEdit: boolean;
+}) {
+  const { openSchemaForm, setStructurePart } = useApp.getState();
+  const [filter, setFilter] = useState("");
   const table = info.table;
-  const drop = (op: { op: "drop_column" | "drop_index"; name: string }) =>
-    alterSchema(conn, { kind: "alter_table", table, ops: [op] });
+  const props: PartProps = { info, conn, needle: filter.trim().toLowerCase(), canEdit, focus };
+
+  const tabs: Array<{ value: StructurePart; label: string }> = [
+    { value: "columns", label: `Columns ${info.columns.length}` },
+    { value: "indexes", label: `Indexes ${info.indexes.length}` },
+    { value: "foreign_keys", label: `Foreign keys ${info.foreign_keys.length}` },
+    ...(info.ddl ? [{ value: "ddl" as const, label: "DDL" }] : []),
+  ];
+  const addLabel = part === "columns" ? "Add column…" : part === "indexes" ? "Add index…" : null;
+  const add = () =>
+    part === "columns"
+      ? openSchemaForm({ kind: "column", conn, table, column: null })
+      : openSchemaForm({ kind: "index", conn, table, columns: [] });
 
   return (
-    <div className="animate-fade h-full overflow-auto">
-      <div className="flex max-w-5xl flex-col gap-6 p-4">
-        <Section
-          title="Columns"
-          count={info.columns.length}
-          action={
-            canEdit && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => openSchemaForm({ kind: "column", conn, table, column: null })}
-              >
+    <div className="animate-fade flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 flex-col gap-2 border-line border-b px-3 py-2">
+        <SegmentedTabs
+          label="Structure"
+          value={part}
+          onChange={(value) => {
+            setFilter("");
+            setStructurePart(tab, value);
+          }}
+          tabs={tabs}
+        />
+        {part === "ddl" ? (
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => info.ddl && copyText(info.ddl, "Copied DDL")}
+            >
+              <Copy {...ICON} />
+              Copy
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label="Filter"
+              placeholder="Filter"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="min-w-0 flex-1"
+            />
+            {canEdit && addLabel && (
+              <Button size="sm" variant="ghost" onClick={add} className="shrink-0">
                 <Plus {...ICON} />
-                Add column…
+                {addLabel}
               </Button>
-            )
-          }
-        >
-          <Table head={["Name", "Type", "Null", "Default", "Extra", "Comment"]} actions={canEdit}>
-            {info.columns.map((c) => (
-              <tr key={c.name} className="group border-line border-b last:border-b-0">
-                <Cell>
-                  <span className="flex items-center gap-1.5">
-                    {keyColumns.has(c.name) && (
-                      <KeyRound
-                        size={13}
-                        strokeWidth={1.75}
-                        className="text-warning"
-                        aria-label="Primary key"
-                      />
-                    )}
-                    <span className="font-semibold text-fg">{c.name}</span>
-                  </span>
-                </Cell>
-                <Cell mono>{c.type_name}</Cell>
-                <Cell>{c.nullable ? "Yes" : "No"}</Cell>
-                <Cell mono faint={c.default === null}>
-                  {c.default ?? "NULL"}
-                </Cell>
-                <Cell mono>{c.extra ?? ""}</Cell>
-                <Cell>{c.comment ?? ""}</Cell>
-                {canEdit && (
-                  <RowActions>
-                    <IconButton
-                      label={c.generated ? "Generated columns are edited in SQL" : "Edit column…"}
-                      size="sm"
-                      disabled={c.generated}
-                      onClick={() => openSchemaForm({ kind: "column", conn, table, column: c })}
-                    >
-                      <Pencil {...ICON} />
-                    </IconButton>
-                    <IconButton
-                      label="Drop column…"
-                      size="sm"
-                      disabled={info.columns.length === 1}
-                      onClick={() => drop({ op: "drop_column", name: c.name })}
-                    >
-                      <Trash2 {...ICON} />
-                    </IconButton>
-                  </RowActions>
-                )}
-              </tr>
-            ))}
-          </Table>
-        </Section>
+            )}
+          </div>
+        )}
+      </div>
 
-        <Section
-          title="Indexes"
-          count={info.indexes.length}
-          action={
-            canEdit && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => openSchemaForm({ kind: "index", conn, table, columns: [] })}
-              >
-                <Plus {...ICON} />
-                Add index…
-              </Button>
-            )
-          }
-        >
-          {info.indexes.length === 0 ? (
-            <Empty>No indexes</Empty>
-          ) : (
-            <Table head={["Name", "Columns", "Kind"]} actions={canEdit}>
-              {info.indexes.map((i) => (
-                <tr key={i.name} className="group border-line border-b last:border-b-0">
-                  <Cell>
-                    <span className="font-semibold text-fg">{i.name}</span>
-                  </Cell>
-                  <Cell mono>{i.columns.join(", ")}</Cell>
-                  <Cell>{i.primary ? "Primary key" : i.unique ? "Unique" : "Index"}</Cell>
-                  {canEdit && (
-                    <RowActions>
-                      <IconButton
-                        label={i.primary ? "Drop primary key…" : "Drop index…"}
-                        size="sm"
-                        onClick={() => drop({ op: "drop_index", name: i.name })}
-                      >
-                        <Trash2 {...ICON} />
-                      </IconButton>
-                    </RowActions>
-                  )}
-                </tr>
-              ))}
-            </Table>
-          )}
-        </Section>
-
-        <Section title="Foreign keys" count={info.foreign_keys.length}>
-          {info.foreign_keys.length === 0 ? (
-            <Empty>No foreign keys</Empty>
-          ) : (
-            <Table head={["Name", "Columns", "References", "On update", "On delete"]}>
-              {info.foreign_keys.map((fk) => (
-                <tr key={fk.name} className="border-line border-b last:border-b-0">
-                  <Cell>
-                    <span className="font-semibold text-fg">{fk.name}</span>
-                  </Cell>
-                  <Cell mono>{fk.columns.join(", ")}</Cell>
-                  <Cell mono>
-                    {fk.references.name}({fk.referenced_columns.join(", ")})
-                  </Cell>
-                  <Cell>{fk.on_update ?? ""}</Cell>
-                  <Cell>{fk.on_delete ?? ""}</Cell>
-                </tr>
-              ))}
-            </Table>
-          )}
-        </Section>
-
-        {info.ddl && (
-          <Section
-            title="DDL"
-            action={
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => info.ddl && copyText(info.ddl, "Copied DDL")}
-              >
-                <Copy {...ICON} />
-                Copy
-              </Button>
-            }
-          >
-            <pre className="select-text overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-sm text-fg">
-              {info.ddl}
-            </pre>
-          </Section>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {part === "columns" && <ColumnsTab {...props} />}
+        {part === "indexes" && <IndexesTab {...props} />}
+        {part === "foreign_keys" && <ForeignKeysTab {...props} />}
+        {part === "ddl" && (
+          <pre className="select-text p-3 font-mono text-sm text-fg">{info.ddl}</pre>
         )}
       </div>
     </div>
   );
-}
-
-function Section({
-  title,
-  count,
-  action,
-  children,
-}: {
-  title: string;
-  count?: number;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div className="flex h-6 items-center justify-between">
-        <h2 className="font-semibold text-base text-fg">
-          {title}
-          {count !== undefined && <span className="ml-1.5 font-normal text-muted">{count}</span>}
-        </h2>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Table({
-  head,
-  actions,
-  children,
-}: {
-  head: string[];
-  /** Rows end with a cell of buttons. */
-  actions?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className="overflow-auto rounded-lg border border-line">
-      <table className="w-full border-collapse text-left text-sm">
-        <thead className="bg-surface text-muted">
-          <tr className="border-line border-b">
-            {head.map((h) => (
-              <th key={h} className="h-7 px-2 font-semibold">
-                {h}
-              </th>
-            ))}
-            {actions && (
-              <th className="w-16">
-                <span className="sr-only">Actions</span>
-              </th>
-            )}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-/** Buttons at the end of a row, shown on hover or keyboard focus. */
-function RowActions({ children }: { children: ReactNode }) {
-  return (
-    <td className="h-7 px-1 align-middle">
-      <span className="flex justify-end gap-0.5 opacity-0 transition-opacity duration-(--duration-fast) group-focus-within:opacity-100 group-hover:opacity-100">
-        {children}
-      </span>
-    </td>
-  );
-}
-
-function Cell({ children, mono, faint }: { children: ReactNode; mono?: boolean; faint?: boolean }) {
-  return (
-    <td
-      className={cn(
-        "h-7 px-2 align-middle",
-        mono && "font-mono",
-        faint ? "text-faint italic" : "text-fg",
-      )}
-    >
-      {children}
-    </td>
-  );
-}
-
-function Empty({ children }: { children: ReactNode }) {
-  return <p className="text-sm text-muted">{children}</p>;
 }
