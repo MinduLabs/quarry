@@ -80,25 +80,29 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 
 ```
 ┌─────────────┬────────────────────────────────────────────────┐
-│ ● ● ●       │ Tab bar                                    36px │
+│ ● ● ●       │ Tab bar (one per group when split)         36px │
 │ Sidebar     ├────────────────────────────────────────────────┤
-│ 248px       │ Toolbar (SQL): run · stop · …  ☆ ENV conn · db 36px │
-│ (200–400,   ├────────────────────────────────────────────────┤
-│ resizable)  │ SQL editor                                     │
+│ 248px       │ Query tab:  Editor bar: run/stop · run all │ format ☆ │ explain history … ENV conn · db 36px │
+│ (200–400,   │             SQL editor                          │
+│ resizable)  │ Table tab:  Data bar: reload filter columns │ + row − row │ changes … ☆ ENV conn · db 32px │
+│             │             Result grid                         │
+│             │             Status bar: Data|Structure · status · 1–1000 of ~N ‹ › 36px │
 │             ├──────────────── drag handle ───────────────────┤
-│             │ Edit bar (editable results): + − · changes 32px │
-│             ├────────────────────────────────────────────────┤
-│             │ Result grid                                    │
-│             ├────────────────────────────────────────────────┤
-│             │ Results bar: Data|Structure · results · status · pager 36px │
+│             │ Panel: Output │ result tabs ×          … ⌄  32px │
+│             │        Data bar · grid · status bar (query results) │
 └─────────────┴────────────────────────────────────────────────┘
 ```
 
 - The sidebar's top row is a window drag region (`data-tauri-drag-region`). On macOS the window buttons sit at the left of that row, so it holds nothing there; on Linux the row shows the app name and the window buttons are drawn at the right of the tab bar.
 - Below it: a two-way switch (Connections / Favorites) and a Filter box (32px, 8px radius).
 - The sidebar hides and shows with the toggle next to the window buttons (`Ctrl/⌘ B`). It slides with a `transform`; the content area resizes at once. The toggle is drawn at the window level so it stays reachable while the sidebar is hidden.
-- Above the editor, the toolbar holds what acts on SQL. Right above the grid, the edit bar (only for editable results) groups Add row, Delete rows and the pending changes with Discard / Save, where the eye is while editing. Below the grid, the results bar holds the view switch, result sets, status and pages.
-- Only frequent actions get a button. Occasional ones go in the toolbar's ⋯ menu (`DropdownMenuButton`), the right-click menus and the command palette.
+- A control lives with what it acts on:
+  - **The editor bar** (query tabs only) acts on SQL: Run, which turns into Stop while a query runs; Run all; Format and Save query; Explain and History. Its ⋯ menu holds the occasional: begin a transaction, where results show.
+  - **The data bar**, right above any grid (a table tab, or query results), acts on the rows: Reload (Stop while loading), Filter, Columns, + Row, Delete, and Discard / Save only while there are changes. A table tab has no other toolbar: its favorite and connection sit at the data bar's end.
+  - **The status bar** below the grid says what the rows are: the Data / Structure switch, the status, and pages. The total is the estimate until clicked; then the exact count replaces it, marked for a moment.
+  - **Right-click menus** act on what was clicked (a cell, a result tab, a tab, a table in the sidebar). They repeat the bars' actions in context and add the occasional ones (copy as, set NULL); an action is never only there unless it only makes sense on that thing.
+  - The open transaction (Commit / Roll back) belongs to the tab's session: it shows only while one is open, in whichever bar the tab has.
+- Two buttons that are never usable at once are one button (Run / Stop). A menu with one or two items is shown as buttons instead.
 - Pinned tabs show a pin icon, are narrower and have no close button; they always sit before the unpinned ones.
 - Every tab stays mounted, so `QueryView` and `ResultGrid` are memoized and get stable props (`useMemo` / `useCallback`): typing in one tab re-renders neither the other tabs nor the visible cells.
 - Tabs stay neutral: the environment shows as the badge in the toolbar and a 2px line along the top of the query view, never as a tab color.

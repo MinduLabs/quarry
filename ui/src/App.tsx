@@ -13,7 +13,7 @@ import { CommandPalette } from "./features/palette/CommandPalette";
 import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
 import { ConfirmDeleteRowsDialog } from "./features/query/ConfirmDeleteRowsDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
-import { QueryView } from "./features/query/QueryView";
+import { ResultsPanel } from "./features/query/ResultsPanel";
 import { SchemaFormDialog } from "./features/schema/SchemaFormDialog";
 import { SchemaReviewDialog } from "./features/schema/SchemaReviewDialog";
 import { ServerInfoDialog } from "./features/server/ServerInfoDialog";
@@ -21,7 +21,7 @@ import { SettingsDialog } from "./features/settings/SettingsDialog";
 import { Sidebar } from "./features/sidebar/Sidebar";
 import { SidebarToggle } from "./features/sidebar/SidebarToggle";
 import { CloseTabDialog } from "./features/tabs/CloseTabDialog";
-import { TabBar } from "./features/tabs/TabBar";
+import { EditorArea } from "./features/tabs/EditorArea";
 import { Welcome } from "./features/welcome/Welcome";
 import { QuitDialog } from "./features/window/QuitDialog";
 import { WindowControls } from "./features/window/WindowControls";
@@ -31,7 +31,6 @@ const SIDEBAR_MAX = 400;
 
 export function App() {
   const tabs = useApp((s) => s.tabs);
-  const activeId = useApp((s) => s.activeTabId);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const [sidebarWidth, setSidebarWidth] = useState(248);
 
@@ -172,18 +171,8 @@ export function App() {
             <Welcome />
           ) : (
             <>
-              <TabBar />
-              {tabs.map((tab) => (
-                // Keep every tab mounted so editors keep their state; hide inactive ones.
-                <div
-                  key={tab.id}
-                  className={tab.id === activeId ? "flex min-h-0 flex-1 flex-col" : "hidden"}
-                >
-                  <Profiler id="tab" onRender={onRender}>
-                    <QueryView tab={tab} />
-                  </Profiler>
-                </div>
-              ))}
+              <EditorArea />
+              <ResultsPanel />
             </>
           )}
         </main>
