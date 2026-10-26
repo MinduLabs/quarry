@@ -14,6 +14,7 @@ import type { ErrorLocation } from "@/bindings/ErrorLocation";
 import type { Event } from "@/bindings/Event";
 import type { Favorite } from "@/bindings/Favorite";
 import type { HistoryEntry } from "@/bindings/HistoryEntry";
+import type { LogEntry } from "@/bindings/LogEntry";
 import type { ObjectKind } from "@/bindings/ObjectKind";
 import type { RowChange } from "@/bindings/RowChange";
 import type { SchemaChange } from "@/bindings/SchemaChange";
@@ -84,7 +85,11 @@ export interface TabStructure {
   error: string | null;
 }
 
+/** Data (or a query's results) or Structure (tables only). */
 export type TabView = "data" | "structure";
+
+/** Console entries kept per tab; older ones drop off. */
+export const LOG_LIMIT = 1000;
 
 /** What the Structure view shows: one kind of thing at a time. */
 export type StructurePart = "columns" | "indexes" | "foreign_keys" | "ddl";
@@ -340,7 +345,20 @@ export interface Tab {
   resultTable: ResultTable | null;
   /** Names of the columns hidden in the grid. Kept across pages and runs; not saved on quit. */
   hiddenColumns: string[];
+  /** What the tab's session ran, oldest first, at most `LOG_LIMIT`. Not saved on quit. */
+  log: LogEntry[];
+  /** Result sets whose tab was closed; the next run shows them all again. */
+  closedSets: number[];
+  /** The statements of the shown run as typed, when it started from the editor. */
+  runTexts: string[];
+  /** A query tab shows its results under its editor instead of in the results panel. */
+  inlineResults: boolean;
+  /** The tab group it sits in: 0, or 1 once the editor area is split. */
+  group: TabGroup;
 }
+
+export type TabGroup = 0 | 1;
+export type SplitDirection = "right" | "down";
 
 function blankTab(
   fields: Pick<Tab, "title" | "connId" | "database" | "sql" | "browse"> & { id: number },
@@ -372,6 +390,11 @@ function blankTab(
     lastRun: null,
     resultTable: null,
     hiddenColumns: [],
+    log: [],
+    closedSets: [],
+    runTexts: [],
+    inlineResults: false,
+    group: 0,
   };
 }
 
@@ -417,7 +440,7 @@ export type DialogState =
   | { mode: "delete"; id: string }
   | null;
 
-interface State {
+export interface AppState {
   ready: boolean;
   engineVersion: string | null;
   connections: ConnectionConfig[];
@@ -425,7 +448,27 @@ interface State {
   /** Last connection/database the user worked with (target of "New query"). */
   active: { connId: string; database: string | null } | null;
   tabs: Tab[];
+  /** The selected tab of the focused group. */
   activeTabId: number | null;
+  /** How the editor area is split into two tab groups, or `null` for one group. */
+  split: SplitDirection | null;
+  focusedGroup: TabGroup;
+  /** The selected tab of the group that is not focused, while split. */
+  otherActiveTabId: number | null;
+  /** Split off `id` into a second group (it must not be the only tab). */
+  splitTab: (id: number, direction: SplitDirection) => void;
+  /** Move `id` to the other group; a group left empty closes. */
+  moveToOtherGroup: (id: number) => void;
+  unsplit: () => void;
+  focusGroup: (group: TabGroup) => void;
+  /** The results panel at the bottom: shown, and how tall. */
+  panelOpen: boolean;
+  setPanelOpen: (open: boolean) => void;
+  /** The panel shows the output rather than a query's results. A run switches to its results. */
+  panelOutput: boolean;
+  setPanelOutput: (output: boolean) => void;
+  setInlineResults: (id: number, inline: boolean) => void;
+  setRunTexts: (id: number, texts: string[]) => void;
   dialog: DialogState;
   test: { request: number; pending: boolean; ok: boolean | null; message: string } | null;
   confirm: PendingConfirm | null;
@@ -518,6 +561,9 @@ interface State {
   /** Data or Structure, for browse tabs. */
   setView: (id: number, view: TabView) => void;
   setStructurePart: (id: number, part: StructurePart) => void;
+  clearLog: (id: number) => void;
+  /** Close the tab of result set `set`; the next open one, or the output, shows instead. */
+  closeSet: (id: number, set: number) => void;
   answerConfirm: (run: boolean) => void;
 
   editCell: (id: number, row: number, col: number, value: Value) => void;
@@ -692,7 +738,7 @@ export function saveWorkspace(): Promise<void> {
 
 const emptyNode = (): ConnNode => ({ status: { kind: "idle" }, expanded: false, databases: [] });
 
-export const useApp = create<State>()((set, get) => {
+export const useApp = create<AppState>()((set, get) => {
   /** Update one tab by id. */
   const patchTab = (id: number, patch: (tab: Tab) => Partial<Tab>) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch(t) } : t)) }));
@@ -836,7 +882,10 @@ export const useApp = create<State>()((set, get) => {
     sql: string,
     browse: BrowsePage | null = null,
   ) => {
-    const tab = blankTab({ id: nextTabId++, title, connId, database, sql, browse });
+    const tab = {
+      ...blankTab({ id: nextTabId++, title, connId, database, sql, browse }),
+      group: get().split ? get().focusedGroup : 0,
+    };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, active: { connId, database } }));
     return tab.id;
   };
@@ -849,6 +898,57 @@ export const useApp = create<State>()((set, get) => {
     active: null,
     tabs: [],
     activeTabId: null,
+    split: null,
+    focusedGroup: 0,
+    otherActiveTabId: null,
+    panelOpen: true,
+    setPanelOpen: (open) => set({ panelOpen: open }),
+    panelOutput: true,
+    setPanelOutput: (output) => set({ panelOutput: output }),
+    setInlineResults: (id, inline) => patchTab(id, () => ({ inlineResults: inline })),
+    setRunTexts: (id, texts) => patchTab(id, () => ({ runTexts: texts })),
+    splitTab: (id, direction) =>
+      set((s) => {
+        const tab = s.tabs.find((t) => t.id === id);
+        if (!tab || s.tabs.length < 2) return s;
+        if (s.split) return { split: direction };
+        const tabs = s.tabs.map((t) => (t.id === id ? { ...t, group: 1 as const } : t));
+        const left = tabs.filter((t) => t.group === 0);
+        const leftActive =
+          s.activeTabId !== id ? s.activeTabId : (neighbourOf(s.tabs, id, left)?.id ?? null);
+        return {
+          tabs,
+          split: direction,
+          focusedGroup: 1,
+          activeTabId: id,
+          otherActiveTabId: leftActive,
+        };
+      }),
+    moveToOtherGroup: (id) =>
+      set((s) => {
+        const tab = s.tabs.find((t) => t.id === id);
+        if (!tab || !s.split) return s;
+        const to: TabGroup = tab.group === 0 ? 1 : 0;
+        const tabs = s.tabs.map((t) => (t.id === id ? { ...t, group: to } : t));
+        return regroup(s, tabs, id, to);
+      }),
+    unsplit: () =>
+      set((s) => ({
+        tabs: s.tabs.map((t) => (t.group === 0 ? t : { ...t, group: 0 as const })),
+        split: null,
+        focusedGroup: 0,
+        otherActiveTabId: null,
+      })),
+    focusGroup: (group) =>
+      set((s) =>
+        !s.split || s.focusedGroup === group
+          ? s
+          : {
+              focusedGroup: group,
+              activeTabId: s.otherActiveTabId,
+              otherActiveTabId: s.activeTabId,
+            },
+      ),
     dialog: null,
     test: null,
     theme: loadTheme(),
@@ -1035,6 +1135,9 @@ export const useApp = create<State>()((set, get) => {
           set({ confirm: { ...event } });
           break;
         case "QueryStarted":
+          if (get().tabs.find((t) => t.id === event.tab && !t.browse && !t.inlineResults)) {
+            set({ panelOpen: true, panelOutput: false });
+          }
           patchTab(event.tab, (t) => ({
             running: true,
             sets: [],
@@ -1043,7 +1146,16 @@ export const useApp = create<State>()((set, get) => {
             error: null,
             progress: null,
             failure: null,
+            closedSets: [],
             runId: t.runId + 1,
+          }));
+          break;
+        case "StatementLog":
+          patchTab(event.tab, (t) => ({
+            log:
+              t.log.length < LOG_LIMIT
+                ? [...t.log, event.entry]
+                : [...t.log.slice(t.log.length - LOG_LIMIT + 1), event.entry],
           }));
           break;
         case "StatementStarted":
@@ -1350,7 +1462,13 @@ export const useApp = create<State>()((set, get) => {
       openTab(t.connId, t.database, `Query ${nextQuery++}`, "");
     },
     selectTab: (id) => {
-      set({ activeTabId: id });
+      const s = get();
+      const tab = s.tabs.find((t) => t.id === id);
+      if (s.split && tab && tab.group !== s.focusedGroup) {
+        set({ focusedGroup: tab.group, otherActiveTabId: s.activeTabId, activeTabId: id });
+      } else {
+        set({ activeTabId: id });
+      }
       loadIfBlank(id);
     },
     closeTabsToRight: (id) => {
@@ -1371,14 +1489,15 @@ export const useApp = create<State>()((set, get) => {
           .map((t) => t.id),
       ),
     cycleTab: (step) => {
-      const { tabs, activeTabId } = get();
+      const { activeTabId, focusedGroup } = get();
+      const tabs = get().tabs.filter((t) => t.group === focusedGroup);
       if (tabs.length === 0) return;
       const at = tabs.findIndex((t) => t.id === activeTabId);
       const next = tabs[(Math.max(at, 0) + step + tabs.length) % tabs.length];
       if (next) set({ activeTabId: next.id });
     },
     selectTabAt: (n) => {
-      const { tabs } = get();
+      const tabs = get().tabs.filter((t) => t.group === get().focusedGroup);
       const tab = n >= 9 ? tabs[tabs.length - 1] : tabs[n - 1];
       if (tab) set({ activeTabId: tab.id });
     },
@@ -1402,13 +1521,21 @@ export const useApp = create<State>()((set, get) => {
             sql,
             browse,
           }));
-        const first = s.tabs.findIndex((t) => closing.has(t.id));
         const rest = s.tabs.filter((t) => !closing.has(t.id));
-        const neighbour = rest[Math.min(Math.max(first, 0), rest.length - 1)];
-        const activeClosed = s.activeTabId !== null && closing.has(s.activeTabId);
-        return {
+        // Each group keeps a selected tab: the closed one's neighbour in the same group.
+        const keep = (active: number | null, group: TabGroup) => {
+          if (active === null || !closing.has(active)) return active;
+          const same = rest.filter((t) => t.group === group);
+          return neighbourOf(s.tabs, active, same)?.id ?? null;
+        };
+        const other: TabGroup = s.focusedGroup === 0 ? 1 : 0;
+        const layout = {
           tabs: rest,
-          activeTabId: activeClosed ? (neighbour?.id ?? null) : s.activeTabId,
+          activeTabId: keep(s.activeTabId, s.focusedGroup),
+          otherActiveTabId: s.split ? keep(s.otherActiveTabId, other) : null,
+        };
+        return {
+          ...settleGroups(s.split, s.focusedGroup, layout),
           closedTabs: [...s.closedTabs, ...closed].slice(-CLOSED_TAB_LIMIT),
         };
       });
@@ -1600,11 +1727,28 @@ export const useApp = create<State>()((set, get) => {
     },
     setView: (id, view) => {
       const tab = get().tabs.find((t) => t.id === id);
-      if (!tab?.browse) return;
+      if (!tab || (view === "structure" && !tab.browse)) return;
       patchTab(id, () => ({ view }));
       if (view === "structure" && (tab.structure === null || tab.structure.error !== null)) {
         loadStructure(id);
       }
+    },
+    clearLog: (id) => patchTab(id, () => ({ log: [] })),
+    closeSet: (id, index) => {
+      const t = get().tabs.find((x) => x.id === id);
+      if (!t) return;
+      const closedSets = [...t.closedSets, index];
+      const open = t.sets
+        .map((s, i) => (s.columns && !closedSets.includes(i) ? i : -1))
+        .filter((i) => i >= 0);
+      if (t.activeSet !== index) return patchTab(id, () => ({ closedSets }));
+      const after = open.find((i) => i > index) ?? open[open.length - 1];
+      if (after === undefined) {
+        patchTab(id, () => ({ closedSets }));
+        set({ panelOutput: true });
+        return;
+      }
+      patchTab(id, () => ({ closedSets, activeSet: after }));
     },
     setStructurePart: (id, part) =>
       patchTab(id, () => ({ structurePart: part, structureFocus: null })),
@@ -1903,6 +2047,51 @@ function withEdits(sets: ResultSet[], index: number, edits: Edits | null): Resul
 }
 
 /** Pinned tabs first, each group keeping its order. */
+/** The tab of `among` closest to where `id` sits in `all` (the next one, else the one before). */
+function neighbourOf(all: Tab[], id: number, among: Tab[]): Tab | undefined {
+  const at = all.findIndex((t) => t.id === id);
+  const after = among.find((t) => all.findIndex((x) => x.id === t.id) > at && t.id !== id);
+  return after ?? among.filter((t) => t.id !== id).pop();
+}
+
+interface GroupLayout {
+  tabs: Tab[];
+  activeTabId: number | null;
+  otherActiveTabId: number | null;
+}
+
+/** A split whose group lost its last tab goes back to one group. */
+function settleGroups(
+  split: SplitDirection | null,
+  focused: TabGroup,
+  layout: GroupLayout,
+): GroupLayout & { split: SplitDirection | null; focusedGroup: TabGroup } {
+  if (!split) return { ...layout, split: null, focusedGroup: 0 };
+  const hasBoth = layout.tabs.some((t) => t.group === 0) && layout.tabs.some((t) => t.group === 1);
+  if (hasBoth) return { ...layout, split, focusedGroup: focused };
+  return {
+    tabs: layout.tabs.map((t) => (t.group === 0 ? t : { ...t, group: 0 as const })),
+    activeTabId: layout.activeTabId ?? layout.otherActiveTabId,
+    otherActiveTabId: null,
+    split: null,
+    focusedGroup: 0,
+  };
+}
+
+/** After `id` moved into group `to`: it is selected there, and its old group picks another. */
+function regroup(
+  s: { tabs: Tab[]; split: SplitDirection | null; focusedGroup: TabGroup } & GroupLayout,
+  tabs: Tab[],
+  id: number,
+  to: TabGroup,
+): GroupLayout & { split: SplitDirection | null; focusedGroup: TabGroup } {
+  const from: TabGroup = to === 0 ? 1 : 0;
+  const fromActive = s.focusedGroup === from ? s.activeTabId : s.otherActiveTabId;
+  const left = tabs.filter((t) => t.group === from);
+  const nextFrom = fromActive === id ? (neighbourOf(s.tabs, id, left)?.id ?? null) : fromActive;
+  return settleGroups(s.split, to, { tabs, activeTabId: id, otherActiveTabId: nextFrom });
+}
+
 function pinnedFirst(tabs: Tab[]): Tab[] {
   return [...tabs.filter((t) => t.pinned), ...tabs.filter((t) => !t.pinned)];
 }

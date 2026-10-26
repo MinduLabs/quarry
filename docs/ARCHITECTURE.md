@@ -88,10 +88,17 @@ Safe mode    Run{confirmed:false} → ConfirmRequired → user agrees → Run{co
 Tabs         LoadWorkspace → Workspace;  SaveWorkspace{request} → WorkspaceSaved
 History      LoadHistory{request, query} → History;  ClearHistory
 Favorites    LoadFavorites / SaveFavorite / DeleteFavorite → Favorites (the full list)
+Console      every statement a tab's session runs → StatementLog{tab, entry} when it ends
 ```
 
 ## Runtime
 
+- The console of a tab is fed by the engine: each statement its session runs (typed queries,
+  plans, table pages and row counts, grid edits with their savepoints, begin / commit / rollback)
+  ends with `StatementLog`, which carries the statement (cut after 4 KB), when it started, its
+  source, the time until the server answered and the time spent receiving rows, the rows returned
+  or changed, and the error. Every client gets the same log. The UI keeps the last 1,000 entries
+  per tab in memory; nothing is written to disk (the history does that for typed queries).
 - The engine runs a multi-threaded tokio runtime on its own thread; the UI never blocks on IO.
 - Each query tab owns one database session, so a long query in one tab does not block another.
   Each connection also has a metadata session for introspection.
@@ -186,7 +193,15 @@ events are reduced), and the bridge in `lib/engine.ts`. Look and motion follow
 - **Tabs:** pinned tabs come first and are closed only from their menu (not by `Ctrl/⌘+W`, the
   middle button, Close other tabs or Close tabs to the right). Tabs reorder by dragging, within
   their group. `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle tabs (also on macOS, where `⌘Tab` switches
-  apps); `Ctrl/⌘+1…8` go to a tab and `9` to the last.
+  apps); `Ctrl/⌘+1…8` go to a tab and `9` to the last. Both act on the focused group.
+- **Tab groups:** a tab's menu splits the editor area right or down into two groups, each with
+  its own tab bar and selected tab; a press inside a group focuses it, and new tabs open there.
+  A group left without tabs closes. Groups are not saved with the workspace.
+- **Where results show:** the panel at the bottom of the window is always there, like a terminal:
+  it shows the output of the selected tab and, for a query tab, the results of its last run beside
+  it (a run switches the panel to them). A table tab shows its rows in the tab itself, right under
+  its toolbar, with no SQL editor. A query tab can ask for its results under its own editor
+  instead; its output stays in the panel.
 - **Shortcuts** are listed once in `ui/src/lib/shortcuts.ts`; Settings › Keyboard shows that list.
   Settings has one search over every section; shortcuts match by name or by their keys.
   The webview's own reload is turned off: `F5` / `Ctrl/⌘+R` refresh the active tab instead.

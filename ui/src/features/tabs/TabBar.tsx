@@ -1,27 +1,31 @@
 import { Pin, Plus, X } from "lucide-react";
+import { useMemo } from "react";
 import { IconButton } from "@/components/ui/IconButton";
 import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/cn";
 import { isMac } from "@/lib/platform";
 import { keysOf } from "@/lib/shortcuts";
-import { useApp } from "@/store/app";
+import { type TabGroup, useApp } from "@/store/app";
 
 /** Pointer movement before a press on a tab becomes a drag, so a click never reorders. */
 const DRAG_THRESHOLD = 6;
 
-/** Reorder by dragging: the tab follows the pointer across its neighbours' midpoints. */
-function startDrag(id: number, startX: number) {
+/** Reorder by dragging within the tab's group: the tab follows the pointer across its
+ * neighbours. */
+function startDrag(id: number, group: TabGroup, startX: number) {
   let isDragging = false;
   const onMove = (e: PointerEvent) => {
     if (!isDragging && Math.abs(e.clientX - startX) < DRAG_THRESHOLD) return;
     isDragging = true;
-    const tabs = [...document.querySelectorAll<HTMLElement>("[data-tab-id]")];
-    const over = tabs.findIndex((el) => {
+    const tabs = [...document.querySelectorAll<HTMLElement>(`[data-tab-group="${group}"]`)];
+    const over = tabs.find((el) => {
       const r = el.getBoundingClientRect();
       return e.clientX >= r.left && e.clientX < r.right;
     });
-    if (over >= 0) useApp.getState().moveTab(id, over);
+    const overId = Number(over?.dataset.tabId);
+    const index = useApp.getState().tabs.findIndex((t) => t.id === overId);
+    if (index >= 0) useApp.getState().moveTab(id, index);
   };
   const stop = () => {
     window.removeEventListener("pointermove", onMove);
@@ -33,14 +37,39 @@ function startDrag(id: number, startX: number) {
   window.addEventListener("pointercancel", stop);
 }
 
-export function TabBar() {
-  const tabs = useApp((s) => s.tabs);
-  const activeId = useApp((s) => s.activeTabId);
+/**
+ * The tabs of one group. `chromeLeft` and `chromeRight` leave room for what the window draws
+ * over the bar's ends (window buttons, the sidebar toggle).
+ */
+export function TabBar({
+  group,
+  chromeLeft,
+  chromeRight,
+}: {
+  group: TabGroup;
+  chromeLeft: boolean;
+  chromeRight: boolean;
+}) {
+  const allTabs = useApp((s) => s.tabs);
+  const tabs = useMemo(() => allTabs.filter((t) => t.group === group), [allTabs, group]);
+  const isFocused = useApp((s) => s.focusedGroup === group);
+  const activeId = useApp((s) => (s.focusedGroup === group ? s.activeTabId : s.otherActiveTabId));
+  const split = useApp((s) => s.split);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const canReopen = useApp((s) => s.closedTabs.length > 0);
   const connections = useApp((s) => s.connections);
-  const { selectTab, closeTab, closeTabs, reopenClosedTab, newQuery, togglePin } =
-    useApp.getState();
+  const {
+    selectTab,
+    closeTab,
+    closeTabs,
+    reopenClosedTab,
+    newQuery,
+    togglePin,
+    splitTab,
+    moveToOtherGroup,
+    unsplit,
+    focusGroup,
+  } = useApp.getState();
 
   const menu = (id: number): MenuItem[] => {
     const others = tabs.filter((t) => t.id !== id && !t.pinned).map((t) => t.id);
@@ -49,6 +78,32 @@ export function TabBar() {
         label: tabs.find((t) => t.id === id)?.pinned ? "Unpin tab" : "Pin tab",
         onSelect: () => togglePin(id),
       },
+      ...(split
+        ? [
+            {
+              label: "Move to other group",
+              onSelect: () => moveToOtherGroup(id),
+              separatorBefore: true,
+            },
+            {
+              label: split === "right" ? "Split down instead" : "Split right instead",
+              onSelect: () => splitTab(id, split === "right" ? "down" : "right"),
+            },
+            { label: "Unsplit", onSelect: unsplit },
+          ]
+        : [
+            {
+              label: "Split right",
+              disabled: allTabs.length < 2,
+              onSelect: () => splitTab(id, "right"),
+              separatorBefore: true,
+            },
+            {
+              label: "Split down",
+              disabled: allTabs.length < 2,
+              onSelect: () => splitTab(id, "down"),
+            },
+          ]),
       {
         label: "Reopen closed tab",
         disabled: !canReopen,
@@ -79,11 +134,11 @@ export function TabBar() {
       role="tablist"
       className={cn(
         // Same height as the sidebar's top row.
-        "flex h-9 shrink-0 items-center gap-1 border-line border-b bg-surface",
+        "flex h-9 min-w-0 shrink-0 items-center gap-1 border-line border-b bg-surface",
         // Hidden sidebar: the window buttons (macOS) and the toggle now sit over the tab bar.
-        sidebarOpen ? "pl-2" : isMac ? "pl-32" : "pl-12",
+        !chromeLeft || sidebarOpen ? "pl-2" : isMac ? "pl-32" : "pl-12",
         // Leave room for the window controls drawn over the right edge.
-        isMac ? "pr-2" : "pr-36",
+        chromeRight && !isMac ? "pr-36" : "pr-2",
       )}
     >
       {tabs.map((tab) => {
@@ -96,6 +151,7 @@ export function TabBar() {
             <div
               role="tab"
               data-tab-id={tab.id}
+              data-tab-group={group}
               aria-selected={active}
               title={
                 env
@@ -108,13 +164,17 @@ export function TabBar() {
                   return;
                 }
                 selectTab(tab.id);
-                if (e.button === 0) startDrag(tab.id, e.clientX);
+                if (e.button === 0) startDrag(tab.id, group, e.clientX);
               }}
               className={cn(
                 "animate-pop group flex h-7 items-center gap-1.5 rounded-md text-base transition-colors-fast",
                 tab.pinned ? "max-w-32 min-w-0 pr-3 pl-2.5" : "max-w-55 min-w-24 pr-1 pl-3",
                 active
-                  ? "bg-app text-fg shadow-[0_0_0_1px_var(--line)]"
+                  ? cn(
+                      "bg-app shadow-[0_0_0_1px_var(--line)]",
+                      // In a split, the focused group's tab is the one the keyboard acts on.
+                      isFocused ? "text-fg" : "text-muted",
+                    )
                   : "text-muted hover:bg-hover hover:text-fg",
               )}
             >
@@ -155,7 +215,10 @@ export function TabBar() {
         label="New query"
         shortcut={keysOf("newQuery")}
         size="sm"
-        onClick={() => newQuery()}
+        onClick={() => {
+          focusGroup(group);
+          newQuery();
+        }}
       >
         <Plus size={14} strokeWidth={1.75} />
       </IconButton>

@@ -31,6 +31,7 @@
   --color-success: var(--success);
   --color-danger-solid: var(--danger-solid);
   --color-env-local: var(--env-local);
+  --color-syntax-comment: var(--syntax-comment);
   --color-icon-table: var(--icon-table);
   --color-icon-view: var(--icon-view);
   --color-icon-procedure: var(--icon-procedure);

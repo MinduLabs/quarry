@@ -66,20 +66,21 @@ export const editorTheme = EditorView.theme({
   ".cm-searchMatch": { backgroundColor: "var(--cell-modified)" },
 });
 
-export const editorHighlight = syntaxHighlighting(
-  HighlightStyle.define([
-    { tag: [t.keyword, t.operatorKeyword, t.modifier], color: "var(--syntax-keyword)" },
-    { tag: [t.string, t.special(t.string)], color: "var(--syntax-string)" },
-    { tag: [t.number], color: "var(--syntax-number)" },
-    { tag: [t.bool, t.null, t.atom], color: "var(--syntax-literal)" },
-    {
-      tag: [t.comment, t.lineComment, t.blockComment],
-      color: "var(--syntax-comment)",
-      fontStyle: "italic",
-    },
-    { tag: [t.function(t.variableName), t.standard(t.name)], color: "var(--syntax-function)" },
-    { tag: [t.typeName, t.className], color: "var(--syntax-type)" },
-    { tag: [t.special(t.name), t.quote], color: "var(--fg)" },
-    { tag: [t.operator, t.punctuation, t.bracket], color: "var(--muted)" },
-  ]),
-);
+/** SQL token colors, shared by the editor and the console. */
+export const sqlHighlightStyle = HighlightStyle.define([
+  { tag: [t.keyword, t.operatorKeyword, t.modifier], color: "var(--syntax-keyword)" },
+  { tag: [t.string, t.special(t.string)], color: "var(--syntax-string)" },
+  { tag: [t.number], color: "var(--syntax-number)" },
+  { tag: [t.bool, t.null, t.atom], color: "var(--syntax-literal)" },
+  {
+    tag: [t.comment, t.lineComment, t.blockComment],
+    color: "var(--syntax-comment)",
+    fontStyle: "italic",
+  },
+  { tag: [t.function(t.variableName), t.standard(t.name)], color: "var(--syntax-function)" },
+  { tag: [t.typeName, t.className], color: "var(--syntax-type)" },
+  { tag: [t.special(t.name), t.quote], color: "var(--fg)" },
+  { tag: [t.operator, t.punctuation, t.bracket], color: "var(--muted)" },
+]);
+
+export const editorHighlight = syntaxHighlighting(sqlHighlightStyle);

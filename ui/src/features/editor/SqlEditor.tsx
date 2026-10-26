@@ -19,6 +19,7 @@ import {
   keymap,
   lineNumbers,
   placeholder,
+  tooltips,
 } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { type SqlSchema, sqlCompletion } from "./completion";
@@ -158,6 +159,9 @@ export function SqlEditor({
           runMarks,
           sqlDiagnostics,
           problemTooltip,
+          // In the page body: the editor clips its own box, which hid a tooltip shown above the
+          // first line (or a completion list below the last).
+          tooltips({ parent: document.body }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) handlers.current.onChange(update.state.doc.toString());
           }),
