@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use quarry_driver_api::{DriverError, ExecItem, ExecOpts, Session};
 use quarry_model::{BrowseQuery, ConnId, Environment, HistoryEntry, TableRef, Value};
 
+use crate::console::Logged;
 use crate::engine::{Engine, TabSession, describe, is_lost, round};
 use crate::session::transaction_after;
-use crate::{Event, NoticeKind, TabId, browse, perf};
+use crate::{Event, LogSource, NoticeKind, TabId, browse, perf};
 
 /// Rows kept per result set of a typed query; more are drained but not sent (`truncated`).
 pub(crate) const RUN_ROW_LIMIT: u64 = 1000;
@@ -20,6 +21,8 @@ pub(crate) struct Query {
     pub(crate) params: Vec<Value>,
     /// Typed by the user: recorded in the history and may begin or end a transaction.
     pub(crate) from_user: bool,
+    /// What the tab's console says ran it.
+    pub(crate) source: LogSource,
 }
 
 impl Query {
@@ -28,6 +31,7 @@ impl Query {
             sql,
             params: Vec::new(),
             from_user: true,
+            source: LogSource::Query,
         }
     }
 }
@@ -94,6 +98,7 @@ impl Engine {
             sql,
             params,
             from_user,
+            source,
         } = query;
         self.emit(Event::QueryStarted { tab });
         let started = Instant::now();
@@ -155,16 +160,21 @@ impl Engine {
                 break;
             }
             self.emit(Event::StatementStarted { tab, index, count });
+            let mut logged = Logged::start(source, statement);
             let events = self.events.clone();
             let mut sink = |item: ExecItem| {
                 let event = match item {
-                    ExecItem::Columns(columns) => Event::ResultColumns {
-                        tab,
-                        set,
-                        statement: index,
-                        columns,
-                    },
+                    ExecItem::Columns(columns) => {
+                        logged.columns();
+                        Event::ResultColumns {
+                            tab,
+                            set,
+                            statement: index,
+                            columns,
+                        }
+                    }
                     ExecItem::Rows(rows) => {
+                        logged.rows();
                         first_rows.get_or_insert_with(Instant::now);
                         rows_sent += rows.len();
                         batches += 1;
@@ -175,6 +185,7 @@ impl Engine {
                         rows,
                         truncated,
                     } => {
+                        logged.set_done(affected, rows, truncated);
                         let event = Event::ResultDone {
                             tab,
                             set,
@@ -202,6 +213,7 @@ impl Engine {
             } else {
                 session.query(statement, &params, &opts, &mut sink).await
             };
+            self.log(tab, logged, result.as_ref().err().map(describe));
             if result.is_err() {
                 break;
             }
@@ -362,6 +374,7 @@ impl Engine {
             sql,
             params: clauses.params,
             from_user: false,
+            source: LogSource::Page,
         })
     }
 
@@ -382,6 +395,7 @@ impl Engine {
             sql,
             params: Vec::new(),
             from_user: false,
+            source: LogSource::Query,
         })
     }
 
@@ -428,6 +442,8 @@ impl Engine {
             row_limit: Some(1),
             ..ExecOpts::default()
         };
+        let mut logged = Logged::start(LogSource::Page, &sql);
+        logged.columns();
         let mut session = tab_session.session.lock().await;
         let result = if clauses.params.is_empty() {
             session.execute(&sql, &opts, &mut sink).await
@@ -435,6 +451,10 @@ impl Engine {
             session.query(&sql, &clauses.params, &opts, &mut sink).await
         };
         drop(session);
+        if result.is_ok() {
+            logged.set_done(0, 1, false);
+        }
+        self.log(tab, logged, result.as_ref().err().map(describe));
         if let Err(err) = result {
             tab_session.is_lost |= is_lost(&err);
             return Err(describe(&err));

@@ -1038,6 +1038,7 @@ async fn run_events(
             | Event::ResultColumns { tab: t, .. }
             | Event::ResultRows { tab: t, .. }
             | Event::ResultDone { tab: t, .. }
+            | Event::StatementLog { tab: t, .. }
             | Event::QueryFinished { tab: t, .. }
             | Event::QueryFailed { tab: t, .. } => *t == tab,
             _ => false,
@@ -1073,6 +1074,31 @@ async fn bad_sql_keeps_the_tab_usable_and_names_the_statement() {
         started,
         [(0, 3), (1, 3)],
         "the third statement never starts"
+    );
+    // The console gets one entry per statement that ran, the failing one with its error.
+    let logged: Vec<&LogEntry> = seen
+        .iter()
+        .filter_map(|e| match e {
+            Event::StatementLog { entry, .. } => Some(entry),
+            _ => None,
+        })
+        .collect();
+    let [first, second] = logged.as_slice() else {
+        panic!("{logged:?}")
+    };
+    assert_eq!(
+        (first.sql.as_str(), first.rows, first.error.as_deref()),
+        ("SELECT 1", Some(1), None)
+    );
+    assert_eq!(first.source, LogSource::Query);
+    assert!(first.fetch_ms.is_some());
+    assert_eq!(second.sql, "SELEC 2");
+    assert!(
+        second
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("syntax")),
+        "{second:?}"
     );
     assert!(seen.iter().any(|e| matches!(
         e,
