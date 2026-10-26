@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::engine::{Engine, lock};
 use crate::query::{Query, RUN_ROW_LIMIT, safety_check};
-use crate::{Command, Event, NoticeKind, VERSION, schema};
+use crate::{Command, Event, NoticeKind, VERSION, browse, schema};
 
 /// The command's name for the performance log (never its fields: some hold passwords).
 fn command_kind(command: &Command) -> &'static str {
@@ -146,19 +146,27 @@ impl Engine {
                 limit,
                 offset,
                 query,
-            } => match self.page_query(conn, &table, &query, limit, offset) {
-                Ok(query) => {
-                    self.run_query(tab, conn, table.database.clone(), query, limit)
-                        .await;
+            } => {
+                let query = if query.sort.is_empty() {
+                    query
+                } else {
+                    let key = self.primary_key_on_tab(tab, conn, &table).await;
+                    browse::with_tie_breakers(query, &key)
+                };
+                match self.page_query(conn, &table, &query, limit, offset) {
+                    Ok(query) => {
+                        self.run_query(tab, conn, table.database.clone(), query, limit)
+                            .await;
+                    }
+                    Err(error) => self.emit(Event::QueryFailed {
+                        tab,
+                        error,
+                        cancelled: false,
+                        statement: None,
+                        location: None,
+                    }),
                 }
-                Err(error) => self.emit(Event::QueryFailed {
-                    tab,
-                    error,
-                    cancelled: false,
-                    statement: None,
-                    location: None,
-                }),
-            },
+            }
             Command::CountRows {
                 tab,
                 conn,

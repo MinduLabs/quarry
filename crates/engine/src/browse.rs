@@ -2,7 +2,7 @@
 //! dialect and values are parameters, so neither can change the statement.
 
 use quarry_driver_api::Dialect;
-use quarry_model::{BrowseQuery, ColumnFilter, FilterOp, Value};
+use quarry_model::{BrowseQuery, ColumnFilter, FilterOp, SortKey, Value};
 
 /// Clauses without their keywords, ready for `Dialect::select_page` / `count_rows`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10,6 +10,28 @@ pub struct Clauses {
     pub filter: Option<String>,
     pub order: Option<String>,
     pub params: Vec<Value>,
+}
+
+/// A sorted query with the primary key appended to its sort. Rows that tie on the sort columns
+/// otherwise come back in a different order for each `LIMIT` / `OFFSET`, so pages repeat or skip
+/// rows. An unsorted query keeps the table's own order.
+pub fn with_tie_breakers(mut query: BrowseQuery, primary_key: &[String]) -> BrowseQuery {
+    if query.sort.is_empty() {
+        return query;
+    }
+    for column in primary_key {
+        if !query
+            .sort
+            .iter()
+            .any(|k| k.column.eq_ignore_ascii_case(column))
+        {
+            query.sort.push(SortKey {
+                column: column.clone(),
+                descending: false,
+            });
+        }
+    }
+    query
 }
 
 pub fn clauses(dialect: &dyn Dialect, query: &BrowseQuery) -> Result<Clauses, String> {
@@ -116,6 +138,47 @@ mod tests {
 
     fn text(s: &str) -> Value {
         Value::Text(s.into())
+    }
+
+    #[test]
+    fn sorted_queries_get_the_primary_key_as_tie_breaker() {
+        let key = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        let sorted = |column: &str| BrowseQuery {
+            filters: Vec::new(),
+            sort: vec![SortKey {
+                column: column.into(),
+                descending: true,
+            }],
+        };
+        let order = |query: &BrowseQuery| {
+            query
+                .sort
+                .iter()
+                .map(|k| (k.column.clone(), k.descending))
+                .collect::<Vec<_>>()
+        };
+
+        let tied = with_tie_breakers(sorted("status"), &key(&["id", "shard"]));
+        assert_eq!(
+            order(&tied),
+            [
+                ("status".to_owned(), true),
+                ("id".to_owned(), false),
+                ("shard".to_owned(), false)
+            ]
+        );
+        // A key column the user already sorts by keeps the user's direction and place.
+        let keyed = with_tie_breakers(sorted("ID"), &key(&["id", "shard"]));
+        assert_eq!(
+            order(&keyed),
+            [("ID".to_owned(), true), ("shard".to_owned(), false)]
+        );
+        // Unsorted pages and tables without a key stay as they are.
+        assert_eq!(
+            with_tie_breakers(BrowseQuery::default(), &key(&["id"])),
+            BrowseQuery::default()
+        );
+        assert_eq!(with_tie_breakers(sorted("a"), &[]), sorted("a"));
     }
 
     #[test]

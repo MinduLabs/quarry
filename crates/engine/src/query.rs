@@ -340,6 +340,34 @@ impl Engine {
         format!("Quarry opened a new connection for this tab. Run the query again.{lost_work}")
     }
 
+    /// Primary key columns of `table`, for the tie-breaker of a sorted page. Read on the tab's
+    /// own session so a busy schema tree never delays the page. Without a key (a view, a failed
+    /// lookup) the page simply has no tie-breaker.
+    pub(crate) async fn primary_key_on_tab(
+        &self,
+        tab: TabId,
+        conn: ConnId,
+        table: &TableRef,
+    ) -> Vec<String> {
+        let slot = self.tab_slot(tab);
+        let mut slot = slot.lock().await;
+        if self.ensure_tab_session(&mut slot, tab, conn).await.is_err() {
+            return Vec::new();
+        }
+        let Some(tab_session) = slot.as_mut() else {
+            return Vec::new();
+        };
+        let mut session = tab_session.session.lock().await;
+        match session.primary_key(table).await {
+            Ok(key) => key,
+            Err(err) => {
+                tab_session.is_lost |= is_lost(&err);
+                tracing::debug!(%err, "primary key lookup");
+                Vec::new()
+            }
+        }
+    }
+
     /// `SELECT` for one page of `table`, in the dialect of the connection's driver.
     pub(crate) fn page_query(
         &self,

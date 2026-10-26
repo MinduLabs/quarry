@@ -169,11 +169,15 @@ impl Engine {
         };
         let mut session = meta.lock().await;
         let mut error = None;
+        let mut lost = false;
         for sql in statements {
             let ran_at = chrono::Utc::now();
             let started = std::time::Instant::now();
             let result = run_plain(&mut **session, &sql).await;
-            let failed = result.err().map(|err| describe(&err));
+            let failed = result.err().map(|err| {
+                lost |= is_lost(&err);
+                describe(&err)
+            });
             self.record(HistoryEntry {
                 sql,
                 conn,
@@ -198,6 +202,14 @@ impl Engine {
             _ => None,
         };
         drop(session);
+        // A schema change is not run twice on its own: the statement may have landed before the
+        // connection dropped. The session is replaced so the user's next try works.
+        if lost {
+            let _ = self.reopen_meta(conn, &meta).await;
+            error = error.map(|e| {
+                format!("{e}\nCheck whether the change was applied before you try again.")
+            });
+        }
         if let Some(databases) = databases {
             self.emit(Event::Databases {
                 id: conn,

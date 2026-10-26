@@ -64,6 +64,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Packaging: Flatpak, AppImage and `.deb` on Linux; universal `.dmg` on macOS. Linux packages are built on Ubuntu 22.04 so they also run on older distros; release builds are size-optimized.
 
 ### Fixed
+- Sorting a table by a column with repeated values no longer repeats or skips rows between pages: the primary key breaks ties.
+- The schema tree, table structure and server variables recover after the connection drops (server restart, idle timeout) instead of failing until you disconnect and connect again.
 - The grid tints the row number of every row a selection touches, so the "Delete 6 rows" button matches what you see selected, and its label is red.
 - Pinching the touchpad no longer zooms the whole window on Linux, which turned the app into a magnified picture.
 - The window no longer shows white while the app starts: it opens on a splash with the logo, in the app's theme, and shows the app when it is ready (about 300 ms sooner than before).

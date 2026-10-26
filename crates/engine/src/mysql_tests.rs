@@ -1128,3 +1128,161 @@ async fn bad_sql_keeps_the_tab_usable_and_names_the_statement() {
         "{seen:?}"
     );
 }
+
+/// Rows that tie on the sort column must come back in one order on every page; otherwise a page
+/// can repeat rows another page skipped.
+#[tokio::test]
+async fn sorted_pages_cover_every_row_once() {
+    let Some(config) = config() else { return };
+    let id = config.id;
+    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+        config_dir: Some(dir.clone()),
+        data_dir: Some(dir),
+        known_hosts: None,
+        disable_keyring: true,
+        perf_log: None,
+    })
+    .unwrap();
+    engine
+        .send(Command::SaveConnection {
+            config,
+            password: Some(Password("quarry".into())),
+            ssh_secret: None,
+            remember_password: false,
+        })
+        .unwrap();
+    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+
+    let table = TableRef {
+        database: Some("shop".into()),
+        schema: None,
+        name: "orders".into(),
+    };
+    // `status` has four values over 5000 rows, so almost every row ties with its neighbours.
+    for descending in [false, true] {
+        let query = BrowseQuery {
+            filters: Vec::new(),
+            sort: vec![quarry_model::SortKey {
+                column: "status".into(),
+                descending,
+            }],
+        };
+        let mut seen = std::collections::HashSet::new();
+        for page in 0..5u64 {
+            engine
+                .send(Command::Browse {
+                    tab: 40,
+                    conn: id,
+                    table: table.clone(),
+                    limit: 1000,
+                    offset: page * 1000,
+                    query: query.clone(),
+                })
+                .unwrap();
+            loop {
+                match next_matching(&events, |e| {
+                    matches!(
+                        e,
+                        Event::ResultRows { tab: 40, .. }
+                            | Event::QueryFinished { tab: 40, .. }
+                            | Event::QueryFailed { tab: 40, .. }
+                    )
+                })
+                .await
+                {
+                    Event::ResultRows { rows, .. } => {
+                        seen.extend(rows.into_iter().map(|r| r[0].display(usize::MAX)));
+                    }
+                    Event::QueryFinished { .. } => break,
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        }
+        assert_eq!(seen.len(), 5000, "descending: {descending}");
+    }
+}
+
+/// A server restart or idle timeout kills the metadata session; the schema tree must recover on
+/// its own instead of failing until Disconnect and Connect.
+#[tokio::test]
+async fn schema_tree_recovers_after_the_metadata_connection_dies() {
+    let Some(mut config) = config() else { return };
+    // The read-only `demo` user, so the KILLs below can only reach this test's own sessions and
+    // never those of tests running at the same time.
+    config.user = Some("demo".into());
+    let id = config.id;
+    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+        config_dir: Some(dir.clone()),
+        data_dir: Some(dir),
+        known_hosts: None,
+        disable_keyring: true,
+        perf_log: None,
+    })
+    .unwrap();
+    engine
+        .send(Command::SaveConnection {
+            config,
+            password: None,
+            ssh_secret: None,
+            remember_password: false,
+        })
+        .unwrap();
+    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    engine.send(Command::Connect { id }).unwrap();
+    next_matching(&events, |e| matches!(e, Event::Databases { .. })).await;
+
+    // First column of every row `sql` returns on tab 50.
+    let column = async |sql: &str| {
+        engine
+            .send(Command::Run {
+                tab: 50,
+                conn: id,
+                database: None,
+                sql: sql.into(),
+                confirmed: false,
+            })
+            .unwrap();
+        let mut values = Vec::new();
+        loop {
+            match next_matching(&events, |e| {
+                matches!(
+                    e,
+                    Event::ResultRows { tab: 50, .. }
+                        | Event::QueryFinished { tab: 50, .. }
+                        | Event::QueryFailed { tab: 50, .. }
+                )
+            })
+            .await
+            {
+                Event::ResultRows { rows, .. } => {
+                    values.extend(rows.into_iter().map(|r| r[0].display(usize::MAX)));
+                }
+                Event::QueryFinished { .. } => return values,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    };
+    let own = column("SELECT CONNECTION_ID()").await;
+    let all = column("SELECT ID FROM information_schema.PROCESSLIST WHERE USER = 'demo'").await;
+    let others: Vec<_> = all.into_iter().filter(|c| !own.contains(c)).collect();
+    assert!(!others.is_empty(), "the metadata session should be listed");
+    for other in others {
+        column(&format!("KILL {other}")).await;
+    }
+
+    engine
+        .send(Command::LoadObjects {
+            id,
+            database: "shop".into(),
+        })
+        .unwrap();
+    let Event::Objects { objects, error, .. } =
+        next_matching(&events, |e| matches!(e, Event::Objects { .. })).await
+    else {
+        unreachable!()
+    };
+    assert_eq!(error, None);
+    assert!(objects.unwrap().iter().any(|o| o.name == "customers"));
+}

@@ -217,6 +217,11 @@ pub trait Session: Send {
     async fn table_info(&mut self, _table: &TableRef) -> Result<TableInfo> {
         Err(DriverError::Unsupported("table structure"))
     }
+    /// Primary key columns of a table, in key order; empty for a view or a table without one.
+    /// Drivers with a cheaper query than [`Self::table_info`] override this.
+    async fn primary_key(&mut self, table: &TableRef) -> Result<Vec<String>> {
+        Ok(self.table_info(table).await?.primary_key)
+    }
     /// Server variables or status counters, sorted by name.
     async fn server_info(&mut self, _kind: ServerInfoKind) -> Result<Vec<ServerInfoRow>> {
         Err(DriverError::Unsupported("server information"))

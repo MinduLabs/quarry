@@ -9,17 +9,35 @@ use crate::{MysqlDialect, map_err};
 
 const PRIMARY: &str = "PRIMARY";
 
-/// `mariadb`: the server is MariaDB, which reports defaults as SQL already.
-pub async fn table_info(conn: &mut Conn, table: &TableRef, mariadb: bool) -> Result<TableInfo> {
-    let database = match &table.database {
-        Some(db) => db.clone(),
-        None => conn
+/// The table's database, or the session's current one when the reference names none.
+async fn database_of(conn: &mut Conn, table: &TableRef) -> Result<String> {
+    match &table.database {
+        Some(db) => Ok(db.clone()),
+        None => Ok(conn
             .query_first::<Option<String>, _>("SELECT DATABASE()")
             .await
             .map_err(map_err)?
             .flatten()
-            .unwrap_or_default(),
-    };
+            .unwrap_or_default()),
+    }
+}
+
+/// Primary key columns in key order. One small query: it runs on every sorted page of a table.
+pub async fn primary_key(conn: &mut Conn, table: &TableRef) -> Result<Vec<String>> {
+    let database = database_of(conn, table).await?;
+    conn.exec(
+        "SELECT COLUMN_NAME FROM information_schema.STATISTICS \
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = 'PRIMARY' \
+         ORDER BY SEQ_IN_INDEX",
+        (database.as_str(), table.name.as_str()),
+    )
+    .await
+    .map_err(map_err)
+}
+
+/// `mariadb`: the server is MariaDB, which reports defaults as SQL already.
+pub async fn table_info(conn: &mut Conn, table: &TableRef, mariadb: bool) -> Result<TableInfo> {
+    let database = database_of(conn, table).await?;
     let key = (database.as_str(), table.name.as_str());
 
     type ColumnRow = (

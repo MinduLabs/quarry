@@ -268,6 +268,10 @@ impl Session for MysqlSession {
         introspect::table_info(&mut self.conn, table, self.version.contains("MariaDB")).await
     }
 
+    async fn primary_key(&mut self, table: &TableRef) -> Result<Vec<String>> {
+        introspect::primary_key(&mut self.conn, table).await
+    }
+
     async fn use_database(&mut self, database: &str) -> Result<()> {
         let sql = format!("USE {}", MysqlDialect.quote_ident(database));
         self.conn.query_drop(sql).await.map_err(map_err)
