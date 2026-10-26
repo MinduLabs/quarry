@@ -619,6 +619,16 @@ let nextRequest = 1;
 /** Only the newest history request is shown, so typing fast never shows stale results. */
 let historyRequest = 0;
 
+/** Loads the first page of a table tab that has not run yet (restored with the workspace). */
+function loadIfBlank(id: number): void {
+  const state = useApp.getState();
+  const tab = state.tabs.find((t) => t.id === id);
+  if (!tab?.browse || tab.running || tab.sets.length > 0 || tab.error !== null) return;
+  if (tab.failure !== null) return;
+  if (state.nodes[tab.connId]?.status.kind !== "connected") return;
+  state.browse(id, tab.browse.offset);
+}
+
 /** Table structure requests waiting for `TableInfo`: request id → tab id, and whether the
  * structure is the browsed table's or the source table of a query result. */
 const structureRequests = new Map<number, { tab: number; kind: "browse" | "result" }>();
@@ -1302,6 +1312,12 @@ export const useApp = create<State>()((set, get) => {
       );
       if (existing) {
         set({ activeTabId: existing.id });
+        // A tab left on Structure shows the data again when its table is opened; one restored from
+        // the workspace has not loaded its rows yet.
+        if (kind === "table" || kind === "view") {
+          if (existing.view !== "data") patchTab(existing.id, () => ({ view: "data" }));
+          loadIfBlank(existing.id);
+        }
         return;
       }
       if (kind === "table" || kind === "view") {
@@ -1333,7 +1349,10 @@ export const useApp = create<State>()((set, get) => {
       }
       openTab(t.connId, t.database, `Query ${nextQuery++}`, "");
     },
-    selectTab: (id) => set({ activeTabId: id }),
+    selectTab: (id) => {
+      set({ activeTabId: id });
+      loadIfBlank(id);
+    },
     closeTabsToRight: (id) => {
       const { tabs } = get();
       const at = tabs.findIndex((t) => t.id === id);
