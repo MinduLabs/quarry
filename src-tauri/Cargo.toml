@@ -20,11 +20,11 @@ quarry-engine.workspace = true
 serde.workspace = true
 tauri.workspace = true
 tauri-plugin-window-state.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [features]
 # Embed the built frontend instead of using the dev server. Enabled by `tauri build`
