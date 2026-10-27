@@ -7,7 +7,7 @@ use quarry_model::ConnId;
 
 use crate::connections::TunnelUse;
 use crate::engine::{Engine, TabCancel, TabSession, close_shared, describe, is_lost, lock};
-use crate::{Event, TabId};
+use crate::{Event, LogSource, TabId};
 
 /// Whether a transaction is open after `sql` ran successfully, given whether one was open.
 pub(crate) fn transaction_after(mut open: bool, sql: &str) -> bool {
@@ -121,7 +121,11 @@ impl Engine {
             }
             tab_session.database = Some(db);
         }
-        match session.begin().await {
+        let begun = session.begin();
+        match self
+            .logged_step(tab, LogSource::Transaction, "BEGIN", begun)
+            .await
+        {
             Ok(()) => {
                 tab_session.in_transaction = true;
                 self.emit(state(true, None));
@@ -142,10 +146,13 @@ impl Engine {
             return self.emit(state(false, None));
         };
         let mut session = tab_session.session.lock().await;
+        let source = LogSource::Transaction;
         let result = if commit {
-            session.commit().await
+            self.logged_step(tab, source, "COMMIT", session.commit())
+                .await
         } else {
-            session.rollback().await
+            self.logged_step(tab, source, "ROLLBACK", session.rollback())
+                .await
         };
         match result {
             Ok(()) => {

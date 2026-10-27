@@ -8,6 +8,7 @@ mod browse;
 mod changes;
 mod command;
 mod connections;
+mod console;
 mod dispatch;
 mod edit;
 mod engine;
@@ -33,7 +34,7 @@ use std::thread;
 use crate::engine::Engine;
 
 pub use command::{Command, Password, PerfMark, RequestId, TabId};
-pub use event::{ConnState, Event, NoticeKind};
+pub use event::{ConnState, Event, LogEntry, LogSource, NoticeKind};
 /// Pure SQL text helpers (statement splitting, …), shared with clients.
 pub use quarry_sql as sql;
 

@@ -32,6 +32,45 @@ pub enum NoticeKind {
     Error,
 }
 
+/// What made a tab's session run a statement; the console filters on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum LogSource {
+    /// Typed in the editor, or a plan asked for from it.
+    Query,
+    /// A page of a table, or its row count.
+    Page,
+    /// Saving grid edits.
+    Edit,
+    /// Begin, commit or rollback from the toolbar.
+    Transaction,
+}
+
+/// One statement a tab's session ran, for the tab's console.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LogEntry {
+    #[ts(type = "string")]
+    pub at: chrono::DateTime<chrono::Utc>,
+    pub source: LogSource,
+    /// The statement, cut after a few kilobytes.
+    pub sql: String,
+    /// Until the server answered: the first rows, or the end of a statement without rows.
+    pub execute_ms: f64,
+    /// Receiving the rows after the first ones; `None` when the statement returned no rows.
+    pub fetch_ms: Option<f64>,
+    /// Rows returned, when the statement returned a result set.
+    #[ts(type = "number | null")]
+    pub rows: Option<u64>,
+    /// Rows changed, when the statement changed any.
+    #[ts(type = "number | null")]
+    pub affected: Option<u64>,
+    /// More rows came than a result keeps.
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+
 /// Something the engine reports to its client.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type")]
@@ -104,6 +143,12 @@ pub enum Event {
     },
     QueryStarted {
         tab: TabId,
+    },
+    /// A statement the tab's session ran, sent when it ended: typed queries, table pages, grid
+    /// edits and transactions alike.
+    StatementLog {
+        tab: TabId,
+        entry: LogEntry,
     },
     /// Statement `index` (from 0) of the `count` the run sends starts. A typed script runs its
     /// statements one at a time, in the order of `quarry_sql::script`; anything else is one

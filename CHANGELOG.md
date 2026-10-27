@@ -5,7 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- Controls sit with what they act on: an editor bar for SQL (Run turns into Stop while running), a data bar above every grid (reload, filter, columns, add and delete rows, save), and the status bar for pages. Table tabs have no separate toolbar. The row total is counted by clicking it.
+
 ### Added
+- Split the editor area: a tab's menu has Split right and Split down, then Move to other group and Unsplit. Each group has its own tabs.
+- Output panel at the bottom of the window, always there: the output of the selected tab, and the results of a query tab beside it (running a query shows them). Table tabs show their rows in the tab, without an SQL editor. A button moves a query tab's results under its editor and back.
+- Output: every statement a tab ran, with its time, how long the server took and how long the rows took to arrive, rows returned or changed, and errors; copy and clear. Query results get one tab each beside it, named after their table; a result tab can be closed until the next run.
 - Structure view shows one part at a time (Columns, Indexes, Foreign keys, DDL) as tabs with counts and a filter. An index or foreign key in the sidebar opens its tab with the row marked.
 - Sidebar tree: objects grouped as Tables, Views, Procedures, Functions, Triggers and Events with counts; a table opens to its indexes (primary key first) and foreign keys. Each kind of object has its own icon color.
 - Deleting rows from the grid asks first, from the Delete key, the edit bar and the context menu. Taking a deletion back, or removing a row you just added, does not ask.

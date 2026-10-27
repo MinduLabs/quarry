@@ -2,9 +2,10 @@
 
 use quarry_model::{ConnId, HistoryEntry, RowChange, SchemaChange, TableRef};
 
+use crate::console::Logged;
 use crate::engine::{Engine, describe, is_lost};
 use crate::query::run_plain;
-use crate::{Event, RequestId, TabId, edit, schema};
+use crate::{Event, LogSource, RequestId, TabId, edit, schema};
 
 /// Grid edits inside an open transaction run between these (standard SQL savepoints).
 pub(crate) const EDIT_SAVEPOINT: &str = "SAVEPOINT quarry_grid_edit";
@@ -60,19 +61,31 @@ impl Engine {
         let mut session = tab_session.session.lock().await;
         // Inside the user's transaction a savepoint keeps the batch all-or-nothing without
         // committing their other work.
+        let edit = LogSource::Edit;
         let started = if in_transaction {
-            run_plain(&mut **session, EDIT_SAVEPOINT).await
+            self.logged_step(
+                tab,
+                edit,
+                EDIT_SAVEPOINT,
+                run_plain(&mut **session, EDIT_SAVEPOINT),
+            )
+            .await
         } else {
-            session.begin().await
+            self.logged_step(tab, edit, "BEGIN", session.begin()).await
         };
         if let Err(err) = started {
             tab_session.is_lost |= is_lost(&err);
             return self.emit(failed(describe(&err)));
         }
         for statement in &statements {
+            let mut logged = Logged::start(edit, &statement.sql);
             let result = session
                 .execute_params(&statement.sql, &statement.params)
                 .await;
+            if let Ok(affected) = result {
+                logged.affected(affected);
+            }
+            self.log(tab, logged, result.as_ref().err().map(describe));
             let error = match result {
                 Ok(1) => None,
                 Ok(_) if !statement.one_row => None,
@@ -91,9 +104,11 @@ impl Engine {
             };
             if let Some(error) = error {
                 let undone = if in_transaction {
-                    run_plain(&mut **session, EDIT_ROLLBACK).await
+                    let undo = run_plain(&mut **session, EDIT_ROLLBACK);
+                    self.logged_step(tab, edit, EDIT_ROLLBACK, undo).await
                 } else {
-                    session.rollback().await
+                    self.logged_step(tab, edit, "ROLLBACK", session.rollback())
+                        .await
                 };
                 if let Err(err) = undone {
                     tracing::warn!(%err, "rollback after failed edit");
@@ -102,7 +117,8 @@ impl Engine {
             }
         }
         if in_transaction {
-            if let Err(err) = run_plain(&mut **session, EDIT_RELEASE).await {
+            let release = run_plain(&mut **session, EDIT_RELEASE);
+            if let Err(err) = self.logged_step(tab, edit, EDIT_RELEASE, release).await {
                 tab_session.is_lost |= is_lost(&err);
                 return self.emit(failed(describe(&err)));
             }
@@ -111,9 +127,15 @@ impl Engine {
                 message: format!("{summary} in the open transaction. Commit to keep them."),
             });
         }
-        if let Err(err) = session.commit().await {
+        if let Err(err) = self
+            .logged_step(tab, edit, "COMMIT", session.commit())
+            .await
+        {
             tab_session.is_lost |= is_lost(&err);
-            if let Err(err) = session.rollback().await {
+            if let Err(err) = self
+                .logged_step(tab, edit, "ROLLBACK", session.rollback())
+                .await
+            {
                 tracing::warn!(%err, "rollback after failed commit");
             }
             return self.emit(failed(describe(&err)));
