@@ -32,7 +32,7 @@ import { applyTheme, loadTheme, saveTheme, type ThemePref } from "@/lib/theme";
 import { quoteIdent } from "@/lib/values";
 
 /** Rows per page in a browse tab. */
-export const PAGE_SIZE = 1000;
+export const PAGE_SIZE = 500;
 
 export type ConnStatus =
   | { kind: "idle" }

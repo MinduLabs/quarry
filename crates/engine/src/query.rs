@@ -12,7 +12,7 @@ use crate::session::transaction_after;
 use crate::{Event, LogSource, NoticeKind, TabId, browse, perf};
 
 /// Rows kept per result set of a typed query; more are drained but not sent (`truncated`).
-pub(crate) const RUN_ROW_LIMIT: u64 = 1000;
+pub(crate) const RUN_ROW_LIMIT: u64 = 500;
 
 /// SQL for a tab, with its parameters.
 #[derive(Debug, Clone)]

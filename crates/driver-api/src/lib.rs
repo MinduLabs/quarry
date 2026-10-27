@@ -69,7 +69,7 @@ pub struct ExecOpts {
 impl Default for ExecOpts {
     fn default() -> Self {
         Self {
-            row_limit: Some(1000),
+            row_limit: Some(500),
             batch_size: 500,
         }
     }
