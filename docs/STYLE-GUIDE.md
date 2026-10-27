@@ -17,7 +17,7 @@ Quiet, dense, fast — a modern desktop tool.
 ## Rules for contributors and agents
 
 1. Use tokens only. No hex/rgb values in components, no Tailwind arbitrary colors (`bg-[#fff]`). Need a new color? Add a token to `tokens.css` (light **and** dark) and list it below.
-2. Build from `ui/src/components/ui/`. Reuse `Button`, `IconButton`, `Input`, `Select`, `Switch`, `Dialog`, `ConfirmDialog`, `Tooltip`, `Badge`, `Menu`; add a primitive there before inventing a one-off.
+2. Build from the primitives in `ui/src/components/ui/`; add a primitive there before inventing a one-off.
 3. Every interactive element works with the keyboard and shows `focus-visible` styling.
 4. Icons: `lucide-react`, 16px (14px in dense rows), `strokeWidth={1.75}`, color `currentColor`.
 5. Animate only `opacity` and `transform` (WebKitGTK on Linux is slow at layout animations). Never `transition: all`. No `backdrop-filter`, no large blurred shadows.

@@ -10,33 +10,31 @@ paths:
 
 # Rust core
 
-## Dependency direction
-
-`src-tauri → engine → {driver-api, sql, store, tunnel} → model`, and `engine → drivers/*`.
+## Crates
 
 - `model` imports no internal crate and does no IO.
-- `driver-api`, `sql`, `store`, `tunnel` import `model` (and `driver-api` for drivers), never `engine`.
-- Only `engine` names a concrete driver. `src-tauri` reaches the core through `quarry_engine`.
-- A new crate goes in `[workspace] members`, gets `[workspace.dependencies]` entry `quarry-<name>`, `[lints] workspace = true`, and an AGPL exception in `deny.toml`.
+- `driver-api`, `sql`, `store`, `tunnel` never import `engine`.
+- A new crate: add it to `[workspace] members`, add a `quarry-<name>` entry in
+  `[workspace.dependencies]`, set `[lints] workspace = true`, and add its AGPL exception in
+  `deny.toml`.
 
-## Lints and style
+## Errors and logging
 
-- `unsafe_code`, `unwrap_used`, `expect_used`, `dbg_macro` are `deny`; `todo` and `missing_debug_implementations` warn. `clippy.toml` allows `unwrap` / `expect` in tests only.
-- Handle the failure or return it. In places that cannot fail meaningfully, use `unwrap_or_else(|p| p.into_inner())` for poisoned locks (see `lock()` in the engine) or log and continue.
-- `cargo fmt --all`, width 100, edition 2024. Let-chains (`if let … && …`) are fine on this toolchain.
-- Library errors: `thiserror`. Boundary code converts to a user-facing `String` once, in the engine.
-- Log with `tracing` (`warn!`, `error!` with fields). Never log a password, a DSN with a password, or a full SQL result.
-- `missing_debug_implementations`: any type holding a secret implements `Debug` by hand and redacts it.
+- Handle the failure or return it. A poisoned lock recovers with `unwrap_or_else(|p| p.into_inner())`.
+- Library errors use `thiserror`. Boundary code turns them into user-facing text once, in the engine.
+- Log with `tracing` fields. Never log a password, a DSN with a password, or result values.
+- A type holding a secret implements `Debug` by hand and redacts it.
 
 ## Store
 
-- `connections.toml` lives in the OS config dir (`~/.config/quarry`, `~/Library/Application Support/quarry`), has `version`, and never holds secrets.
-- Secrets: keyring service `quarry`, account `<connection uuid>` (database password) or `<connection uuid>:ssh` (SSH password or key passphrase), chosen by `SecretKind`. Linux uses `oo7` (Secret Service); macOS uses `security-framework`. A missing item is not an error.
-- Other files: `favorites.toml` (config dir), `workspace.json` and `history.jsonl` (data dir). Writes go through `write_atomic`; a file another task may write at the same time takes a lock.
-- A format change bumps `SCHEMA_VERSION` and adds a migration with a test that loads an old file.
+- Config and data files are written through `write_atomic`. A file another task may write at the
+  same time takes a lock.
+- A format change bumps the file's `SCHEMA_VERSION` and adds a migration with a test that loads an
+  old file.
+- A missing keyring item is not an error. Keyring account names are part of the stored format:
+  changing one needs a migration.
 
 ## Tests
 
-- Unit tests beside the code; `unwrap` is allowed there.
-- `cargo test --workspace` must pass without Docker. Anything needing MySQL checks `QUARRY_TEST_MYSQL` and returns early when it is unset.
-- Run `just check` before you say a Rust change is done.
+- `cargo test --workspace` passes without Docker. A test that needs a server checks its
+  `QUARRY_TEST_*` variable and returns early when it is unset.

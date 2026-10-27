@@ -8,38 +8,33 @@ paths:
 
 # UI
 
-Read [docs/STYLE-GUIDE.md](../../docs/STYLE-GUIDE.md) first. It is the source of truth for look and motion. This file covers how the code is organized.
+Look and motion: [docs/STYLE-GUIDE.md](../../docs/STYLE-GUIDE.md). This file covers how the code is
+written.
 
-## Structure
+## Code
 
-- `ui/src/features/<name>/`: one folder per feature (`sidebar`, `connections`, `tabs`, `editor`, `query`, `grid`, `welcome`, `window`).
-- `ui/src/components/ui/`: shared primitives (`Button`, `IconButton`, `Input`, `Select`, `Switch`, `Dialog`, `ConfirmDialog`, `Tooltip`, `Badge`, `Menu`, `Kbd`, `Toaster`, `Spinner`, `ErrorNotice`, `SegmentedTabs`, `TreeRow`, `ObjectIcon`). Add a primitive here before a one-off.
-- `ui/src/store/app.ts`: zustand store. `handleEvent` reduces engine events; actions call `send`. Components read state and call actions.
-- `ui/src/lib/engine.ts`: the only place that calls `invoke`.
-- `ui/src/styles/tokens.css`: design tokens (light and dark). `base.css`: global styles and animation utilities.
-- `ui/src/bindings/`: generated. Never edit.
+- State lives in `store/app.ts`. Engine calls (`send`) live in store actions, never in components.
+- `lib/engine.ts` is the only place that calls `invoke`.
+- `bindings/` is generated. Never edit it.
+- Build from the primitives in `components/ui/`. Add a primitive there before writing a one-off.
+- A question before an action that loses data or may surprise is a `ConfirmDialog`, never a one-off
+  `Dialog`.
+- Enable features from `Capabilities`, never from the driver name.
+- Never classify SQL in TypeScript to decide safety. The engine does that.
+- Cell values are `Value` (`{t, v}`); format them through `lib/values.ts`. Never pass a 64-bit
+  integer through `Number`.
+- Shortcuts are declared once in `lib/shortcuts.ts`.
+- TypeScript is strict with `noUncheckedIndexedAccess`: handle `undefined` from indexing.
 
-## Rules
+## Performance
 
-- Tokens only: no hex / rgb in components, no Tailwind arbitrary colors. A new color is a token in both themes.
-- A question before an action that loses data or may surprise (delete, run on production, close with a transaction open) is a `ConfirmDialog`, never a one-off `Dialog` with Cancel and Run buttons. Delete actions are asked first, also when they are staged until Save.
-- Build from primitives. Icons are `lucide-react`, 16px (14px dense), `strokeWidth={1.75}`.
-- Animate only `opacity` and `transform`. Never `transition: all`, `backdrop-filter` or large blurred shadows. Do not override the global `prefers-reduced-motion` handling.
-- Every interactive element works by keyboard and shows `focus-visible`.
-- Never branch on the driver name. Enable features from `Capabilities`.
-- Never classify SQL in TypeScript to decide safety. The engine does that (`ConfirmRequired`).
-- Never keep engine calls in components. Put them in a store action.
-- Cell values are `Value` (`{t, v}`); format them through `lib/values.ts`. Do not stringify a 64-bit integer through `Number`.
-- Large lists (grid rows, tree) stay virtualized. Per-row cost must not grow with the result size.
-- Strings: sentence case, "…" for actions that open a dialog, shortcuts drawn with `Kbd`.
-- TypeScript is strict with `noUncheckedIndexedAccess`; handle `undefined` from indexing. No `any`. Imports use `@/`.
+- Every tab stays mounted. Big components (`QueryView`, `ResultGrid`, `Sidebar`) are memoized with
+  stable props: a keystroke must not re-render other tabs, the grid's cells or the tree.
+- The grid and the sidebar tree stay virtualized. No per-row React state that re-renders the list;
+  per-row cost must not grow with the result size.
+- Animate only `opacity` and `transform` (WebKitGTK is slow at layout animation).
 
 ## Verify
 
-```bash
-pnpm check        # Biome + tsc
-pnpm build        # tsc + vite build
-just dev          # look at it: light and dark, narrow window (min 760x480), sidebar hidden
-```
-
-There is no UI test runner. State what you checked by hand. A UI PR needs light and dark screenshots.
+- `pnpm check`, then look at it in `just dev`: light and dark, a narrow window, sidebar hidden.
+- There is no UI test runner. State what you checked by hand.
