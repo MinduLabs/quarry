@@ -56,11 +56,22 @@ means this step is missing. Without these libraries you can still run `pnpm chec
 pnpm install
 just dev            # run the app with hot reload
 just check          # Biome + tsc + cargo fmt/clippy/test (just check-docker without webkit2gtk)
-just db-up          # start the test MySQL on 127.0.0.1:13306
+just db-up          # start the test MySQL on 127.0.0.1:13306 (user quarry / password quarry)
 just test-db        # driver and engine integration tests
 just bindings       # regenerate ui/src/bindings after changing Command/Event or model types
 just bench          # release benchmarks (history file; query latency needs just db-up)
 ```
+
+### Sample data to try the app
+
+`just db-up` also loads `playground.samples`: 5000 rows with one column of every MySQL type, edge
+values in the first ten rows (minimum and maximum of each type, all NULL, empty strings, quotes
+and emoji, long text, zero dates, JSON `null`) and NULLs spread through the rest. Add a connection
+to `127.0.0.1:13306` as `quarry` / `quarry` and open it. The file explains each row:
+[tests/fixtures/mysql/02-playground.sql](tests/fixtures/mysql/02-playground.sql). A new feature
+that needs a kind of data the table lacks adds it there, with a line in the test
+`playground_samples_cover_every_type`. The fixtures only load into a fresh container:
+`just db-down && just db-up` after changing them.
 
 ### Measuring performance
 

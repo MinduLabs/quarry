@@ -464,3 +464,58 @@ async fn parameterized_query_with_no_rows_ends() {
         .count();
     assert_eq!(sets, 1, "one empty result set");
 }
+
+/// `playground.samples` (tests/fixtures/mysql/02-playground.sql) is what people open to try the
+/// app, so every type in it must keep arriving as a value the grid can show.
+#[tokio::test]
+async fn playground_samples_cover_every_type() {
+    if config("quarry").is_none() {
+        return;
+    }
+    let opts = ExecOpts {
+        row_limit: Some(6000),
+        ..ExecOpts::default()
+    };
+    let items = run("SELECT * FROM playground.samples ORDER BY id", opts).await;
+    let mut names = Vec::new();
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    for item in items {
+        match item {
+            ExecItem::Columns(columns) => names = columns.into_iter().map(|c| c.name).collect(),
+            ExecItem::Rows(batch) => rows.extend(batch),
+            _ => {}
+        }
+    }
+    assert_eq!(rows.len(), 5000);
+    let at = |name: &str| names.iter().position(|n| n == name).unwrap();
+    let cell = |id: usize, name: &str| rows[id - 1][at(name)].clone();
+
+    assert_eq!(cell(1, "c_bigint"), Value::Int(i64::MIN));
+    assert_eq!(cell(2, "c_ubigint"), Value::UInt(u64::MAX));
+    assert_eq!(
+        cell(2, "c_decimal_wide"),
+        Value::Decimal("99999999999999999999999999999.9999999999".into())
+    );
+    assert!(cell(3, "c_json").is_null() && cell(3, "c_point").is_null());
+    assert_eq!(cell(4, "c_varchar"), Value::Text("NULL".into()));
+    assert!(matches!(cell(5, "c_text"), Value::Text(t) if t.contains("👋") && t.contains('\n')));
+    assert!(matches!(cell(6, "c_blob"), Value::Bytes(b) if b.len() == 4096));
+    // A zero date cannot be a date: it stays text, and the row is still shown.
+    assert_eq!(cell(8, "c_date"), Value::Text("0000-00-00".into()));
+    // JSON `null` is a value; SQL NULL is not.
+    assert_eq!(cell(9, "c_json"), Value::Json("null".into()));
+
+    // Every nullable column shows both a value and a NULL, and none falls back to `Other`.
+    let always = ["id", "grp", "code", "c_stored"];
+    for (position, name) in names.iter().enumerate() {
+        let column = || rows.iter().map(|r| &r[position]);
+        assert!(column().any(|v| !v.is_null()), "{name} is always NULL");
+        assert!(
+            !column().any(|v| matches!(v, Value::Other { .. })),
+            "{name} arrives as Other"
+        );
+        if !always.contains(&name.as_str()) {
+            assert!(column().any(Value::is_null), "{name} is never NULL");
+        }
+    }
+}
