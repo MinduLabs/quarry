@@ -14,6 +14,7 @@ import {
   type ConnNode,
   copyText,
   type DbNode,
+  shownSchemas,
   type TreeTableInfo,
   treeKey,
   useApp,
@@ -152,6 +153,7 @@ function linesOf(
   needle: string,
   treeOpen: Record<string, boolean>,
   tableInfos: Record<string, TreeTableInfo>,
+  schemaFilter: Record<string, string[]>,
 ): Line[] {
   const lines: Line[] = [];
   for (const config of connections) {
@@ -159,8 +161,14 @@ function linesOf(
     const connected = node?.status.kind === "connected";
     const nameMatches = !needle || config.name.toLowerCase().includes(needle);
     const databases: Array<{ db: DbNode; objects: SchemaObject[] | null }> = [];
+    // Only the ticked schemas are listed; the rest are behind the count next to the connection.
+    const shown =
+      connected && node
+        ? shownSchemas(config.database, node.databases, schemaFilter[config.id])
+        : null;
     if (connected && node && (nameMatches ? node.expanded : true)) {
       for (const db of node.databases) {
+        if (shown && !shown.has(db.name)) continue;
         if (nameMatches || db.name.toLowerCase().includes(needle)) {
           databases.push({ db, objects: null });
           continue;
@@ -178,6 +186,15 @@ function linesOf(
       expanded: connected ? node?.expanded || !nameMatches : undefined,
     });
     if (!node) continue;
+    if (connected && node.expanded && !needle && shown?.size === 0) {
+      lines.push({
+        kind: "note",
+        key: `${config.id}#no-schemas`,
+        text: "No schemas shown. Click the count to choose.",
+        danger: false,
+        depth: 0,
+      });
+    }
     for (const { db, objects } of databases) {
       // A database shown for its matching objects is open and lists only those.
       const open = objects !== null || db.expanded;
@@ -332,9 +349,10 @@ export const ConnectionTree = memo(function ConnectionTree({
   const nodes = useApp((s) => s.nodes);
   const treeOpen = useApp((s) => s.treeOpen);
   const tableInfos = useApp((s) => s.tableInfos);
+  const schemaFilter = useApp((s) => s.schemaFilter);
   const lines = useMemo(
-    () => linesOf(connections, nodes, needle, treeOpen, tableInfos),
-    [connections, nodes, needle, treeOpen, tableInfos],
+    () => linesOf(connections, nodes, needle, treeOpen, tableInfos, schemaFilter),
+    [connections, nodes, needle, treeOpen, tableInfos, schemaFilter],
   );
   const scroller = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -484,6 +502,7 @@ function ConnectionLine({
         }}
         trailing={
           <span className="flex items-center gap-1.5">
+            {connected && node && <SchemaCount config={config} node={node} />}
             <EnvBadge environment={config.environment} />
             {status === "connecting" && <Spinner size={12} />}
             {status === "connected" && <span className="size-1.5 rounded-full bg-env-local" />}
@@ -492,6 +511,26 @@ function ConnectionLine({
         }
       />
     </ContextMenuArea>
+  );
+}
+
+/** "3/20": the schemas shown of all the connection has. A click opens the list to tick them. */
+function SchemaCount({ config, node }: { config: ConnectionConfig; node: ConnNode }) {
+  const saved = useApp((s) => s.schemaFilter[config.id]);
+  const shown = shownSchemas(config.database, node.databases, saved).size;
+  return (
+    <button
+      type="button"
+      title="Choose the schemas to show"
+      aria-label={`${shown} of ${node.databases.length} schemas shown. Choose schemas`}
+      onClick={(event) => {
+        event.stopPropagation();
+        useApp.getState().setSchemaPicker(config.id);
+      }}
+      className="rounded-sm px-1 text-muted text-xs tabular-nums transition-colors-fast hover:bg-hover hover:text-fg"
+    >
+      {shown}/{node.databases.length}
+    </button>
   );
 }
 

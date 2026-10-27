@@ -617,6 +617,14 @@ export interface AppState {
   openServerInfo: (conn: string, kind: ServerInfoKind) => void;
   closeServerInfo: () => void;
 
+  /** Schemas ticked in each connection's "choose schemas" list; a connection never chosen for
+   * has no entry (see `shownSchemas`). Remembered between launches. */
+  schemaFilter: Record<string, string[]>;
+  setShownSchemas: (conn: string, names: string[]) => void;
+  /** The connection whose schema list is open, if any. */
+  schemaPicker: string | null;
+  setSchemaPicker: (conn: string | null) => void;
+
   loadHistory: (query: string, conn: string | null) => void;
   /** The query history dialog, opened from the editor toolbar. */
   historyOpen: boolean;
@@ -649,6 +657,37 @@ function loadSidebarOpen(): boolean {
   } catch {
     return true;
   }
+}
+
+const SCHEMAS_KEY = "quarry.shownSchemas";
+
+function loadSchemaFilter(): Record<string, string[]> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(SCHEMAS_KEY) ?? "{}");
+    if (typeof saved !== "object" || saved === null) return {};
+    const filter: Record<string, string[]> = {};
+    for (const [conn, names] of Object.entries(saved)) {
+      if (Array.isArray(names)) filter[conn] = names.filter((n) => typeof n === "string");
+    }
+    return filter;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The schemas the tree lists for a connection: the ticked ones that still exist, or, before the
+ * user ever chose, only the connection's own default schema. System schemas and the rest stay
+ * behind the "choose schemas" list.
+ */
+export function shownSchemas(
+  defaultDatabase: string | null,
+  databases: DbNode[],
+  saved: string[] | undefined,
+): Set<string> {
+  const existing = new Set(databases.map((db) => db.name));
+  const names = saved ?? (defaultDatabase ? [defaultDatabase] : []);
+  return new Set(names.filter((name) => existing.has(name)));
 }
 
 /** What "Reopen closed tab" brings back: the same things a restart restores. */
@@ -999,6 +1038,19 @@ export const useApp = create<AppState>()((set, get) => {
       send({ type: "LoadServerInfo", request, conn, kind });
     },
     closeServerInfo: () => set({ serverInfo: null }),
+    schemaFilter: loadSchemaFilter(),
+    setShownSchemas: (conn, names) =>
+      set((s) => {
+        const schemaFilter = { ...s.schemaFilter, [conn]: names };
+        try {
+          localStorage.setItem(SCHEMAS_KEY, JSON.stringify(schemaFilter));
+        } catch {
+          // Not remembered; the choice still applies for this run.
+        }
+        return { schemaFilter };
+      }),
+    schemaPicker: null,
+    setSchemaPicker: (schemaPicker) => set({ schemaPicker }),
     sidebarPane: "connections",
     setSidebarPane: (sidebarPane) => set({ sidebarPane }),
     favorites: [],
