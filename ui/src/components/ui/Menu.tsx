@@ -6,6 +6,8 @@ import { cn } from "@/lib/cn";
 
 export interface MenuItem {
   label: string;
+  /** Tells apart items that share a label (two tabs with one title); the label by default. */
+  id?: string;
   onSelect: () => void;
   danger?: boolean;
   /** A line above this item; ignored on the first item, so optional items above it can go. */
@@ -71,7 +73,7 @@ export function DropdownMenuButton({ items, trigger }: { items: MenuItem[]; trig
           )}
         >
           {items.map((item, index) => (
-            <div key={item.label}>
+            <div key={item.id ?? item.label}>
               {item.separatorBefore && index > 0 && (
                 <DropdownMenu.Separator className="my-1 h-px bg-line" />
               )}

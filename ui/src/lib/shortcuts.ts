@@ -24,6 +24,7 @@ export const SHORTCUTS = {
   runAll: { label: "Run all", group: "Editor", keys: ["Mod", "Shift", "Enter"] },
   format: { label: "Format SQL", group: "Editor", keys: ["Mod", "Shift", "F"] },
   complete: { label: "Show completions", group: "Editor", keys: ["Ctrl", "Space"] },
+  acceptCompletion: { label: "Accept the suggestion", group: "Editor", keys: ["Tab"] },
   comment: { label: "Comment or uncomment", group: "Editor", keys: ["Mod", "/"] },
   find: { label: "Find in the editor", group: "Editor", keys: ["Mod", "F"] },
   // ⌘H hides the app on macOS, so the Mac uses ⌘Y (Safari's history key).

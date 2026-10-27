@@ -18,6 +18,7 @@ import { SchemaFormDialog } from "./features/schema/SchemaFormDialog";
 import { SchemaReviewDialog } from "./features/schema/SchemaReviewDialog";
 import { ServerInfoDialog } from "./features/server/ServerInfoDialog";
 import { SettingsDialog } from "./features/settings/SettingsDialog";
+import { SchemaPickerDialog } from "./features/sidebar/SchemaPickerDialog";
 import { Sidebar } from "./features/sidebar/Sidebar";
 import { SidebarToggle } from "./features/sidebar/SidebarToggle";
 import { CloseTabDialog } from "./features/tabs/CloseTabDialog";
@@ -188,6 +189,7 @@ export function App() {
       <CommandPalette />
       <HistoryDialog />
       <ServerInfoDialog />
+      <SchemaPickerDialog />
       <CloseTabDialog />
       <QuitDialog />
       <Toaster />
