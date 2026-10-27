@@ -1,4 +1,5 @@
 import {
+  acceptCompletion,
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
@@ -150,6 +151,9 @@ export function SqlEditor({
             ...historyKeymap,
             ...searchKeymap,
             ...completionKeymap,
+            // Before `indentWithTab`: Tab accepts the open suggestion, and indents otherwise
+            // (`acceptCompletion` returns false when no list is open).
+            { key: "Tab", run: acceptCompletion },
             indentWithTab,
           ]),
           placeholder("Write SQL…  Run the statement under the cursor with Ctrl/⌘ Enter"),
