@@ -105,7 +105,7 @@ Fonts are bundled (`@fontsource-variable/*`), so both platforms render the same.
 - Two buttons that are never usable at once are one button (Run / Stop). A menu with one or two items is shown as buttons instead.
 - Pinned tabs show a pin icon, are narrower and have no close button; they always sit before the unpinned ones.
 - Every tab stays mounted, so `QueryView` and `ResultGrid` are memoized and get stable props (`useMemo` / `useCallback`): typing in one tab re-renders neither the other tabs nor the visible cells.
-- Tabs stay neutral: the environment shows as the badge in the toolbar and a 2px line along the top of the query view, never as a tab color.
+- Tabs stay neutral: the environment shows as a 2px line along the top of the query view (and a badge in the sidebar), never as a tab color.
 - No tabs open → centered empty state in the content area.
 
 ## Motion

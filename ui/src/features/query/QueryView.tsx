@@ -13,7 +13,6 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SchemaObject } from "@/bindings/SchemaObject";
 import type { TableColumns } from "@/bindings/TableColumns";
-import { EnvBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { DropdownMenuButton, type MenuItem } from "@/components/ui/Menu";
@@ -231,15 +230,9 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
     />
   );
 
-  /** What the tab runs against: the environment, connection and database. */
-  const scope = (
-    <div className="ml-1 flex min-w-0 items-center gap-2 pr-1 text-sm text-muted">
-      {config && <EnvBadge environment={config.environment} />}
-      <span className="truncate">
-        {config?.name}
-        {tab.database && <span className="text-faint"> · {tab.database}</span>}
-      </span>
-    </div>
+  /** The schema the tab runs against. The environment shows as the line along the top. */
+  const scope = tab.database && (
+    <span className="ml-1 min-w-0 truncate pr-1 text-muted text-sm">{tab.database}</span>
   );
   /** The session's open transaction: shown only while there is one. */
   const transaction = capabilities?.transactions && tab.txOpen && (
