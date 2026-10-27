@@ -56,7 +56,7 @@ export function SchemaPickerDialog() {
         </Button>
       }
     >
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-full min-h-0 w-full flex-col">
         <div className="flex items-center gap-2 border-line border-b p-3">
           <Input
             autoFocus
