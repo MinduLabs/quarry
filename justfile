@@ -34,21 +34,17 @@ check-docker:
     pnpm check
     {{docker_linux}} --target check --output type=cacheonly .
 
-# Start / stop the test MySQL (127.0.0.1:13306) and SSH server (127.0.0.1:12222)
-db-up:
-    docker compose -f tests/docker-compose.yml up -d --wait
-
-db-down:
-    docker compose -f tests/docker-compose.yml down -v
-
-# Integration tests against the test database (and the SSH server for tunnels)
+# Integration tests against the test databases and the SSH server (tests/docker-compose.yml,
+# started here). `docker compose -f tests/docker-compose.yml down -v` drops them.
 test-db:
+    docker compose -f tests/docker-compose.yml up -d --wait
     cargo build {{drivers}} --bins
     QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_POSTGRES=127.0.0.1:15432 QUARRY_TEST_SQLSERVER=127.0.0.1:11433 QUARRY_TEST_SSH=127.0.0.1:12222 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" cargo test {{drivers}} -p quarry-engine
 
-# Benchmarks in a release build: the history file, and query latency on the test MySQL (`just db-up` first)
+# Benchmarks in a release build: the history file, and query latency on the test MySQL
 bench:
     cargo test --release -q -p quarry-store --test bench -- --ignored --nocapture
+    docker compose -f tests/docker-compose.yml up -d --wait mysql
     cargo build --release -q {{drivers}} --bins
     QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/release" cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
 

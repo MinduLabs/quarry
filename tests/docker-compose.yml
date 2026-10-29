@@ -1,5 +1,5 @@
-# Databases for integration tests and for trying the app.
-#   docker compose -f tests/docker-compose.yml up -d
+# Databases for integration tests (`just test-db` starts them).
+#   docker compose -f tests/docker-compose.yml up -d --wait
 # MySQL: 127.0.0.1:13306, user quarry / password quarry (test values only)
 # PostgreSQL: 127.0.0.1:15432, user quarry / password quarry, database shop (test values only)
 # SQL Server: 127.0.0.1:11433, user sa / password Quarry-test-1, database shop (test values only)
