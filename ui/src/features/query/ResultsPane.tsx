@@ -1,4 +1,4 @@
-import { Columns3, Filter, Minus, Plus, RotateCw, Square } from "lucide-react";
+import { Columns3, Download, Filter, Minus, Plus, RotateCw, Square } from "lucide-react";
 import { memo, Profiler, type ReactNode, useCallback, useMemo, useState } from "react";
 import type { Value } from "@/bindings/Value";
 import { Button } from "@/components/ui/Button";
@@ -98,7 +98,7 @@ export const ResultsPane = memo(function ResultsPane({
       transfer(
         "export",
         tab.browse && tab.paged
-          ? { kind: "table", conn: tab.connId, table: tab.browse.table }
+          ? { kind: "table", conn: tab.connId, table: tab.browse.table, query: tab.browse.query }
           : { kind: "result", tab: tab.id },
       ),
     [tab.id, tab.connId, tab.browse, tab.paged, transfer],
@@ -218,6 +218,7 @@ export const ResultsPane = memo(function ResultsPane({
           isFiltering={showFilters}
           onToggleFilters={() => setFiltering((f) => !f)}
           columnItems={active?.columns && planText === null ? columnItems : null}
+          onExport={exportResult}
           end={barEnd}
         />
       )}
@@ -236,13 +237,25 @@ export const ResultsPane = memo(function ResultsPane({
       <div className={cn("relative min-h-0 flex-1", consoleOpen && "hidden")}>
         {planText !== null && <ExplainTree text={planText} />}
         {tab.running && tab.sets.length === 0 && (
-          <div className="animate-fade flex h-full flex-col items-center justify-center gap-2">
+          <div
+            style={LOADING_DELAY}
+            className="animate-fade flex h-full flex-col items-center justify-center gap-2"
+          >
             <Spinner size={18} />
             {tab.progress && (
               <p className="max-w-full truncate px-4 text-muted text-sm">
                 {statementLabel(tab.progress.index, tab.progress.count, runTexts)}
               </p>
             )}
+          </div>
+        )}
+        {/* A page change keeps the old page under a veil, so the grid never blinks away. */}
+        {tab.running && tab.sets.length > 0 && tab.browse && tab.paged && (
+          <div
+            style={LOADING_DELAY}
+            className="animate-fade absolute inset-0 z-30 flex items-center justify-center bg-app/60"
+          >
+            <Spinner size={18} />
           </div>
         )}
         {!tab.running && tab.error && (
@@ -310,6 +323,12 @@ export const ResultsPane = memo(function ResultsPane({
   );
 });
 
+/**
+ * Loading shows only after a short wait and fades in, so a fast load never flashes a spinner.
+ * `backwards` keeps it invisible during the wait.
+ */
+const LOADING_DELAY = { animationDelay: "150ms", animationFillMode: "backwards" } as const;
+
 function plural(n: number, word: string): string {
   return `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 }
@@ -371,6 +390,7 @@ function DataBar({
   isFiltering,
   onToggleFilters,
   columnItems,
+  onExport,
   end,
 }: {
   tab: Tab;
@@ -380,6 +400,8 @@ function DataBar({
   onToggleFilters: () => void;
   /** The column visibility menu, when the rows have columns. */
   columnItems: MenuItem[] | null;
+  /** Open the export dialog for what the data bar shows. */
+  onExport: () => void;
   end?: ReactNode;
 }) {
   const rows = span
@@ -435,6 +457,9 @@ function DataBar({
           }
         />
       )}
+      <IconButton label="Export" size="sm" disabled={tab.running} onClick={onExport}>
+        <Download size={14} strokeWidth={1.75} />
+      </IconButton>
       {target && (
         <div className="ml-1 flex items-center gap-0.5 border-line border-l pl-1.5">
           {target.canInsert && (

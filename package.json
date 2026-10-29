@@ -30,6 +30,7 @@
     "@radix-ui/react-tooltip": "^1.4.1",
     "@tanstack/react-virtual": "^3.14.20",
     "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
     "clsx": "^2.1.1",
     "dt-sql-parser": "4.5.1",
     "lucide-react": "^1.58.0",

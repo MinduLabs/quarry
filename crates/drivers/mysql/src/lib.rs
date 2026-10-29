@@ -12,7 +12,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, QueryResult, SslOpts};
 use quarry_driver_api::{
     CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig,
-    Result, Session, SharedCancel,
+    Result, RowSink, Session, SharedCancel,
 };
 use quarry_model::{
     Capabilities, DriverId, ErrorLocation, ObjectKind, SchemaChange, SchemaObject, ServerInfoKind,
@@ -147,8 +147,9 @@ impl Session for MysqlSession {
     async fn execute(&mut self, sql: &str, opts: &ExecOpts, sink: ExecSink<'_>) -> Result<()> {
         let started = Instant::now();
         let result = self.conn.query_iter(sql).await.map_err(map_err)?;
-        stream(result, opts, sink).await?;
-        sink(ExecItem::Done {
+        let mut sink = FnSink(sink);
+        stream(result, opts, &mut sink).await?;
+        (sink.0)(ExecItem::Done {
             elapsed: started.elapsed(),
         });
         Ok(())
@@ -164,10 +165,34 @@ impl Session for MysqlSession {
         let started = Instant::now();
         let params: Vec<mysql_async::Value> = params.iter().map(convert::to_mysql).collect();
         let result = self.conn.exec_iter(sql, params).await.map_err(map_err)?;
-        stream(result, opts, sink).await?;
-        sink(ExecItem::Done {
+        let mut sink = FnSink(sink);
+        stream(result, opts, &mut sink).await?;
+        (sink.0)(ExecItem::Done {
             elapsed: started.elapsed(),
         });
+        Ok(())
+    }
+
+    async fn stream(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        opts: &ExecOpts,
+        sink: &mut dyn RowSink,
+    ) -> Result<()> {
+        let started = Instant::now();
+        if params.is_empty() {
+            let result = self.conn.query_iter(sql).await.map_err(map_err)?;
+            stream(result, opts, sink).await?;
+        } else {
+            let params: Vec<mysql_async::Value> = params.iter().map(convert::to_mysql).collect();
+            let result = self.conn.exec_iter(sql, params).await.map_err(map_err)?;
+            stream(result, opts, sink).await?;
+        }
+        sink.accept(ExecItem::Done {
+            elapsed: started.elapsed(),
+        })
+        .await;
         Ok(())
     }
 
@@ -312,11 +337,23 @@ impl Session for MysqlSession {
     }
 }
 
+/// A plain callback as a [`RowSink`]: it never waits and never stops the read.
+struct FnSink<'a>(ExecSink<'a>);
+
+#[async_trait]
+impl RowSink for FnSink<'_> {
+    async fn accept(&mut self, item: ExecItem) -> bool {
+        (self.0)(item);
+        true
+    }
+}
+
 /// Send every result set of `result` to `sink`, keeping at most `opts.row_limit` rows per set.
+/// Stops as soon as the sink says so.
 async fn stream<P: mysql_async::prelude::Protocol>(
     mut result: QueryResult<'_, '_, P>,
     opts: &ExecOpts,
-    sink: ExecSink<'_>,
+    sink: &mut dyn RowSink,
 ) -> Result<()> {
     let limit = opts.row_limit.unwrap_or(u64::MAX);
     let batch_size = opts.batch_size.max(1);
@@ -333,17 +370,21 @@ async fn stream<P: mysql_async::prelude::Protocol>(
         if columns.is_empty() {
             let affected = result.affected_rows();
             result.next().await.map_err(map_err)?;
-            sink(ExecItem::SetDone {
+            let item = ExecItem::SetDone {
                 affected,
                 rows: 0,
                 truncated: false,
-            });
+            };
+            if !sink.accept(item).await {
+                return Ok(());
+            }
             continue;
         }
 
-        sink(ExecItem::Columns(
-            columns.iter().map(convert::column_meta).collect(),
-        ));
+        let item = ExecItem::Columns(columns.iter().map(convert::column_meta).collect());
+        if !sink.accept(item).await {
+            return Ok(());
+        }
         let mut batch = Vec::with_capacity(batch_size);
         let mut rows: u64 = 0;
         let mut truncated = false;
@@ -363,20 +404,23 @@ async fn stream<P: mysql_async::prelude::Protocol>(
                     .collect(),
             );
             if batch.len() == batch_size {
-                sink(ExecItem::Rows(std::mem::replace(
-                    &mut batch,
-                    Vec::with_capacity(batch_size),
-                )));
+                let full = std::mem::replace(&mut batch, Vec::with_capacity(batch_size));
+                if !sink.accept(ExecItem::Rows(full)).await {
+                    return Ok(());
+                }
             }
         }
-        if !batch.is_empty() {
-            sink(ExecItem::Rows(batch));
+        if !batch.is_empty() && !sink.accept(ExecItem::Rows(batch)).await {
+            return Ok(());
         }
-        sink(ExecItem::SetDone {
+        let item = ExecItem::SetDone {
             affected: 0,
             rows,
             truncated,
-        });
+        };
+        if !sink.accept(item).await {
+            return Ok(());
+        }
     }
     Ok(())
 }

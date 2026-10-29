@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use quarry_driver_api::{DriverError, Session};
-use quarry_model::{ConnId, ServerInfoKind, TableRef};
+use quarry_model::{ConnId, ServerInfoKind, TableInfo, TableRef};
 
 use crate::connections::TunnelUse;
 use crate::engine::{Engine, SharedSession, describe, is_lost, lock};
@@ -151,18 +151,24 @@ impl Engine {
         Ok(fresh)
     }
 
+    /// Columns, keys and indexes of `table`, read on the metadata session.
+    pub(crate) async fn table_info_of(
+        &self,
+        conn: ConnId,
+        table: &TableRef,
+    ) -> Result<TableInfo, String> {
+        let meta = self.meta_session(conn).await?;
+        self.with_meta(conn, meta, |s| {
+            let table = table.clone();
+            Box::pin(async move { s.table_info(&table).await })
+        })
+        .await
+        .map_err(|e| describe(&e))
+    }
+
     pub(crate) async fn load_table_info(&self, request: RequestId, conn: ConnId, table: TableRef) {
         let started = Instant::now();
-        let result = match self.meta_session(conn).await {
-            Ok(meta) => self
-                .with_meta(conn, meta, |s| {
-                    let table = table.clone();
-                    Box::pin(async move { s.table_info(&table).await })
-                })
-                .await
-                .map_err(|e| describe(&e)),
-            Err(error) => Err(error),
-        };
+        let result = self.table_info_of(conn, &table).await;
         let (info, error) = match result {
             Ok(info) => (Some(info), None),
             Err(error) => (None, Some(error)),

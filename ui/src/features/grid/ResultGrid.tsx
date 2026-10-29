@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, X } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { SortKey } from "@/bindings/SortKey";
 import type { Value } from "@/bindings/Value";
@@ -68,9 +68,6 @@ function rectOf(sel: Selection): Rect {
     right: Math.max(sel.anchor.col, sel.focus.col),
   };
 }
-
-const inRect = (rect: Rect | null, row: number, col: number) =>
-  rect !== null && row >= rect.top && row <= rect.bottom && col >= rect.left && col <= rect.right;
 
 const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, i) => from + i);
@@ -260,8 +257,6 @@ export const ResultGrid = memo(function ResultGrid({
     if (row >= rows.length) return edits?.inserts[row - rows.length]?.[col];
     return edits?.updates[row]?.[col] ?? rows[row]?.[col];
   };
-  const isModified = (row: number, col: number) =>
-    row < rows.length && edits?.updates[row]?.[col] !== undefined;
 
   const startResize = (index: number, event: React.PointerEvent) => {
     event.preventDefault();
@@ -461,6 +456,20 @@ export const ResultGrid = memo(function ResultGrid({
 
   const viewed = viewer && columns[colAt(viewer.col)];
 
+  // Rows are memoized, so what they call must keep its identity while the grid scrolls. The latest
+  // closures are read through a ref; `setSel` and `dragging` are stable already.
+  const latest = useRef({ open, commit });
+  latest.current = { open, commit };
+  const onOpen = useCallback((pos: Pos) => latest.current.open(pos), []);
+  const onCommitCell = useCallback(
+    (pos: Pos, text: string) => latest.current.commit(pos, { t: "text", v: text }),
+    [],
+  );
+  const onCancelEdit = useCallback(() => {
+    setEditor(null);
+    scroller.current?.focus();
+  }, []);
+
   const grid = (
     <div
       ref={scroller}
@@ -546,102 +555,31 @@ export const ResultGrid = memo(function ResultGrid({
         {virtualizer.getVirtualItems().map((item) => {
           const r = item.index;
           const isNew = r >= rows.length;
-          const isDeleted = deleted.has(r);
-          const rowSelected = rect !== null && r >= rect.top && r <= rect.bottom;
+          const spanned = rect && r >= rect.top && r <= rect.bottom ? rect : null;
           return (
-            <div
+            <GridRow
               key={item.key}
-              role="row"
-              style={{
-                gridTemplateColumns: template,
-                height: ROW_HEIGHT,
-                transform: `translateY(${HEADER_HEIGHT + item.start}px)`,
-              }}
-              className={cn(
-                "absolute top-0 left-0 grid w-full border-line/70 border-b hover:bg-hover",
-                isNew && "bg-cell-inserted",
-                isDeleted && "bg-cell-deleted text-muted line-through",
-              )}
-            >
-              <div
-                onMouseDown={(e) => {
-                  if (e.button !== 0) return;
-                  dragging.current = true;
-                  setSel((s) => ({
-                    anchor: e.shiftKey && s ? { row: s.anchor.row, col: 0 } : { row: r, col: 0 },
-                    focus: { row: r, col: lastCol },
-                  }));
-                  scroller.current?.focus();
-                }}
-                onMouseEnter={() => {
-                  if (dragging.current)
-                    setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: lastCol } });
-                }}
-                className={cn(
-                  "sticky left-0 z-10 flex cursor-default items-center justify-end border-line border-r bg-surface pr-2 font-sans text-faint text-xs tabular-nums",
-                  rowSelected && "text-fg",
-                )}
-              >
-                {/* The tint is a layer, not a background: this column is opaque so cells that
-                    scroll under it stay hidden. It shows which rows Delete and the copy
-                    commands act on, also when only some of their cells are selected. */}
-                {rowSelected && <span aria-hidden className="absolute inset-0 bg-selected" />}
-                <span className="relative">{isNew ? "+" : r + 1}</span>
-              </div>
-              {shown.map((c, p) => {
-                const value = valueAt(r, c);
-                const selected = inRect(rect, r, p);
-                const focused = cell?.row === r && cell.col === p;
-                const editingHere = editor?.row === r && editor.col === p;
-                const found = matchKeys.has(r * shown.length + p);
-                return (
-                  <div
-                    key={c}
-                    role="gridcell"
-                    aria-selected={selected}
-                    onMouseDown={(e) => {
-                      const pos = { row: r, col: p };
-                      // A right-click inside the selection keeps it for the menu.
-                      if (e.button === 2 && inRect(rect, r, p)) return;
-                      if (e.button === 0) dragging.current = true;
-                      setSel((s) => ({
-                        anchor: e.shiftKey && e.button === 0 && s ? s.anchor : pos,
-                        focus: pos,
-                      }));
-                    }}
-                    onMouseEnter={() => {
-                      if (dragging.current)
-                        setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: p } });
-                    }}
-                    onDoubleClick={() => open({ row: r, col: p })}
-                    className={cn(
-                      "relative flex items-center overflow-hidden px-2 tabular-nums",
-                      numeric[c] && "justify-end",
-                      (value === undefined || value.t === "null") && "text-faint italic",
-                      isModified(r, c) && "bg-cell-modified",
-                      found && "bg-cell-match",
-                      selected && "bg-selected",
-                      focused && "outline-1 outline-accent -outline-offset-1",
-                    )}
-                  >
-                    {editingHere ? (
-                      <CellEditor
-                        initial={value === undefined ? "" : copyValue(value)}
-                        onCommit={(text) => commit({ row: r, col: p }, { t: "text", v: text })}
-                        onCancel={() => {
-                          setEditor(null);
-                          scroller.current?.focus();
-                        }}
-                      />
-                    ) : (
-                      <span className="truncate">
-                        {value === undefined ? "DEFAULT" : displayValue(value)}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+              r={r}
+              top={HEADER_HEIGHT + item.start}
+              isNew={isNew}
+              isDeleted={deleted.has(r)}
+              values={isNew ? edits?.inserts[r - rows.length] : rows[r]}
+              updates={isNew ? undefined : edits?.updates[r]}
+              selLeft={spanned ? spanned.left : -1}
+              selRight={spanned ? spanned.right : -1}
+              focusCol={cell?.row === r ? cell.col : -1}
+              editorCol={editor?.row === r ? editor.col : -1}
+              matchKeys={matchKeys}
+              shown={shown}
+              numeric={numeric}
+              template={template}
+              lastCol={lastCol}
+              dragging={dragging}
+              setSel={setSel}
+              onOpen={onOpen}
+              onCommitCell={onCommitCell}
+              onCancelEdit={onCancelEdit}
+            />
           );
         })}
       </div>
@@ -676,6 +614,151 @@ export const ResultGrid = memo(function ResultGrid({
           }}
         />
       )}
+    </div>
+  );
+});
+
+/**
+ * One grid row. Memoized with primitive and stable props, so scrolling (which only adds and removes
+ * rows at the edges) renders the new rows and leaves the others alone; a selection change renders
+ * just the rows it touches.
+ */
+const GridRow = memo(function GridRow({
+  r,
+  top,
+  isNew,
+  isDeleted,
+  values,
+  updates,
+  selLeft,
+  selRight,
+  focusCol,
+  editorCol,
+  matchKeys,
+  shown,
+  numeric,
+  template,
+  lastCol,
+  dragging,
+  setSel,
+  onOpen,
+  onCommitCell,
+  onCancelEdit,
+}: {
+  r: number;
+  /** Distance from the top of the grid, header included. */
+  top: number;
+  isNew: boolean;
+  isDeleted: boolean;
+  /** The loaded row, or the new row's values. */
+  values: Record<number, Value | undefined> | undefined;
+  /** Pending edits of this row's cells. */
+  updates: Record<number, Value> | undefined;
+  /** Selected columns of this row (positions in `shown`); -1 when the row is not selected. */
+  selLeft: number;
+  selRight: number;
+  /** Focused and edited column position in this row; -1 when none. */
+  focusCol: number;
+  editorCol: number;
+  matchKeys: ReadonlySet<number>;
+  shown: number[];
+  numeric: boolean[];
+  template: string;
+  lastCol: number;
+  dragging: RefObject<boolean>;
+  setSel: React.Dispatch<React.SetStateAction<Selection | null>>;
+  onOpen: (pos: Pos) => void;
+  onCommitCell: (pos: Pos, text: string) => void;
+  onCancelEdit: () => void;
+}) {
+  const rowSelected = selLeft >= 0;
+  return (
+    <div
+      role="row"
+      style={{
+        gridTemplateColumns: template,
+        height: ROW_HEIGHT,
+        transform: `translateY(${top}px)`,
+      }}
+      className={cn(
+        "absolute top-0 left-0 grid w-full border-line/70 border-b hover:bg-hover",
+        isNew && "bg-cell-inserted",
+        isDeleted && "bg-cell-deleted text-muted line-through",
+      )}
+    >
+      <div
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          dragging.current = true;
+          setSel((s) => ({
+            anchor: e.shiftKey && s ? { row: s.anchor.row, col: 0 } : { row: r, col: 0 },
+            focus: { row: r, col: lastCol },
+          }));
+          e.currentTarget.closest<HTMLElement>('[role="grid"]')?.focus();
+        }}
+        onMouseEnter={() => {
+          if (dragging.current)
+            setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: lastCol } });
+        }}
+        className={cn(
+          "sticky left-0 z-10 flex cursor-default items-center justify-end border-line border-r bg-surface pr-2 font-sans text-faint text-xs tabular-nums",
+          rowSelected && "text-fg",
+        )}
+      >
+        {/* The tint is a layer, not a background: this column is opaque so cells that
+            scroll under it stay hidden. It shows which rows Delete and the copy
+            commands act on, also when only some of their cells are selected. */}
+        {rowSelected && <span aria-hidden className="absolute inset-0 bg-selected" />}
+        <span className="relative">{isNew ? "+" : r + 1}</span>
+      </div>
+      {shown.map((c, p) => {
+        const value = updates?.[c] ?? values?.[c];
+        const selected = p >= selLeft && p <= selRight && rowSelected;
+        const focused = focusCol === p;
+        return (
+          <div
+            key={c}
+            role="gridcell"
+            aria-selected={selected}
+            onMouseDown={(e) => {
+              const pos = { row: r, col: p };
+              // A right-click inside the selection keeps it for the menu.
+              if (e.button === 2 && selected) return;
+              if (e.button === 0) dragging.current = true;
+              setSel((s) => ({
+                anchor: e.shiftKey && e.button === 0 && s ? s.anchor : pos,
+                focus: pos,
+              }));
+            }}
+            onMouseEnter={() => {
+              if (dragging.current)
+                setSel((s) => s && { anchor: s.anchor, focus: { row: r, col: p } });
+            }}
+            onDoubleClick={() => onOpen({ row: r, col: p })}
+            className={cn(
+              "relative flex items-center overflow-hidden px-2 tabular-nums",
+              numeric[c] && "justify-end",
+              (value === undefined || value.t === "null") && "text-faint italic",
+              !isNew && updates?.[c] !== undefined && "bg-cell-modified",
+              matchKeys.has(r * shown.length + p) && "bg-cell-match",
+              selected && "bg-selected",
+              focused && "outline-1 outline-accent -outline-offset-1",
+            )}
+          >
+            {editorCol === p ? (
+              <CellEditor
+                initial={value === undefined ? "" : copyValue(value)}
+                onCommit={(text) => onCommitCell({ row: r, col: p }, text)}
+                onCancel={onCancelEdit}
+              />
+            ) : (
+              <span className="truncate">
+                {value === undefined ? "DEFAULT" : displayValue(value)}
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 });

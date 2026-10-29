@@ -1,7 +1,7 @@
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnId, ConnectionConfig, ErrorLocation, Favorite, HistoryEntry,
-    SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, Value,
-    Workspace,
+    Capabilities, ColumnMeta, ConnId, ConnectionConfig, ErrorLocation, ExportFormat, Favorite,
+    HistoryEntry, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns,
+    TableInfo, TableRef, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -69,6 +69,23 @@ pub struct LogEntry {
     /// More rows came than a result keeps.
     pub truncated: bool,
     pub error: Option<String>,
+}
+
+/// One format an export offers, and whether it can be used for this source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ExportFormatState {
+    pub format: ExportFormat,
+    /// File extension without the dot, for the save dialog.
+    pub extension: String,
+    /// A text format: `ExportPreview` can show it.
+    pub has_preview: bool,
+    /// Spreadsheets: rows after which a sheet is full.
+    #[ts(type = "number | null")]
+    pub max_rows_per_sheet: Option<u64>,
+    pub is_available: bool,
+    /// Why the format cannot be used, when `is_available` is false.
+    pub reason: Option<String>,
 }
 
 /// Something the engine reports to its client.
@@ -233,6 +250,62 @@ pub enum Event {
         request: RequestId,
         text: Option<String>,
         error: Option<String>,
+    },
+    /// Answer to `ExportPrepare`. Either `error` is set (and nothing else), or the rest is.
+    ExportPrepared {
+        request: RequestId,
+        formats: Vec<ExportFormatState>,
+        /// The one table the rows come from. `None` for a result of several tables: SQL Inserts
+        /// then needs a table named by the user.
+        table: Option<TableRef>,
+        /// A table source: its columns and the first rows, for the preview. Empty for a result
+        /// the client holds.
+        columns: Vec<ColumnMeta>,
+        rows: Vec<Vec<Value>>,
+        /// A query source: what may make the second run differ from the first, or fail.
+        warnings: Vec<String>,
+        error: Option<String>,
+    },
+    /// Answer to `ExportPreview`: either `text` or `error` is set.
+    ExportPreview {
+        request: RequestId,
+        text: Option<String>,
+        error: Option<String>,
+    },
+    /// The file is complete at `path`.
+    ExportFinished {
+        request: RequestId,
+        path: String,
+        #[ts(type = "number")]
+        rows: u64,
+        /// Spreadsheet sheets written, 0 for other formats.
+        sheets: u32,
+        /// Spreadsheet cells whose text was cut to what a cell holds.
+        #[ts(type = "number")]
+        cut_cells: u64,
+    },
+    /// An export is under way: rows and bytes written so far, a few times a second at most.
+    /// `bytes` is 0 for formats whose size is known only at the end (Excel).
+    ExportProgress {
+        request: RequestId,
+        #[ts(type = "number")]
+        rows: u64,
+        #[ts(type = "number")]
+        bytes: u64,
+    },
+    /// Answer to `ExportCountRows`: either `count` or `error` is set.
+    ExportRowCount {
+        request: RequestId,
+        #[ts(type = "number | null")]
+        count: Option<u64>,
+        error: Option<String>,
+    },
+    /// The export stopped and left no file. `error` says what to do; `cancelled` means the user
+    /// asked for it.
+    ExportFailed {
+        request: RequestId,
+        error: String,
+        cancelled: bool,
     },
     /// The statements a schema change would run. Nothing ran yet: resend `AlterSchema` with
     /// `confirmed: true` to run them. `warning` says what is risky about it.

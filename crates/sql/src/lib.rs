@@ -1,12 +1,15 @@
 //! SQL text helpers: [`split`] (script into statements), [`script`] (the statements a run
-//! sends), [`statement_at`] (statement under the cursor) and [`classify`] (for safe mode).
+//! sends), [`statement_at`] (statement under the cursor), [`classify`] (for safe mode) and
+//! [`session_state`] (what a statement needs from its own session).
 
 use std::ops::Range;
 
 mod completion;
+mod session;
 
 pub use completion::completion_context;
 pub use quarry_model::{CompletionContext, CompletionNames, StatementTable};
+pub use session::{SessionState, session_state};
 
 /// Split a script into statements on `;`, ignoring `;` inside strings, quoted identifiers
 /// and comments. Returns trimmed byte ranges; empty statements are skipped.
