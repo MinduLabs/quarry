@@ -8,6 +8,7 @@ members = [
     "crates/store",
     "crates/tunnel",
     "crates/drivers/mysql",
+    "crates/drivers/postgres",
     "crates/engine",
     "src-tauri",
 ]
@@ -30,6 +31,7 @@ quarry-store = { path = "crates/store" }
 quarry-tunnel = { path = "crates/tunnel" }
 quarry-engine = { path = "crates/engine" }
 quarry-driver-mysql = { path = "crates/drivers/mysql" }
+quarry-driver-postgres = { path = "crates/drivers/postgres" }
 
 # Core
 async-channel = "2.5"

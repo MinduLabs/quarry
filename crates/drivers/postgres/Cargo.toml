@@ -1,0 +1,31 @@
+[package]
+name = "quarry-driver-postgres"
+description = "PostgreSQL driver for Quarry (tokio-postgres, rustls)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+quarry-model.workspace = true
+quarry-driver-api.workspace = true
+quarry-driver-proto.workspace = true
+async-trait.workspace = true
+bytes = "1"
+chrono.workspace = true
+futures-util.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio.workspace = true
+tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime"] }
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
+tracing.workspace = true
+uuid.workspace = true
+webpki-roots = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

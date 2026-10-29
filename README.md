@@ -103,7 +103,8 @@ Integration tests skip themselves unless `QUARRY_TEST_MYSQL` is set, which `just
 
 ### Test database
 
-The test MySQL user is `quarry` / `quarry` (test values only). It loads the fixtures in
+The test MySQL user is `quarry` / `quarry` (test values only); so is the test PostgreSQL's, on
+`127.0.0.1:15432`, database `shop`, with fixtures in `tests/fixtures/postgres/`. It loads the fixtures in
 `tests/fixtures/mysql/`, including `playground.samples`: one column of every MySQL type, edge values
 in the first rows, explained in
 [02-playground.sql](tests/fixtures/mysql/02-playground.sql). A feature that needs a kind of data the
