@@ -115,6 +115,7 @@ async fn save_connect_browse_and_query() {
     else {
         unreachable!()
     };
+    let rows = rows.values().unwrap();
     assert_eq!(rows[0][0], quarry_model::Value::Int(5000));
     next_matching(&events, |e| {
         matches!(e, Event::QueryFinished { tab: 1, .. })
@@ -198,6 +199,7 @@ async fn browse_pages_and_table_info() {
     else {
         unreachable!()
     };
+    let rows = rows.values().unwrap();
     assert_eq!(rows.len(), 100);
     assert_eq!(rows[0][0], quarry_model::Value::UInt(1001));
     let Event::ResultDone {
@@ -367,6 +369,7 @@ async fn grid_edits_commit_or_roll_back_together() {
     else {
         unreachable!()
     };
+    let rows = rows.values().unwrap();
     assert_eq!(
         rows,
         vec![
@@ -609,6 +612,7 @@ async fn filters_counts_columns_and_plans() {
     else {
         unreachable!()
     };
+    let rows = rows.values().unwrap();
     // Order n has status ELT(1 + n % 4, …): paid when n % 4 = 1, so the newest is 4997.
     let ids: Vec<&Value> = rows.iter().map(|r| &r[0]).collect();
     assert_eq!(
@@ -688,6 +692,7 @@ async fn filters_counts_columns_and_plans() {
     else {
         unreachable!()
     };
+    let rows = rows.values().unwrap();
     assert!(matches!(&rows[0][0], Value::Text(t) | Value::Json(t) if t.contains("query_block")));
     next_matching(&events, |e| {
         matches!(e, Event::QueryFinished { tab: 4, .. })
@@ -879,6 +884,7 @@ async fn transactions_follow_commands_and_sql() {
     else {
         unreachable!()
     };
+    let rows = rows.values().unwrap();
     assert_eq!(rows[0][0], Value::Int(0), "the rollback undid both inserts");
     next_matching(&events, finished).await;
 
@@ -990,6 +996,7 @@ async fn connects_through_an_ssh_tunnel() {
             else {
                 unreachable!()
             };
+            let rows = rows.values().unwrap();
             assert_eq!(rows[0][0], quarry_model::Value::Int(5));
             next_matching(&events, |e| matches!(e, Event::HistoryAdded { .. })).await;
         } else {
@@ -1151,7 +1158,7 @@ async fn bad_sql_keeps_the_tab_usable_and_names_the_statement() {
     let connection = seen
         .iter()
         .find_map(|e| match e {
-            Event::ResultRows { rows, .. } => Some(rows[0][0].display(64)),
+            Event::ResultRows { rows, .. } => Some(rows.values().unwrap()[0][0].display(64)),
             _ => None,
         })
         .expect("the connection id");
@@ -1238,7 +1245,12 @@ async fn sorted_pages_cover_every_row_once() {
                 .await
                 {
                     Event::ResultRows { rows, .. } => {
-                        seen.extend(rows.into_iter().map(|r| r[0].display(usize::MAX)));
+                        seen.extend(
+                            rows.values()
+                                .unwrap()
+                                .into_iter()
+                                .map(|r| r[0].display(usize::MAX)),
+                        );
                     }
                     Event::QueryFinished { .. } => break,
                     other => panic!("unexpected {other:?}"),
@@ -1305,7 +1317,12 @@ async fn schema_tree_recovers_after_the_metadata_connection_dies() {
             .await
             {
                 Event::ResultRows { rows, .. } => {
-                    values.extend(rows.into_iter().map(|r| r[0].display(usize::MAX)));
+                    values.extend(
+                        rows.values()
+                            .unwrap()
+                            .into_iter()
+                            .map(|r| r[0].display(usize::MAX)),
+                    );
                 }
                 Event::QueryFinished { .. } => return values,
                 other => panic!("unexpected {other:?}"),

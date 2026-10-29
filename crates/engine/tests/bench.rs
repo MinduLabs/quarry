@@ -11,7 +11,11 @@ use quarry_model::{ConnId, ConnectionConfig, DriverId, Environment, HistoryEntry
 async fn until(events: &EngineEvents, pred: impl Fn(&Event) -> bool) {
     let wait = async {
         loop {
-            if pred(&events.recv().await.unwrap()) {
+            let event = events.recv().await.unwrap();
+            // What the Tauri bridge does with every event, so the time covers the rows'
+            // trip to JSON wherever it happens.
+            std::hint::black_box(serde_json::to_string(&event).unwrap());
+            if pred(&event) {
                 return;
             }
         }

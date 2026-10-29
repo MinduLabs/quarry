@@ -1,6 +1,6 @@
 //! Messages and framing. Each frame is a little-endian `u32` length, then that many bytes of JSON.
 
-use quarry_driver_api::{DriverError, ExecItem, ExecOpts};
+use quarry_driver_api::{DriverError, ExecItem, ExecOpts, RowBatch};
 use quarry_model::{
     Capabilities, ConnectionConfig, DialectSpec, DriverId, ErrorLocation, SchemaChange,
     SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, TableRef, Value,
@@ -194,8 +194,6 @@ pub enum FrameError {
     Io(#[from] std::io::Error),
     #[error("malformed message: {0}")]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
-    Rows(#[from] crate::rows::RowsError),
     #[error("message of {0} bytes is too large")]
     TooLarge(u64),
     #[error("unexpected frame kind {0}")]
@@ -205,11 +203,11 @@ pub enum FrameError {
 const MESSAGE: u8 = 0;
 const ROWS: u8 = 1;
 
-/// One frame: a JSON message, or a batch of rows of call `id` in [`crate::rows`] form.
+/// One frame: a JSON message, or a batch of rows of call `id`, still encoded.
 #[derive(Debug)]
 pub enum Frame<T> {
     Message(T),
-    Rows { id: u64, rows: Vec<Vec<Value>> },
+    Rows { id: u64, batch: RowBatch },
 }
 
 pub async fn write_frame<W, T>(writer: &mut W, message: &T) -> Result<(), FrameError>
@@ -217,28 +215,31 @@ where
     W: AsyncWrite + Unpin,
     T: Serialize,
 {
-    let mut body = vec![MESSAGE];
-    serde_json::to_writer(&mut body, message)?;
-    send(writer, &body).await
+    let mut frame = vec![0, 0, 0, 0, MESSAGE];
+    serde_json::to_writer(&mut frame, message)?;
+    send(writer, frame).await
 }
 
-pub async fn write_rows<W>(writer: &mut W, id: u64, rows: &[Vec<Value>]) -> Result<(), FrameError>
+pub async fn write_rows<W>(writer: &mut W, id: u64, batch: &RowBatch) -> Result<(), FrameError>
 where
     W: AsyncWrite + Unpin,
 {
-    let mut body = vec![ROWS];
-    body.extend_from_slice(&id.to_le_bytes());
-    crate::rows::encode(rows, &mut body);
-    send(writer, &body).await
+    let mut frame = Vec::with_capacity(13 + batch.as_bytes().len());
+    frame.extend_from_slice(&[0, 0, 0, 0, ROWS]);
+    frame.extend_from_slice(&id.to_le_bytes());
+    frame.extend_from_slice(batch.as_bytes());
+    send(writer, frame).await
 }
 
-async fn send<W: AsyncWrite + Unpin>(writer: &mut W, body: &[u8]) -> Result<(), FrameError> {
-    let len = u32::try_from(body.len())
+/// Sends a frame whose first 4 bytes are left for its length, in one write.
+async fn send<W: AsyncWrite + Unpin>(writer: &mut W, mut frame: Vec<u8>) -> Result<(), FrameError> {
+    let body = frame.len() - 4;
+    let len = u32::try_from(body)
         .ok()
         .filter(|len| *len <= MAX_FRAME)
-        .ok_or(FrameError::TooLarge(body.len() as u64))?;
-    writer.write_all(&len.to_le_bytes()).await?;
-    writer.write_all(body).await?;
+        .ok_or(FrameError::TooLarge(body as u64))?;
+    frame[..4].copy_from_slice(&len.to_le_bytes());
+    writer.write_all(&frame).await?;
     writer.flush().await?;
     Ok(())
 }
@@ -267,9 +268,10 @@ where
             let (id, rows) = rest.split_at(8);
             let mut id_bytes = [0u8; 8];
             id_bytes.copy_from_slice(id);
+            // Left encoded: the engine writes the UI's JSON straight from the bytes.
             Ok(Some(Frame::Rows {
                 id: u64::from_le_bytes(id_bytes),
-                rows: crate::rows::decode(rows)?,
+                batch: RowBatch::from_bytes(rows.to_vec()),
             }))
         }
         Some((&kind, _)) => Err(FrameError::Kind(kind)),
@@ -340,10 +342,15 @@ mod tests {
     async fn rows_travel_in_their_own_frames() {
         let (mut a, mut b) = tokio::io::duplex(1024);
         let rows = vec![vec![Value::Int(7), Value::Text("x".into())]];
-        write_rows(&mut a, 9, &rows).await.unwrap();
+        write_rows(&mut a, 9, &RowBatch::encode(&rows))
+            .await
+            .unwrap();
         let frame = read_frame::<_, FromDriver>(&mut b).await.unwrap().unwrap();
-        assert!(matches!(frame, Frame::Rows { id: 9, rows: ref got } if *got == rows));
-        write_rows(&mut a, 9, &rows).await.unwrap();
+        let Frame::Rows { id: 9, batch } = frame else {
+            panic!("rows expected");
+        };
+        assert_eq!(batch.decode().unwrap(), rows);
+        write_rows(&mut a, 9, &batch).await.unwrap();
         assert!(read_message::<_, FromDriver>(&mut b).await.is_err());
     }
 

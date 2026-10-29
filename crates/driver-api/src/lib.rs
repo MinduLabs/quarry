@@ -4,6 +4,8 @@
 //! driver. Every type crossing this boundary is serializable, so a driver can run in its own
 //! process (`quarry-driver-proto`).
 
+mod rows;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +16,8 @@ use quarry_model::{
     TableInfo, TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
+
+pub use rows::{RowBatch, RowsError};
 
 pub type Result<T, E = DriverError> = std::result::Result<T, E>;
 
@@ -83,6 +87,9 @@ impl Default for ExecOpts {
 pub enum ExecItem {
     Columns(Vec<ColumnMeta>),
     Rows(Vec<Vec<Value>>),
+    /// Rows still encoded, as a driver process sends them. Only made inside the engine.
+    #[serde(skip)]
+    Batch(RowBatch),
     /// End of a result set.
     SetDone {
         affected: u64,

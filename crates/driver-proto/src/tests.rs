@@ -176,10 +176,13 @@ async fn a_session_streams_results_and_answers_calls() {
         .await
         .unwrap();
     assert!(matches!(items[0], ExecItem::Columns(_)));
-    let ExecItem::Rows(rows) = &items[1] else {
+    let ExecItem::Batch(batch) = &items[1] else {
         panic!("rows expected");
     };
-    assert_eq!(rows, &vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+    assert_eq!(
+        batch.decode().unwrap(),
+        vec![vec![Value::Int(1)], vec![Value::Int(2)]]
+    );
     assert!(matches!(items[2], ExecItem::SetDone { rows: 2, .. }));
     assert_eq!(
         session

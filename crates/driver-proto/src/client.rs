@@ -13,7 +13,7 @@ use quarry_model::{
     Capabilities, DriverId, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow,
     TableColumns, TableInfo, TableRef, Value,
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
@@ -100,7 +100,7 @@ impl ProcessDriver {
                 self.info.id.0
             )));
         };
-        Ok(Remote::new(stdout, stdin, Some(child)))
+        Ok(Remote::new(BufReader::new(stdout), stdin, Some(child)))
     }
 }
 
@@ -207,9 +207,9 @@ impl Remote {
         loop {
             // Messages of an earlier call that was given up on are skipped by their id.
             match read_frame::<_, FromDriver>(&mut self.from_driver).await {
-                Ok(Some(Frame::Rows { id: of, rows })) if of == id => {
+                Ok(Some(Frame::Rows { id: of, batch })) if of == id => {
                     if let Some(sink) = sink.as_mut() {
-                        sink(ExecItem::Rows(rows));
+                        sink(ExecItem::Batch(batch));
                     }
                 }
                 Ok(Some(Frame::Message(FromDriver::Item { id: of, item }))) if of == id => {

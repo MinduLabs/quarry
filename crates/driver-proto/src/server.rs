@@ -3,7 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use quarry_driver_api::{Driver, DriverError, ExecItem, ResolvedConfig, Session, SharedCancel};
+use quarry_driver_api::{
+    Driver, DriverError, ExecItem, ResolvedConfig, RowBatch, Session, SharedCancel,
+};
 use quarry_model::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -16,6 +18,7 @@ use crate::wire::{
 enum Outgoing {
     Message(FromDriver),
     Rows { id: u64, rows: Vec<Vec<Value>> },
+    Batch { id: u64, batch: RowBatch },
 }
 
 /// Answers calls until the host sends `Close` or closes `input`.
@@ -35,7 +38,11 @@ where
         while let Some(outgoing) = out_rx.recv().await {
             match outgoing {
                 Outgoing::Message(message) => write_frame(&mut output, &message).await?,
-                Outgoing::Rows { id, rows } => write_rows(&mut output, id, &rows).await?,
+                // Encoded here, so the driver's sink stays a push into the queue.
+                Outgoing::Rows { id, rows } => {
+                    write_rows(&mut output, id, &RowBatch::encode(&rows)).await?
+                }
+                Outgoing::Batch { id, batch } => write_rows(&mut output, id, &batch).await?,
             }
         }
         Ok::<_, FrameError>(())
@@ -126,6 +133,7 @@ async fn answer(
     let mut sink = |item| {
         let outgoing = match item {
             ExecItem::Rows(rows) => Outgoing::Rows { id, rows },
+            ExecItem::Batch(batch) => Outgoing::Batch { id, batch },
             item => Outgoing::Message(FromDriver::Item { id, item }),
         };
         let _ = out.send(outgoing);

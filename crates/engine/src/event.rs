@@ -1,3 +1,4 @@
+use quarry_driver_api::RowBatch;
 use quarry_model::{
     Capabilities, ColumnMeta, ConnId, ConnectionConfig, DataSource, ErrorLocation, Favorite,
     HistoryEntry, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns,
@@ -173,7 +174,8 @@ pub enum Event {
     ResultRows {
         tab: TabId,
         set: u32,
-        rows: Vec<Vec<Value>>,
+        #[ts(as = "Vec<Vec<Value>>")]
+        rows: Rows,
     },
     ResultDone {
         tab: TabId,
@@ -277,4 +279,49 @@ pub enum Event {
         request: RequestId,
         error: Option<String>,
     },
+}
+
+/// One batch of result rows. Rows from a driver process stay encoded up to the bridge, which
+/// writes them as JSON straight from the bytes; the engine never rebuilds them as values.
+#[derive(Debug, Clone)]
+pub enum Rows {
+    Values(Vec<Vec<Value>>),
+    Batch(RowBatch),
+}
+
+impl Rows {
+    /// The rows as values, for code that reads them (tests, clients that are not a webview).
+    pub fn values(&self) -> Result<Vec<Vec<Value>>, quarry_driver_api::RowsError> {
+        match self {
+            Self::Values(rows) => Ok(rows.clone()),
+            Self::Batch(batch) => batch.decode(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Values(rows) => rows.len(),
+            Self::Batch(batch) => batch.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// The same JSON either way: an array of rows of `Value`s.
+impl Serialize for Rows {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Values(rows) => rows.serialize(serializer),
+            Self::Batch(batch) => batch.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Rows {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::deserialize(deserializer).map(Self::Values)
+    }
 }

@@ -1,11 +1,15 @@
-//! A batch of rows in a compact binary form. Rows are most of what crosses the wire, and JSON
-//! made a 1000-row query more than twice as slow.
+//! A batch of rows in a compact binary form, the form rows take between a driver process and
+//! the engine. JSON there made a 1000-row query more than twice as slow. The batch stays in this
+//! form up to the UI: serializing it writes each value straight from the bytes, as the same JSON
+//! a [`Value`] serializes to, without building the values.
 //!
 //! Each value is a tag byte, then its payload, little-endian: lengths and counts are `u32`,
 //! strings are UTF-8.
 
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use quarry_model::Value;
+use serde::ser::{Error as _, SerializeSeq};
+use serde::{Serialize, Serializer};
 
 /// Arrays nest at most this deep, so a malformed batch cannot overflow the stack.
 const MAX_DEPTH: usize = 32;
@@ -31,7 +35,74 @@ const OTHER: u8 = 15;
 #[error("malformed row batch: {0}")]
 pub struct RowsError(&'static str);
 
-pub fn encode(rows: &[Vec<Value>], out: &mut Vec<u8>) {
+/// Encoded rows. Checked when read, by [`Self::decode`] or [`Self::write_json`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct RowBatch {
+    bytes: Vec<u8>,
+}
+
+// The bytes are result values: never print them.
+impl std::fmt::Debug for RowBatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RowBatch({} rows)", self.len())
+    }
+}
+
+impl RowBatch {
+    pub fn encode(rows: &[Vec<Value>]) -> Self {
+        let mut bytes = Vec::new();
+        encode(rows, &mut bytes);
+        Self { bytes }
+    }
+
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The row count the batch announces.
+    pub fn len(&self) -> usize {
+        self.bytes
+            .get(..4)
+            .and_then(|head| head.try_into().ok())
+            .map_or(0, |head| u32::from_le_bytes(head) as usize)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn decode(&self) -> Result<Vec<Vec<Value>>, RowsError> {
+        decode(&self.bytes)
+    }
+}
+
+/// The same JSON as the decoded `Vec<Vec<Value>>`, written from the bytes. A malformed batch
+/// fails the serialization.
+impl Serialize for RowBatch {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut input = Input { bytes: &self.bytes };
+        let count = input.len().map_err(S::Error::custom)?;
+        let mut seq = serializer.serialize_seq(Some(count))?;
+        for _ in 0..count {
+            let cells = input.len().map_err(S::Error::custom)?;
+            let mut row = Vec::with_capacity(cells.min(input.bytes.len()));
+            for _ in 0..cells {
+                row.push(input.value(0).map_err(S::Error::custom)?);
+            }
+            seq.serialize_element(&row)?;
+        }
+        if !input.bytes.is_empty() {
+            return Err(S::Error::custom(RowsError("bytes after the last row")));
+        }
+        seq.end()
+    }
+}
+
+fn encode(rows: &[Vec<Value>], out: &mut Vec<u8>) {
     put_len(out, rows.len());
     for row in rows {
         put_len(out, row.len());
@@ -41,7 +112,7 @@ pub fn encode(rows: &[Vec<Value>], out: &mut Vec<u8>) {
     }
 }
 
-pub fn decode(bytes: &[u8]) -> Result<Vec<Vec<Value>>, RowsError> {
+fn decode(bytes: &[u8]) -> Result<Vec<Vec<Value>>, RowsError> {
     let mut input = Input { bytes };
     let count = input.len()?;
     // Every row takes at least its 4-byte length, so a count beyond that is a lie.
@@ -50,7 +121,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Vec<Value>>, RowsError> {
         let cells = input.len()?;
         let mut row = Vec::with_capacity(cells.min(input.bytes.len()));
         for _ in 0..cells {
-            row.push(input.value(0)?);
+            row.push(input.value(0)?.into_value());
         }
         rows.push(row);
     }
@@ -176,10 +247,9 @@ impl<'a> Input<'a> {
         Ok(u32::from_le_bytes(self.array()?) as usize)
     }
 
-    fn string(&mut self) -> Result<String, RowsError> {
+    fn str(&mut self) -> Result<&'a str, RowsError> {
         let len = self.len()?;
-        let bytes = self.take(len)?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| RowsError("text is not UTF-8"))
+        std::str::from_utf8(self.take(len)?).map_err(|_| RowsError("text is not UTF-8"))
     }
 
     fn date(&mut self) -> Result<NaiveDate, RowsError> {
@@ -194,31 +264,31 @@ impl<'a> Input<'a> {
             .ok_or(RowsError("time out of range"))
     }
 
-    fn value(&mut self, depth: usize) -> Result<Value, RowsError> {
+    fn value(&mut self, depth: usize) -> Result<ValueRef<'a>, RowsError> {
         let [tag] = self.array()?;
         Ok(match tag {
-            NULL => Value::Null,
-            BOOL => Value::Bool(self.array::<1>()?[0] != 0),
-            INT => Value::Int(i64::from_le_bytes(self.array()?)),
-            UINT => Value::UInt(u64::from_le_bytes(self.array()?)),
-            FLOAT => Value::Float(f64::from_bits(u64::from_le_bytes(self.array()?))),
-            DECIMAL => Value::Decimal(self.string()?),
-            TEXT => Value::Text(self.string()?),
+            NULL => ValueRef::Null,
+            BOOL => ValueRef::Bool(self.array::<1>()?[0] != 0),
+            INT => ValueRef::Int(i64::from_le_bytes(self.array()?)),
+            UINT => ValueRef::UInt(u64::from_le_bytes(self.array()?)),
+            FLOAT => ValueRef::Float(f64::from_bits(u64::from_le_bytes(self.array()?))),
+            DECIMAL => ValueRef::Decimal(self.str()?),
+            TEXT => ValueRef::Text(self.str()?),
             BYTES => {
                 let len = self.len()?;
-                Value::Bytes(self.take(len)?.to_vec())
+                ValueRef::Bytes(Hex(self.take(len)?))
             }
-            DATE => Value::Date(self.date()?),
-            TIME => Value::Time(self.time()?),
-            TIMESTAMP => Value::Timestamp(NaiveDateTime::new(self.date()?, self.time()?)),
+            DATE => ValueRef::Date(self.date()?),
+            TIME => ValueRef::Time(self.time()?),
+            TIMESTAMP => ValueRef::Timestamp(NaiveDateTime::new(self.date()?, self.time()?)),
             TIMESTAMP_TZ => {
                 let utc = NaiveDateTime::new(self.date()?, self.time()?);
                 let offset = FixedOffset::east_opt(i32::from_le_bytes(self.array()?))
                     .ok_or(RowsError("time zone offset out of range"))?;
-                Value::TimestampTz(DateTime::from_naive_utc_and_offset(utc, offset))
+                ValueRef::TimestampTz(DateTime::from_naive_utc_and_offset(utc, offset))
             }
-            UUID => Value::Uuid(uuid::Uuid::from_bytes(self.array()?)),
-            JSON => Value::Json(self.string()?),
+            UUID => ValueRef::Uuid(uuid::Uuid::from_bytes(self.array()?)),
+            JSON => ValueRef::Json(self.str()?),
             ARRAY => {
                 if depth >= MAX_DEPTH {
                     return Err(RowsError("arrays nested too deep"));
@@ -228,14 +298,82 @@ impl<'a> Input<'a> {
                 for _ in 0..count {
                     items.push(self.value(depth + 1)?);
                 }
-                Value::Array(items)
+                ValueRef::Array(items)
             }
-            OTHER => Value::Other {
-                type_name: self.string()?,
-                text: self.string()?,
+            OTHER => ValueRef::Other {
+                type_name: self.str()?,
+                text: self.str()?,
             },
             _ => return Err(RowsError("unknown value kind")),
         })
+    }
+}
+
+/// A [`Value`] borrowing its text from the batch. Its serde form is the same as `Value`'s: the
+/// same tags, 64-bit integers as strings, bytes as lowercase hex.
+#[derive(Serialize)]
+#[serde(tag = "t", content = "v", rename_all = "snake_case")]
+enum ValueRef<'a> {
+    Null,
+    Bool(bool),
+    Int(#[serde(serialize_with = "as_string")] i64),
+    UInt(#[serde(serialize_with = "as_string")] u64),
+    Float(f64),
+    Decimal(&'a str),
+    Text(&'a str),
+    Bytes(Hex<'a>),
+    Date(NaiveDate),
+    Time(NaiveTime),
+    Timestamp(NaiveDateTime),
+    TimestampTz(DateTime<FixedOffset>),
+    Uuid(uuid::Uuid),
+    Json(&'a str),
+    Array(Vec<ValueRef<'a>>),
+    Other { type_name: &'a str, text: &'a str },
+}
+
+impl ValueRef<'_> {
+    fn into_value(self) -> Value {
+        match self {
+            Self::Null => Value::Null,
+            Self::Bool(b) => Value::Bool(b),
+            Self::Int(v) => Value::Int(v),
+            Self::UInt(v) => Value::UInt(v),
+            Self::Float(v) => Value::Float(v),
+            Self::Decimal(text) => Value::Decimal(text.to_owned()),
+            Self::Text(text) => Value::Text(text.to_owned()),
+            Self::Bytes(Hex(bytes)) => Value::Bytes(bytes.to_vec()),
+            Self::Date(date) => Value::Date(date),
+            Self::Time(time) => Value::Time(time),
+            Self::Timestamp(at) => Value::Timestamp(at),
+            Self::TimestampTz(at) => Value::TimestampTz(at),
+            Self::Uuid(uuid) => Value::Uuid(uuid),
+            Self::Json(text) => Value::Json(text.to_owned()),
+            Self::Array(items) => Value::Array(items.into_iter().map(Self::into_value).collect()),
+            Self::Other { type_name, text } => Value::Other {
+                type_name: type_name.to_owned(),
+                text: text.to_owned(),
+            },
+        }
+    }
+}
+
+fn as_string<T: std::fmt::Display, S: Serializer>(value: &T, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_str(value)
+}
+
+/// Bytes, serialized as a lowercase hex string.
+struct Hex<'a>(&'a [u8]);
+
+impl Serialize for Hex<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl std::fmt::Display for Hex<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
     }
 }
 
@@ -283,6 +421,28 @@ mod tests {
     }
 
     #[test]
+    fn json_matches_what_serde_writes() {
+        let rows = vec![
+            every_kind(),
+            Vec::new(),
+            vec![Value::Float(f64::NAN), Value::Null],
+        ];
+        assert_eq!(
+            serde_json::to_string(&RowBatch::encode(&rows)).unwrap(),
+            serde_json::to_string(&rows).unwrap()
+        );
+        assert_eq!(serde_json::to_string(&RowBatch::encode(&[])).unwrap(), "[]");
+    }
+
+    #[test]
+    fn a_batch_knows_its_size_and_hides_its_values() {
+        let batch = RowBatch::encode(&[vec![Value::Text("secret".into())], vec![]]);
+        assert_eq!(batch.len(), 2);
+        assert_eq!(format!("{batch:?}"), "RowBatch(2 rows)");
+        assert!(RowBatch::from_bytes(Vec::new()).is_empty());
+    }
+
+    #[test]
     fn nan_keeps_its_bits() {
         let mut bytes = Vec::new();
         encode(&[vec![Value::Float(f64::NAN)]], &mut bytes);
@@ -299,6 +459,8 @@ mod tests {
         encode(&[every_kind()], &mut bytes);
         for cut in [1, 5, bytes.len() / 2, bytes.len() - 1] {
             assert!(decode(&bytes[..cut]).is_err(), "cut at {cut}");
+            let batch = RowBatch::from_bytes(bytes[..cut].to_vec());
+            assert!(serde_json::to_string(&batch).is_err(), "json cut at {cut}");
         }
         let mut extra = bytes.clone();
         extra.push(0);
