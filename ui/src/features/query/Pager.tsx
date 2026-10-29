@@ -32,7 +32,11 @@ export function Pager({ tab }: { tab: Tab }) {
   const filtered = tab.browse.query.filters.length > 0;
   const estimate = filtered ? null : (tab.structure?.info?.estimated_rows ?? null);
   const label =
-    rows === 0 ? "No rows" : `${(offset + 1).toLocaleString()}–${(offset + rows).toLocaleString()}`;
+    tab.running && rows > 0
+      ? `${(offset + 1).toLocaleString()}…`
+      : rows === 0
+        ? "No rows"
+        : `${(offset + 1).toLocaleString()}–${(offset + rows).toLocaleString()}`;
   const isLast = rows < PAGE_SIZE || (tab.rowCount !== null && offset + rows >= tab.rowCount);
 
   let total: ReactNode = null;

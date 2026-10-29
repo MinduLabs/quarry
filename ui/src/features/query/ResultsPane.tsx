@@ -237,13 +237,25 @@ export const ResultsPane = memo(function ResultsPane({
       <div className={cn("relative min-h-0 flex-1", consoleOpen && "hidden")}>
         {planText !== null && <ExplainTree text={planText} />}
         {tab.running && tab.sets.length === 0 && (
-          <div className="animate-fade flex h-full flex-col items-center justify-center gap-2">
+          <div
+            style={LOADING_DELAY}
+            className="animate-fade flex h-full flex-col items-center justify-center gap-2"
+          >
             <Spinner size={18} />
             {tab.progress && (
               <p className="max-w-full truncate px-4 text-muted text-sm">
                 {statementLabel(tab.progress.index, tab.progress.count, runTexts)}
               </p>
             )}
+          </div>
+        )}
+        {/* A page change keeps the old page under a veil, so the grid never blinks away. */}
+        {tab.running && tab.sets.length > 0 && tab.browse && tab.paged && (
+          <div
+            style={LOADING_DELAY}
+            className="animate-fade absolute inset-0 z-30 flex items-center justify-center bg-app/60"
+          >
+            <Spinner size={18} />
           </div>
         )}
         {!tab.running && tab.error && (
@@ -310,6 +322,12 @@ export const ResultsPane = memo(function ResultsPane({
     </div>
   );
 });
+
+/**
+ * Loading shows only after a short wait and fades in, so a fast load never flashes a spinner.
+ * `backwards` keeps it invisible during the wait.
+ */
+const LOADING_DELAY = { animationDelay: "150ms", animationFillMode: "backwards" } as const;
 
 function plural(n: number, word: string): string {
   return `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
