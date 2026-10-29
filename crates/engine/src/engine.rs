@@ -107,6 +107,7 @@ impl Engine {
     pub(crate) fn new(options: EngineOptions, events: async_channel::Sender<Event>) -> Self {
         let mut registry = DriverRegistry::default();
         registry.register(Box::new(quarry_driver_mysql::MysqlDriver::default()));
+        registry.register(Box::new(quarry_driver_mysql::MysqlDriver::mariadb()));
 
         let config = match options
             .config_dir

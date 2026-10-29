@@ -1,335 +1,195 @@
-import { CircleCheck } from "lucide-react";
-import { useEffect, useState } from "react";
-import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
-import type { Environment } from "@/bindings/Environment";
-import type { SshAuth } from "@/bindings/SshAuth";
-import type { SslMode } from "@/bindings/SslMode";
+import { CircleCheck, Database, SlidersHorizontal } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Dialog } from "@/components/ui/Dialog";
-import { ErrorNotice } from "@/components/ui/ErrorNotice";
-import { Field, Input, PasswordInput } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
 import { Spinner } from "@/components/ui/Spinner";
-import { Switch } from "@/components/ui/Switch";
+import { cn } from "@/lib/cn";
 import { useApp } from "@/store/app";
+import { type ConnectionForm, hasMissingFields, toConfig, toForm } from "./form";
+import { ConnectionStep } from "./step/ConnectionStep";
+import { DriverSelectStep } from "./step/DriverSelectStep";
 
-const ENVIRONMENTS: { value: Environment; label: string }[] = [
-  { value: "local", label: "Local" },
-  { value: "staging", label: "Staging" },
-  { value: "production", label: "Production" },
+type Step = "source" | "details";
+
+const STEPS: { value: Step; label: string; icon: ReactNode }[] = [
+  { value: "source", label: "Data source", icon: <Database size={16} strokeWidth={1.75} /> },
+  {
+    value: "details",
+    label: "Connection",
+    icon: <SlidersHorizontal size={16} strokeWidth={1.75} />,
+  },
 ];
 
-const SSH_AUTH: { value: SshAuth; label: string }[] = [
-  { value: "agent", label: "SSH agent" },
-  { value: "key", label: "Key file" },
-  { value: "password", label: "Password" },
-];
-
-const SSL_MODES: { value: SslMode; label: string }[] = [
-  { value: "disable", label: "Disabled" },
-  { value: "prefer", label: "Preferred" },
-  { value: "require", label: "Required" },
-  { value: "verify-ca", label: "Verify CA" },
-  { value: "verify-full", label: "Verify identity" },
-];
-
-interface Form {
-  name: string;
-  environment: Environment;
-  host: string;
-  port: string;
-  user: string;
-  password: string;
-  remember: boolean;
-  database: string;
-  ssl: SslMode;
-  readOnly: boolean;
-  ssh: boolean;
-  sshHost: string;
-  sshPort: string;
-  sshUser: string;
-  sshAuth: SshAuth;
-  sshKeyPath: string;
-  /** SSH password or key passphrase; empty keeps the saved one. */
-  sshSecret: string;
-}
-
-function toForm(config: ConnectionConfig | undefined): Form {
-  return {
-    name: config?.name ?? "",
-    environment: config?.environment ?? "local",
-    host: config?.host ?? "127.0.0.1",
-    port: String(config?.port ?? 3306),
-    user: config?.user ?? "root",
-    password: "",
-    remember: true,
-    database: config?.database ?? "",
-    ssl: config?.ssl ?? "prefer",
-    readOnly: config?.read_only ?? false,
-    ssh: Boolean(config?.ssh),
-    sshHost: config?.ssh?.host ?? "",
-    sshPort: String(config?.ssh?.port ?? 22),
-    sshUser: config?.ssh?.user ?? "",
-    sshAuth: config?.ssh?.auth ?? "agent",
-    sshKeyPath: config?.ssh?.key_path ?? "~/.ssh/id_ed25519",
-    sshSecret: "",
-  };
-}
-
-/** Create / edit a MySQL connection. */
+/**
+ * Create or edit a connection in two steps: pick a data source, then fill in its settings.
+ * Fixed size, so switching steps never resizes the window. Picking a source opens its settings
+ * with a fresh form; editing starts at the settings.
+ */
 export function ConnectionDialog() {
   const dialog = useApp((s) => s.dialog);
   const connections = useApp((s) => s.connections);
+  const sources = useApp((s) => s.dataSources);
   const test = useApp((s) => s.test);
   const { openDialog, testConnection, saveConnection } = useApp.getState();
 
   const open = dialog?.mode === "new" || dialog?.mode === "edit";
   const existing =
     dialog?.mode === "edit" ? connections.find((c) => c.id === dialog.id) : undefined;
-  const [form, setForm] = useState<Form>(() => toForm(existing));
-  const [invalid, setInvalid] = useState(false);
+  const sourceOf = (driver: string | undefined) =>
+    driver === undefined ? undefined : sources.find((s) => s.driver === driver);
+
+  const [step, setStep] = useState<Step>("source");
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const [form, setForm] = useState<ConnectionForm>(() => toForm(existing, undefined));
+  const [showInvalid, setShowInvalid] = useState(false);
+  const source = sources.find((s) => s.id === sourceId);
+  const driver = source?.driver ?? existing?.driver ?? null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the dialog opens
   useEffect(() => {
-    if (open) {
-      setForm(toForm(existing));
-      setInvalid(false);
-    }
+    if (!open) return;
+    const saved = sourceOf(existing?.driver);
+    setStep(existing ? "details" : "source");
+    setSourceId(saved?.id ?? null);
+    setForm(toForm(existing, saved));
+    setShowInvalid(false);
   }, [open, existing?.id]);
 
-  const set = <K extends keyof Form>(key: K, value: Form[K]) =>
+  const set = <K extends keyof ConnectionForm>(key: K, value: ConnectionForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
-  const build = (): ConnectionConfig | null => {
-    const host = form.host.trim();
-    if (!host || (form.ssh && (!form.sshHost.trim() || !form.sshUser.trim()))) {
-      setInvalid(true);
+  /** Another source starts a fresh form with its defaults; the same one keeps what was typed. */
+  const pick = (id: string) => {
+    setStep("details");
+    if (id === sourceId) return;
+    setSourceId(id);
+    setForm(
+      toForm(
+        undefined,
+        sources.find((s) => s.id === id),
+      ),
+    );
+    setShowInvalid(false);
+    // Drops the previous source's test result.
+    openDialog({ mode: "new" });
+  };
+
+  const build = () => {
+    if (!driver || hasMissingFields(form)) {
+      setShowInvalid(true);
       return null;
     }
-    const port = Number.parseInt(form.port, 10);
-    const sshPort = Number.parseInt(form.sshPort, 10);
-    return {
-      id: existing?.id ?? crypto.randomUUID(),
-      name: form.name.trim() || host,
-      driver: "mysql",
-      host,
-      port: Number.isFinite(port) ? port : 3306,
-      database: form.database.trim() || null,
-      user: form.user.trim() || null,
-      path: null,
-      ssl: form.ssl,
-      ssh: form.ssh
-        ? {
-            host: form.sshHost.trim(),
-            port: Number.isFinite(sshPort) ? sshPort : 22,
-            user: form.sshUser.trim(),
-            auth: form.sshAuth,
-            key_path: form.sshAuth === "key" ? form.sshKeyPath.trim() || null : null,
-          }
-        : null,
-      environment: form.environment,
-      read_only: form.readOnly,
-      color: existing?.color ?? null,
-      group: existing?.group ?? null,
-    };
+    return toConfig(form, driver, source?.default_port ?? null, existing);
   };
 
   const password = form.password ? form.password : null;
   const sshSecret = form.ssh && form.sshAuth !== "agent" && form.sshSecret ? form.sshSecret : null;
+  const save = () => {
+    const config = build();
+    if (config) saveConnection(config, password, sshSecret, form.remember);
+  };
 
   return (
     <Dialog
       open={open}
       onClose={() => openDialog(null)}
       title={existing ? "Edit connection" : "New connection"}
-      description="MySQL or MariaDB"
-      width={480}
-      footer={
-        <>
-          <div className="mr-auto flex min-w-0 items-center gap-2 text-sm">
-            {test?.pending && <Spinner size={12} />}
-            {test?.ok && (
-              <span className="flex min-w-0 items-center gap-1.5 text-success">
-                <CircleCheck size={14} strokeWidth={1.75} />
-                <span className="truncate" title={test.message}>
-                  {test.message}
-                </span>
-              </span>
-            )}
-          </div>
-          <Button
-            disabled={test?.pending}
-            onClick={() => {
-              const config = build();
-              if (config) testConnection(config, password, sshSecret);
-            }}
-          >
-            Test
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => {
-              const config = build();
-              if (config) saveConnection(config, password, sshSecret, form.remember);
-            }}
-          >
-            Save
-          </Button>
-        </>
-      }
+      // Editing has a single step, so it has no step list and needs less width.
+      width={existing ? 560 : 760}
+      height={520}
+      flush
     >
-      <form
-        className="flex flex-col gap-4"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const config = build();
-          if (config) saveConnection(config, password, sshSecret, form.remember);
-        }}
-      >
-        {test && !test.pending && !test.ok && (
-          <ErrorNotice key={test.request} message={test.message} />
-        )}
-
-        <div className="grid grid-cols-[1fr_140px] gap-3">
-          <Field label="Name" hint="Left empty, the host is used.">
-            <Input
-              autoFocus
-              value={form.name}
-              placeholder="Connection name"
-              onChange={(e) => set("name", e.target.value)}
-            />
-          </Field>
-          <Field label="Environment">
-            <Select
-              value={form.environment}
-              options={ENVIRONMENTS}
-              onChange={(v) => set("environment", v)}
-            />
-          </Field>
-        </div>
-
-        <div className="grid grid-cols-[1fr_96px] gap-3">
-          <Field label="Host">
-            <Input
-              value={form.host}
-              aria-invalid={invalid && !form.host.trim()}
-              onChange={(e) => set("host", e.target.value)}
-            />
-          </Field>
-          <Field label="Port">
-            <Input
-              inputMode="numeric"
-              value={form.port}
-              onChange={(e) => set("port", e.target.value.replace(/\D/g, ""))}
-            />
-          </Field>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="User">
-            <Input value={form.user} onChange={(e) => set("user", e.target.value)} />
-          </Field>
-          <Field label="Password">
-            <PasswordInput
-              value={form.password}
-              placeholder={existing ? "Unchanged" : ""}
-              onChange={(e) => set("password", e.target.value)}
-            />
-          </Field>
-        </div>
-
-        <Field label="Default database" hint="Optional. Opened automatically after connecting.">
-          <Input value={form.database} onChange={(e) => set("database", e.target.value)} />
-        </Field>
-
-        <Field label="SSL">
-          <Select value={form.ssl} options={SSL_MODES} onChange={(v) => set("ssl", v)} />
-        </Field>
-
-        <div className="flex flex-col gap-3 border-line border-t pt-4">
-          <Switch
-            checked={form.ssh}
-            onChange={(v) => set("ssh", v)}
-            label="Connect over SSH"
-            description="Host and port above are then as seen from the SSH server"
-          />
-          {form.ssh && (
-            <>
-              <div className="grid grid-cols-[1fr_96px] gap-3">
-                <Field label="SSH host">
-                  <Input
-                    value={form.sshHost}
-                    placeholder="Host name or IP address"
-                    aria-invalid={invalid && !form.sshHost.trim()}
-                    onChange={(e) => set("sshHost", e.target.value)}
-                  />
-                </Field>
-                <Field label="SSH port">
-                  <Input
-                    inputMode="numeric"
-                    value={form.sshPort}
-                    onChange={(e) => set("sshPort", e.target.value.replace(/\D/g, ""))}
-                  />
-                </Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="SSH user">
-                  <Input
-                    value={form.sshUser}
-                    aria-invalid={invalid && !form.sshUser.trim()}
-                    onChange={(e) => set("sshUser", e.target.value)}
-                  />
-                </Field>
-                <Field label="Sign in with">
-                  <Select
-                    value={form.sshAuth}
-                    options={SSH_AUTH}
-                    onChange={(v) => set("sshAuth", v)}
-                  />
-                </Field>
-              </div>
-              {form.sshAuth === "key" && (
-                <Field label="Private key file">
-                  <Input
-                    value={form.sshKeyPath}
-                    onChange={(e) => set("sshKeyPath", e.target.value)}
-                  />
-                </Field>
+      {!existing && (
+        <nav
+          aria-label="Steps"
+          className="flex w-48 shrink-0 flex-col gap-0.5 border-line border-r p-2"
+        >
+          {STEPS.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              // The settings need a source first; going back to it keeps what was typed.
+              disabled={item.value === "details" && !source}
+              aria-current={item.value === step ? "step" : undefined}
+              onClick={() => setStep(item.value)}
+              className={cn(
+                "flex h-8 items-center gap-2 rounded-md px-2 text-left text-base transition-colors-fast",
+                "outline-none focus-visible:ring-3 focus-visible:ring-accent-soft",
+                "disabled:pointer-events-none disabled:opacity-45",
+                item.value === step
+                  ? "bg-selected text-fg"
+                  : "text-muted hover:bg-hover hover:text-fg",
               )}
-              {form.sshAuth !== "agent" && (
-                <Field
-                  label={form.sshAuth === "key" ? "Key passphrase" : "SSH password"}
-                  hint={form.sshAuth === "key" ? "Leave empty if the key has none." : undefined}
-                >
-                  <PasswordInput
-                    value={form.sshSecret}
-                    placeholder={existing?.ssh ? "Unchanged" : ""}
-                    onChange={(e) => set("sshSecret", e.target.value)}
-                  />
-                </Field>
-              )}
-              <p className="text-sm text-muted">
-                The server must be in ~/.ssh/known_hosts. Connect once with ssh in a terminal to add
-                it.
-              </p>
-            </>
+            >
+              {item.icon}
+              <span className="flex-1 truncate">{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+      {/* The footer lives in this column, so it never runs under the step list. */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <h3 className="mb-4 font-semibold text-base text-fg">
+            {step === "source" ? "Choose what to connect to" : "Connection settings"}
+          </h3>
+          {step === "source" ? (
+            <DriverSelectStep sources={sources} selectedId={sourceId} onPick={pick} />
+          ) : (
+            <ConnectionStep
+              source={source}
+              driver={driver ?? ""}
+              form={form}
+              set={set}
+              showInvalid={showInvalid}
+              isEditing={Boolean(existing)}
+              error={
+                test && !test.pending && !test.ok
+                  ? { key: test.request, message: test.message }
+                  : null
+              }
+              onSubmit={save}
+            />
           )}
-          <Switch
-            checked={form.remember}
-            onChange={(v) => set("remember", v)}
-            label="Save password"
-            description="Stored in the system keychain"
-          />
-          <Switch
-            checked={form.readOnly}
-            onChange={(v) => set("readOnly", v)}
-            label="Read-only"
-            description="The database rejects every write"
-          />
         </div>
-        <button type="submit" hidden />
-      </form>
+        {step === "source" && (
+          <div className="flex items-center justify-end gap-2 border-line border-t px-6 py-3">
+            {/* Back to the settings already typed, without picking the source again. */}
+            <Button variant="primary" disabled={!source} onClick={() => setStep("details")}>
+              Next
+            </Button>
+          </div>
+        )}
+        {step === "details" && (
+          <div className="flex items-center gap-2 border-line border-t px-6 py-3">
+            {!existing && <Button onClick={() => setStep("source")}>Previous</Button>}
+            <div className="mr-auto flex min-w-0 items-center gap-2 text-sm">
+              {test?.pending && <Spinner size={12} />}
+              {test?.ok && (
+                <span className="flex min-w-0 items-center gap-1.5 text-success">
+                  <CircleCheck size={14} strokeWidth={1.75} />
+                  <span className="truncate" title={test.message}>
+                    {test.message}
+                  </span>
+                </span>
+              )}
+            </div>
+            <Button
+              disabled={test?.pending}
+              onClick={() => {
+                const config = build();
+                if (config) testConnection(config, password, sshSecret);
+              }}
+            >
+              Test
+            </Button>
+            <Button variant="primary" onClick={save}>
+              Save
+            </Button>
+          </div>
+        )}
+      </div>
     </Dialog>
   );
 }

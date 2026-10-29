@@ -20,19 +20,41 @@ use quarry_model::{
 };
 
 pub const DRIVER_ID: &str = "mysql";
+pub const MARIADB_DRIVER_ID: &str = "mariadb";
 pub const DEFAULT_PORT: u16 = 3306;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Debug, Default)]
+/// Serves MySQL and, under its own id, MariaDB: the wire protocol is shared today, and the
+/// separate id lets MariaDB grow its own behavior without touching MySQL connections.
+#[derive(Debug)]
 pub struct MysqlDriver {
+    id: &'static str,
     dialect: MysqlDialect,
+}
+
+impl Default for MysqlDriver {
+    fn default() -> Self {
+        Self {
+            id: DRIVER_ID,
+            dialect: MysqlDialect,
+        }
+    }
+}
+
+impl MysqlDriver {
+    pub fn mariadb() -> Self {
+        Self {
+            id: MARIADB_DRIVER_ID,
+            dialect: MysqlDialect,
+        }
+    }
 }
 
 #[async_trait]
 impl Driver for MysqlDriver {
     fn id(&self) -> DriverId {
-        DriverId(DRIVER_ID.to_owned())
+        DriverId(self.id.to_owned())
     }
 
     fn capabilities(&self) -> Capabilities {

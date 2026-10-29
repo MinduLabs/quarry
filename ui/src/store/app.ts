@@ -10,6 +10,7 @@ import type { CellValue } from "@/bindings/CellValue";
 import type { ColumnInfo } from "@/bindings/ColumnInfo";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
+import type { DataSource } from "@/bindings/DataSource";
 import type { ErrorLocation } from "@/bindings/ErrorLocation";
 import type { Event } from "@/bindings/Event";
 import type { Favorite } from "@/bindings/Favorite";
@@ -444,6 +445,8 @@ export interface AppState {
   ready: boolean;
   engineVersion: string | null;
   connections: ConnectionConfig[];
+  /** What a new connection can point at, from the engine; usable ones have a `driver`. */
+  dataSources: DataSource[];
   nodes: Record<string, ConnNode>;
   /** Last connection/database the user worked with (target of "New query"). */
   active: { connId: string; database: string | null } | null;
@@ -933,6 +936,7 @@ export const useApp = create<AppState>()((set, get) => {
     ready: false,
     engineVersion: null,
     connections: [],
+    dataSources: [],
     nodes: {},
     active: null,
     tabs: [],
@@ -1081,6 +1085,9 @@ export const useApp = create<AppState>()((set, get) => {
               event.connections.map((c) => [c.id, s.nodes[c.id] ?? emptyNode()]),
             ),
           }));
+          break;
+        case "DataSources":
+          set({ dataSources: event.sources });
           break;
         case "TestResult": {
           const test = get().test;

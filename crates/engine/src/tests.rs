@@ -100,6 +100,26 @@ async fn ping_pong() {
 }
 
 #[tokio::test]
+async fn data_sources_mark_what_this_build_can_open() {
+    let (engine, events) = test_engine();
+    engine.send(Command::LoadDataSources).unwrap();
+    let Event::DataSources { sources } = events.recv().await.unwrap() else {
+        panic!("expected DataSources");
+    };
+    let find = |id: &str| sources.iter().find(|s| s.id == id).expect(id);
+    for id in ["mysql", "mariadb"] {
+        let source = find(id);
+        assert_eq!(source.driver.as_ref().map(|d| d.0.as_str()), Some(id));
+        assert!(source.is_installed);
+    }
+    for id in ["postgresql", "sqlserver", "aws", "demo-sqlite"] {
+        let source = find(id);
+        assert_eq!(source.driver, None, "{id}");
+        assert!(!source.is_installed, "{id}");
+    }
+}
+
+#[tokio::test]
 async fn production_edits_ask_first_and_read_only_refuses() {
     use quarry_model::{CellValue, DriverId, SslMode, Value};
     let (engine, events) = test_engine();

@@ -9,6 +9,7 @@ mod changes;
 mod command;
 mod connections;
 mod console;
+mod data_sources;
 mod dispatch;
 mod edit;
 mod engine;

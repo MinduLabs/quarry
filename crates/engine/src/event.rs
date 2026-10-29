@@ -1,7 +1,7 @@
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnId, ConnectionConfig, ErrorLocation, Favorite, HistoryEntry,
-    SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, Value,
-    Workspace,
+    Capabilities, ColumnMeta, ConnId, ConnectionConfig, DataSource, ErrorLocation, Favorite,
+    HistoryEntry, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns,
+    TableInfo, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -90,6 +90,10 @@ pub enum Event {
     /// The full connection list, re-sent after every change.
     Connections {
         connections: Vec<ConnectionConfig>,
+    },
+    /// Answer to `LoadDataSources`, in display order.
+    DataSources {
+        sources: Vec<DataSource>,
     },
     /// `error: null` means the connection worked; `server_version` is then set.
     TestResult {

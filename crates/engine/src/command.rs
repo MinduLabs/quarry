@@ -36,6 +36,8 @@ pub enum Command {
     },
     /// Read saved connections → `Event::Connections`.
     LoadConnections,
+    /// What the user can connect to, and which of it this build can open → `Event::DataSources`.
+    LoadDataSources,
     /// Insert or update a connection (matched by `config.id`).
     /// `password: null` keeps the current password; same for `ssh_secret` (SSH password or key
     /// passphrase). `remember_password` applies to both.

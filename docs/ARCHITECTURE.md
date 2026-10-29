@@ -47,11 +47,11 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
 |---|---|
 | `model` | Plain types that cross the boundary (`Value`, `ColumnMeta`, `ConnectionConfig`, `Capabilities`, …). Exports TypeScript types (ts-rs). |
 | `driver-api` | `Driver` / `Session` traits, `Dialect` (quoting, placeholders, paging, DDL), `ExecItem`, the shared error type. |
-| `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls. Introspection through `information_schema`, cancel with `KILL QUERY` on a side connection. |
+| `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls, registered under the ids `mysql` and `mariadb`. Introspection through `information_schema`, cancel with `KILL QUERY` on a side connection. |
 | `sql` | Statement splitting, statement at cursor, classification (read / write / schema / destructive), transaction effect, completion context. No IO. |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs, query history, secrets in the OS keyring. |
 | `tunnel` | SSH local port forwarding via `russh`. |
-| `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Exports TypeScript types. |
+| `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Holds the catalog of data sources (`LoadDataSources`): an entry is usable when a driver with its id is registered. Exports TypeScript types. |
 | `src-tauri` | Window, bundling, the bridge. |
 
 ## Protocol

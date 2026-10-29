@@ -21,7 +21,7 @@ impl Default for ConnId {
     }
 }
 
-/// Driver id: `"mysql"`, later `"postgres"`, `"sqlite"`, …
+/// Driver id: `"mysql"`, `"mariadb"`, later `"postgres"`, `"sqlite"`, …
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export, type = "string")]
 pub struct DriverId(pub String);
