@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use quarry_driver_api::{DriverError, ExecItem, ExecOpts, Session};
+use quarry_driver_api::{Dialect, DriverError, ExecItem, ExecOpts, Session};
 use quarry_model::{BrowseQuery, ConnId, Environment, HistoryEntry, TableRef, Value};
 
 use crate::console::Logged;

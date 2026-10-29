@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnectionConfig, DriverId, ErrorLocation, SchemaChange,
-    SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, TableRef, Value,
+    Capabilities, ColumnMeta, ConnectionConfig, DialectSpec, DriverId, ErrorLocation,
+    PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns,
+    TableInfo, TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -143,12 +144,6 @@ pub trait Dialect: Send + Sync {
         ansi_literal(value)
     }
 
-    /// The statements that make `change`, in order, or `None` when the driver cannot change
-    /// the schema. An error says what is wrong with the change (an empty name, …).
-    fn schema_change(&self, _change: &SchemaChange) -> Option<Result<Vec<String>, String>> {
-        None
-    }
-
     /// Quoted, qualified table name: `database.schema.name`, skipping the parts that are unset.
     fn qualify(&self, table: &quarry_model::TableRef) -> String {
         [&table.database, &table.schema, &Some(table.name.clone())]
@@ -157,6 +152,85 @@ pub trait Dialect: Send + Sync {
             .map(|part| self.quote_ident(part))
             .collect::<Vec<_>>()
             .join(".")
+    }
+}
+
+/// A [`Dialect`] written entirely from a [`DialectSpec`], so the engine never calls into a driver
+/// to build SQL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecDialect {
+    spec: DialectSpec,
+}
+
+impl SpecDialect {
+    pub fn new(spec: DialectSpec) -> Self {
+        Self { spec }
+    }
+
+    pub fn spec(&self) -> &DialectSpec {
+        &self.spec
+    }
+}
+
+impl Dialect for SpecDialect {
+    fn quote_ident(&self, ident: &str) -> String {
+        let quote = self.spec.quote;
+        let doubled: String = [quote, quote].iter().collect();
+        format!("{quote}{}{quote}", ident.replace(quote, &doubled))
+    }
+
+    fn placeholder(&self, index: usize) -> String {
+        match self.spec.placeholder {
+            PlaceholderStyle::Question => "?".to_owned(),
+            PlaceholderStyle::Numbered => format!("${index}"),
+        }
+    }
+
+    fn select_page(
+        &self,
+        table: &quarry_model::TableRef,
+        filter: Option<&str>,
+        order: Option<&str>,
+        limit: u64,
+        offset: u64,
+    ) -> String {
+        let mut sql = format!("SELECT * FROM {}", self.qualify(table));
+        if let Some(filter) = filter {
+            sql.push_str(" WHERE ");
+            sql.push_str(filter);
+        }
+        if let Some(order) = order {
+            sql.push_str(" ORDER BY ");
+            sql.push_str(order);
+        }
+        sql.push_str(&format!(" LIMIT {limit}"));
+        if offset > 0 {
+            sql.push_str(&format!(" OFFSET {offset}"));
+        }
+        sql
+    }
+
+    fn explain(&self, statement: &str, json: bool) -> Option<String> {
+        let syntax = self.spec.explain.as_ref()?;
+        let keywords = if json {
+            syntax.json.as_deref()?
+        } else {
+            &syntax.table
+        };
+        Some(format!("{keywords} {statement}"))
+    }
+
+    fn literal(&self, value: &Value) -> String {
+        let style = self.spec.literals;
+        match value {
+            Value::Text(text) | Value::Json(text) | Value::Other { text, .. }
+                if style.backslash_escapes =>
+            {
+                format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
+            }
+            Value::Bool(b) if style.bool_as_int => if *b { "1" } else { "0" }.to_owned(),
+            other => ansi_literal(other),
+        }
     }
 }
 
@@ -186,7 +260,12 @@ pub fn ansi_literal(value: &Value) -> String {
 pub trait Driver: Send + Sync + 'static {
     fn id(&self) -> DriverId;
     fn capabilities(&self) -> Capabilities;
-    fn dialect(&self) -> &dyn Dialect;
+    fn dialect(&self) -> &SpecDialect;
+    /// The statements that make `change`, in order, or `None` when the driver cannot change
+    /// the schema. An error says what is wrong with the change (an empty name, …).
+    fn schema_change(&self, _change: &SchemaChange) -> Option<Result<Vec<String>, String>> {
+        None
+    }
     async fn connect(&self, config: &ResolvedConfig) -> Result<Box<dyn Session>>;
 }
 
@@ -279,5 +358,52 @@ mod tests {
         assert_eq!(ansi_literal(&Value::Text("it's".into())), "'it''s'");
         assert_eq!(ansi_literal(&Value::Bytes(vec![0xde, 0x01])), "X'DE01'");
         assert_eq!(ansi_literal(&Value::Float(f64::NAN)), "'NaN'");
+    }
+
+    fn ansi_spec() -> SpecDialect {
+        SpecDialect::new(DialectSpec {
+            quote: '"',
+            placeholder: PlaceholderStyle::Numbered,
+            literals: quarry_model::LiteralStyle {
+                backslash_escapes: false,
+                bool_as_int: false,
+            },
+            explain: None,
+        })
+    }
+
+    #[test]
+    fn spec_dialect_follows_its_spec() {
+        let dialect = ansi_spec();
+        assert_eq!(dialect.quote_ident("a\"b"), "\"a\"\"b\"");
+        assert_eq!(dialect.placeholder(2), "$2");
+        assert_eq!(dialect.literal(&Value::Text("a\\b'c".into())), "'a\\b''c'");
+        assert_eq!(dialect.literal(&Value::Bool(true)), "TRUE");
+        assert_eq!(dialect.explain("SELECT 1", false), None);
+        let table = TableRef {
+            database: None,
+            schema: Some("public".into()),
+            name: "t".into(),
+        };
+        assert_eq!(
+            dialect.select_page(&table, Some("\"a\" = $1"), None, 10, 0),
+            "SELECT * FROM \"public\".\"t\" WHERE \"a\" = $1 LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn json_plans_need_their_own_syntax() {
+        let dialect = SpecDialect::new(DialectSpec {
+            explain: Some(quarry_model::ExplainSyntax {
+                table: "EXPLAIN".into(),
+                json: None,
+            }),
+            ..ansi_spec().spec().clone()
+        });
+        assert_eq!(
+            dialect.explain("SELECT 1", false).as_deref(),
+            Some("EXPLAIN SELECT 1")
+        );
+        assert_eq!(dialect.explain("SELECT 1", true), None);
     }
 }

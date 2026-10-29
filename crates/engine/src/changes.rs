@@ -169,7 +169,7 @@ impl Engine {
         }
         let statements = match self
             .driver_of(conn)
-            .and_then(|driver| schema::statements(driver.dialect(), &change))
+            .and_then(|driver| schema::checked(driver.schema_change(&change)))
         {
             Ok(statements) => statements,
             Err(error) => return self.emit(done(change, Some(error))),

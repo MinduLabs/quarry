@@ -5,6 +5,7 @@ mod ddl;
 mod diagnose;
 mod introspect;
 
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -12,11 +13,12 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, QueryResult, SslOpts};
 use quarry_driver_api::{
     CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig,
-    Result, Session, SharedCancel,
+    Result, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
-    Capabilities, DriverId, ErrorLocation, ObjectKind, SchemaChange, SchemaObject, ServerInfoKind,
-    ServerInfoRow, SslMode, TableColumns, TableInfo, TableRef, Value,
+    Capabilities, DialectSpec, DriverId, ErrorLocation, ExplainSyntax, LiteralStyle, ObjectKind,
+    PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, SslMode,
+    TableColumns, TableInfo, TableRef, Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
@@ -30,15 +32,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Debug)]
 pub struct MysqlDriver {
     id: &'static str,
-    dialect: MysqlDialect,
 }
 
 impl Default for MysqlDriver {
     fn default() -> Self {
-        Self {
-            id: DRIVER_ID,
-            dialect: MysqlDialect,
-        }
+        Self { id: DRIVER_ID }
     }
 }
 
@@ -46,7 +44,6 @@ impl MysqlDriver {
     pub fn mariadb() -> Self {
         Self {
             id: MARIADB_DRIVER_ID,
-            dialect: MysqlDialect,
         }
     }
 }
@@ -80,8 +77,15 @@ impl Driver for MysqlDriver {
         }
     }
 
-    fn dialect(&self) -> &dyn Dialect {
-        &self.dialect
+    fn dialect(&self) -> &SpecDialect {
+        dialect()
+    }
+
+    fn schema_change(
+        &self,
+        change: &SchemaChange,
+    ) -> Option<std::result::Result<Vec<String>, String>> {
+        Some(ddl::statements(dialect(), change))
     }
 
     async fn connect(&self, config: &ResolvedConfig) -> Result<Box<dyn Session>> {
@@ -295,7 +299,7 @@ impl Session for MysqlSession {
     }
 
     async fn use_database(&mut self, database: &str) -> Result<()> {
-        let sql = format!("USE {}", MysqlDialect.quote_ident(database));
+        let sql = format!("USE {}", dialect().quote_ident(database));
         self.conn.query_drop(sql).await.map_err(map_err)
     }
 
@@ -432,68 +436,25 @@ impl CancelHandle for MysqlCancel {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MysqlDialect;
-
-impl Dialect for MysqlDialect {
-    fn quote_ident(&self, ident: &str) -> String {
-        format!("`{}`", ident.replace('`', "``"))
-    }
-
-    fn placeholder(&self, _index: usize) -> String {
-        "?".to_owned()
-    }
-
-    fn select_page(
-        &self,
-        table: &TableRef,
-        filter: Option<&str>,
-        order: Option<&str>,
-        limit: u64,
-        offset: u64,
-    ) -> String {
-        let mut sql = format!("SELECT * FROM {}", self.qualify(table));
-        if let Some(filter) = filter {
-            sql.push_str(" WHERE ");
-            sql.push_str(filter);
-        }
-        if let Some(order) = order {
-            sql.push_str(" ORDER BY ");
-            sql.push_str(order);
-        }
-        sql.push_str(&format!(" LIMIT {limit}"));
-        if offset > 0 {
-            sql.push_str(&format!(" OFFSET {offset}"));
-        }
-        sql
-    }
-
-    fn literal(&self, value: &Value) -> String {
-        match value {
+/// MySQL syntax. MariaDB shares it.
+pub(crate) fn dialect() -> &'static SpecDialect {
+    static DIALECT: LazyLock<SpecDialect> = LazyLock::new(|| {
+        SpecDialect::new(DialectSpec {
+            quote: '`',
+            placeholder: PlaceholderStyle::Question,
             // MySQL reads `\` as an escape inside strings (unless NO_BACKSLASH_ESCAPES).
-            Value::Text(text) | Value::Json(text) | Value::Other { text, .. } => {
-                format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
-            }
-            Value::Bool(b) => if *b { "1" } else { "0" }.to_owned(),
-            other => quarry_driver_api::ansi_literal(other),
-        }
-    }
-
-    fn schema_change(
-        &self,
-        change: &SchemaChange,
-    ) -> Option<std::result::Result<Vec<String>, String>> {
-        Some(ddl::statements(self, change))
-    }
-
-    fn explain(&self, statement: &str, json: bool) -> Option<String> {
-        // MySQL 5.6+ and MariaDB 10.1+ both accept FORMAT=JSON.
-        Some(if json {
-            format!("EXPLAIN FORMAT=JSON {statement}")
-        } else {
-            format!("EXPLAIN {statement}")
+            literals: LiteralStyle {
+                backslash_escapes: true,
+                bool_as_int: true,
+            },
+            // MySQL 5.6+ and MariaDB 10.1+ both accept FORMAT=JSON.
+            explain: Some(ExplainSyntax {
+                table: "EXPLAIN".to_owned(),
+                json: Some("EXPLAIN FORMAT=JSON".to_owned()),
+            }),
         })
-    }
+    });
+    &DIALECT
 }
 
 fn map_err(err: mysql_async::Error) -> DriverError {
@@ -566,22 +527,22 @@ mod tests {
 
     #[test]
     fn quotes_identifiers() {
-        assert_eq!(MysqlDialect.quote_ident("a`b"), "`a``b`");
+        assert_eq!(dialect().quote_ident("a`b"), "`a``b`");
         let table = TableRef {
             database: Some("shop".into()),
             schema: None,
             name: "orders".into(),
         };
         assert_eq!(
-            MysqlDialect.select_page(&table, None, None, 100, 0),
+            dialect().select_page(&table, None, None, 100, 0),
             "SELECT * FROM `shop`.`orders` LIMIT 100"
         );
         assert_eq!(
-            MysqlDialect.select_page(&table, Some("`a` = ?"), Some("`b` DESC"), 100, 200),
+            dialect().select_page(&table, Some("`a` = ?"), Some("`b` DESC"), 100, 200),
             "SELECT * FROM `shop`.`orders` WHERE `a` = ? ORDER BY `b` DESC LIMIT 100 OFFSET 200"
         );
         assert_eq!(
-            MysqlDialect.count_rows(&table, Some("`a` IS NULL")),
+            dialect().count_rows(&table, Some("`a` IS NULL")),
             "SELECT COUNT(*) FROM `shop`.`orders` WHERE `a` IS NULL"
         );
     }
@@ -589,13 +550,25 @@ mod tests {
     #[test]
     fn literals_escape_backslashes() {
         assert_eq!(
-            MysqlDialect.literal(&Value::Text("a\\b'c".into())),
+            dialect().literal(&Value::Text("a\\b'c".into())),
             "'a\\\\b''c'"
         );
-        assert_eq!(MysqlDialect.literal(&Value::Bool(true)), "1");
+        assert_eq!(dialect().literal(&Value::Bool(true)), "1");
         assert_eq!(
-            MysqlDialect.literal(&Value::UInt(u64::MAX)),
+            dialect().literal(&Value::UInt(u64::MAX)),
             "18446744073709551615"
+        );
+    }
+
+    #[test]
+    fn explains_as_a_table_or_json() {
+        assert_eq!(
+            dialect().explain("SELECT 1", false).as_deref(),
+            Some("EXPLAIN SELECT 1")
+        );
+        assert_eq!(
+            dialect().explain("SELECT 1", true).as_deref(),
+            Some("EXPLAIN FORMAT=JSON SELECT 1")
         );
     }
 }
