@@ -31,8 +31,9 @@ This file holds rules only. It does not change when a feature lands.
 ## Invariants
 
 - **Headless core.** Database, keyring and disk access live in `crates/engine` and below.
-  Dependencies point down: `src-tauri → engine → {driver-api, sql, store, tunnel} → model`. Only
-  the engine names a concrete driver. `src-tauri` forwards and decides nothing.
+  Dependencies point down: `src-tauri → engine → {driver-proto, sql, store, tunnel} → model`.
+  No app crate names a concrete driver; drivers are binaries the engine runs. `src-tauri` forwards
+  and decides nothing.
 - **One protocol.** UI ↔ core only through `Command` / `Event`. A new capability is a new variant,
   then `just bindings`, then commit `ui/src/bindings/`. Never edit `ui/src/bindings/`.
 - **Capabilities, not names.** No `if driver == "mysql"` in the UI or the engine.

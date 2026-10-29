@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 quarry-model.workspace = true
 quarry-driver-api.workspace = true
-quarry-driver-mysql.workspace = true
+quarry-driver-proto.workspace = true
 quarry-store.workspace = true
 quarry-sql.workspace = true
 quarry-tunnel.workspace = true
@@ -25,6 +25,8 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# Unit tests run MySQL inside the engine; Quarry itself runs it from its binary.
+quarry-driver-mysql.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 uuid.workspace = true

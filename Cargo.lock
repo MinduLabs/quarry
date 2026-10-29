@@ -3736,9 +3736,27 @@ dependencies = [
  "chrono",
  "mysql_async",
  "quarry-driver-api",
+ "quarry-driver-proto",
  "quarry-model",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "quarry-driver-proto"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "quarry-driver-api",
+ "quarry-model",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3749,6 +3767,7 @@ dependencies = [
  "chrono",
  "quarry-driver-api",
  "quarry-driver-mysql",
+ "quarry-driver-proto",
  "quarry-model",
  "quarry-sql",
  "quarry-store",

@@ -94,8 +94,7 @@ impl Engine {
             .iter()
             .map(|entry| {
                 let driver = DriverId(entry.driver.to_owned());
-                // Every registered driver is compiled in, so it is installed too.
-                let driver = self.registry.get(&driver).map(|_| driver);
+                let driver = self.driver(&driver).map(|_| driver);
                 DataSource {
                     id: entry.id.to_owned(),
                     name: entry.name.to_owned(),

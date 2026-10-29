@@ -389,7 +389,8 @@ impl Engine {
         limit: u64,
         offset: u64,
     ) -> Result<Query, String> {
-        let dialect = self.driver_of(conn)?.dialect();
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
         let clauses = browse::clauses(dialect, query)?;
         let sql = dialect.select_page(
             table,
@@ -414,7 +415,8 @@ impl Engine {
         sql: &str,
         json: bool,
     ) -> Result<Query, String> {
-        let dialect = self.driver_of(conn)?.dialect();
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
         let statement = single_statement(sql)?;
         let sql = dialect
             .explain(statement, json)
@@ -449,7 +451,8 @@ impl Engine {
         table: &TableRef,
         query: &BrowseQuery,
     ) -> Result<u64, String> {
-        let dialect = self.driver_of(conn)?.dialect();
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
         let clauses = browse::clauses(dialect, query)?;
         let sql = dialect.count_rows(table, clauses.filter.as_deref());
         let slot = self.tab_slot(tab);

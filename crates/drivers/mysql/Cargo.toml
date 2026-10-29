@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 quarry-model.workspace = true
 quarry-driver-api.workspace = true
+quarry-driver-proto.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 mysql_async.workspace = true

@@ -10,8 +10,9 @@ paths:
 
 ## Driver contract
 
-- The engine talks only to `dyn Driver` / `dyn Session`. Types crossing the boundary stay
-  serializable so a driver can move out of process later.
+- A driver runs in its own process (`quarry-driver-proto`); the engine talks only to
+  `dyn Driver` / `dyn Session` through it. Types crossing the boundary stay serializable.
+- SQL syntax is data: a `DialectSpec`. Only DDL (`Driver::schema_change`) is driver code.
 - The `execute` sink is called synchronously: keep it cheap (push to a channel).
 - Respect `ExecOpts.row_limit`: past it, drain rows from the socket without sending or buffering
   them, and set `truncated`.
@@ -25,8 +26,9 @@ paths:
 ## Adding a driver
 
 1. New crate under `crates/drivers/<name>` (see [rust-core.md](rust-core.md) for the crate steps).
-2. Implement `Driver`, `Session`, `Dialect`.
-3. Register it in `Engine::new` (`crates/engine/src/engine.rs`). Nowhere else.
+2. Implement `Driver` and `Session`, and describe the syntax with a `DialectSpec`.
+3. Add `src/main.rs` that calls `quarry_driver_proto::driver_main`. The engine finds the binary in
+   the driver directory; nothing registers it. Build it in the `dev`, `test-db` and `bench` recipes.
 4. Add a service to `tests/docker-compose.yml`, fixtures in `tests/fixtures/<name>/`, an integration
    test gated by `QUARRY_TEST_<NAME>`, and a CI step.
 5. Update the crate table in `docs/ARCHITECTURE.md`.

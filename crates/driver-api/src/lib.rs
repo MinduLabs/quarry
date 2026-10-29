@@ -1,8 +1,8 @@
 //! The contract every database driver implements.
 //!
 //! The engine only talks to `dyn Driver` / `dyn Session`; the UI never sees a concrete
-//! driver. Every type crossing this boundary is serializable, so drivers can later move
-//! out of process as plugins.
+//! driver. Every type crossing this boundary is serializable, so a driver can run in its own
+//! process (`quarry-driver-proto`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -263,7 +263,7 @@ pub trait Driver: Send + Sync + 'static {
     fn dialect(&self) -> &SpecDialect;
     /// The statements that make `change`, in order, or `None` when the driver cannot change
     /// the schema. An error says what is wrong with the change (an empty name, …).
-    fn schema_change(&self, _change: &SchemaChange) -> Option<Result<Vec<String>, String>> {
+    async fn schema_change(&self, _change: &SchemaChange) -> Option<Result<Vec<String>, String>> {
         None
     }
     async fn connect(&self, config: &ResolvedConfig) -> Result<Box<dyn Session>>;
@@ -315,10 +315,10 @@ pub trait Session: Send {
     async fn close(self: Box<Self>) -> Result<()>;
 }
 
-/// Drivers compiled into the binary.
+/// The drivers the engine can use.
 #[derive(Default)]
 pub struct DriverRegistry {
-    drivers: Vec<Box<dyn Driver>>,
+    drivers: Vec<Arc<dyn Driver>>,
 }
 
 impl std::fmt::Debug for DriverRegistry {
@@ -330,15 +330,15 @@ impl std::fmt::Debug for DriverRegistry {
 }
 
 impl DriverRegistry {
-    pub fn register(&mut self, driver: Box<dyn Driver>) {
+    /// Adds `driver`, replacing one with the same id.
+    pub fn register(&mut self, driver: Arc<dyn Driver>) {
+        let id = driver.id();
+        self.drivers.retain(|d| d.id() != id);
         self.drivers.push(driver);
     }
 
-    pub fn get(&self, id: &DriverId) -> Option<&dyn Driver> {
-        self.drivers
-            .iter()
-            .find(|d| &d.id() == id)
-            .map(|d| d.as_ref())
+    pub fn get(&self, id: &DriverId) -> Option<Arc<dyn Driver>> {
+        self.drivers.iter().find(|d| &d.id() == id).cloned()
     }
 
     pub fn ids(&self) -> impl Iterator<Item = DriverId> + '_ {

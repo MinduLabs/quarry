@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/model",
     "crates/driver-api",
+    "crates/driver-proto",
     "crates/sql",
     "crates/store",
     "crates/tunnel",
@@ -23,6 +24,7 @@ authors = ["Quarry contributors"]
 # Internal crates
 quarry-model = { path = "crates/model" }
 quarry-driver-api = { path = "crates/driver-api" }
+quarry-driver-proto = { path = "crates/driver-proto" }
 quarry-sql = { path = "crates/sql" }
 quarry-store = { path = "crates/store" }
 quarry-tunnel = { path = "crates/tunnel" }

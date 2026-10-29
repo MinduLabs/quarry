@@ -12,7 +12,8 @@ default:
 
 # Run the app with hot reload (needs Tauri's system deps: webkit2gtk-4.1 on Linux, Xcode CLT on macOS)
 dev:
-    pnpm tauri dev
+    cargo build -p quarry-driver-mysql --bins
+    QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" pnpm tauri dev
 
 # Lint and test frontend + Rust
 check:
@@ -39,12 +40,14 @@ db-down:
 
 # Integration tests against the test database (and the SSH server for tunnels)
 test-db:
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_SSH=127.0.0.1:12222 cargo test -p quarry-driver-mysql -p quarry-engine
+    cargo build -p quarry-driver-mysql --bins
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_SSH=127.0.0.1:12222 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" cargo test -p quarry-driver-mysql -p quarry-engine
 
 # Benchmarks in a release build: the history file, and query latency on the test MySQL (`just db-up` first)
 bench:
     cargo test --release -q -p quarry-store --test bench -- --ignored --nocapture
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
+    cargo build --release -q -p quarry-driver-mysql --bins
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/release" cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
 
 # macOS universal .dmg → dist/Quarry_<version>_universal.dmg. macOS only: Tauri cannot cross-build it.
 [macos]

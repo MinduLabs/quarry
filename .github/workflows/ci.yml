@@ -105,10 +105,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
+      # The engine runs MySQL from its driver binary, so build it first.
+      - run: cargo build -p quarry-driver-mysql --bins --locked
       - run: cargo test -p quarry-driver-mysql -p quarry-engine --locked
         env:
           QUARRY_TEST_MYSQL: 127.0.0.1:13306
           QUARRY_TEST_SSH: 127.0.0.1:12222
+          QUARRY_DRIVER_DIR: target/debug
 
   deny:
     name: cargo-deny

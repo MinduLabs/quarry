@@ -14,6 +14,11 @@ fn test_engine() -> (EngineHandle, EngineEvents) {
         known_hosts: None,
         disable_keyring: true,
         perf_log: None,
+        driver_dir: None,
+        in_process_drivers: InProcessDrivers(vec![
+            Arc::new(quarry_driver_mysql::MysqlDriver::default()),
+            Arc::new(quarry_driver_mysql::MysqlDriver::mariadb()),
+        ]),
     })
     .unwrap()
 }

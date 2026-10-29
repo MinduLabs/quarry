@@ -11,6 +11,7 @@ mod connections;
 mod console;
 mod data_sources;
 mod dispatch;
+mod drivers;
 mod edit;
 mod engine;
 mod event;
@@ -61,6 +62,22 @@ pub struct EngineOptions {
     pub disable_keyring: bool,
     /// Performance log (`perf.jsonl`); `None` = the `QUARRY_PERF` environment variable decides.
     pub perf_log: Option<PathBuf>,
+    /// Where the driver binaries are; `None` = the `QUARRY_DRIVER_DIR` environment variable.
+    pub driver_dir: Option<PathBuf>,
+    /// Drivers run inside the engine instead of from a binary. Tests only: Quarry itself runs
+    /// every driver from its binary.
+    pub in_process_drivers: InProcessDrivers,
+}
+
+#[derive(Clone, Default)]
+pub struct InProcessDrivers(pub Vec<Arc<dyn quarry_driver_api::Driver>>);
+
+impl std::fmt::Debug for InProcessDrivers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|d| d.id()))
+            .finish()
+    }
 }
 
 /// Sending side of the engine. Cheap to clone; the engine stops when every handle is dropped.
@@ -110,6 +127,8 @@ impl EngineHandle {
 
 async fn run(engine: Arc<Engine>, commands: async_channel::Receiver<Command>) {
     tracing::info!(version = VERSION, "engine started");
+    // Before the first command, so a restored tab never finds its driver missing.
+    engine.load_drivers().await;
     while let Ok(command) = commands.recv().await {
         tracing::debug!(?command, "command");
         tokio::spawn(engine.clone().handle(command));

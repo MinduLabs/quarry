@@ -81,7 +81,7 @@ impl Driver for MysqlDriver {
         dialect()
     }
 
-    fn schema_change(
+    async fn schema_change(
         &self,
         change: &SchemaChange,
     ) -> Option<std::result::Result<Vec<String>, String>> {

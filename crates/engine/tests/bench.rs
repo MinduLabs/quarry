@@ -61,6 +61,8 @@ async fn query_latency() {
         known_hosts: None,
         disable_keyring: true,
         perf_log: None,
+        driver_dir: None,
+        in_process_drivers: Default::default(),
     })
     .unwrap();
     engine

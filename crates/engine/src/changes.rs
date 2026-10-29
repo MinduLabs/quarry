@@ -28,7 +28,7 @@ impl Engine {
         if config.read_only {
             return self.emit(failed("This connection is read-only.".into()));
         }
-        let Some(driver) = self.registry.get(&config.driver) else {
+        let Some(driver) = self.driver(&config.driver) else {
             return self.emit(failed(format!("No driver for “{}”", config.driver.0)));
         };
         let statements = match edit::statements(driver.dialect(), &table, &changes) {
@@ -167,10 +167,11 @@ impl Engine {
         if config.read_only {
             return self.emit(done(change, Some("This connection is read-only.".into())));
         }
-        let statements = match self
-            .driver_of(conn)
-            .and_then(|driver| schema::checked(driver.schema_change(&change)))
-        {
+        let written = match self.driver_of(conn) {
+            Ok(driver) => schema::checked(driver.schema_change(&change).await),
+            Err(err) => Err(err),
+        };
+        let statements = match written {
             Ok(statements) => statements,
             Err(error) => return self.emit(done(change, Some(error))),
         };
