@@ -487,13 +487,18 @@ impl Engine {
             tab_session.is_lost |= is_lost(&err);
             return Err(describe(&err));
         }
-        match first {
-            Some(Value::Int(n)) => u64::try_from(n).map_err(|_| "Unexpected row count".to_owned()),
-            Some(Value::UInt(n)) => Ok(n),
-            Some(Value::Decimal(text) | Value::Text(text)) => {
-                text.parse().map_err(|_| "Unexpected row count".to_owned())
-            }
-            _ => Err("The database returned no row count.".to_owned()),
+        row_count_of(first)
+    }
+}
+
+/// The number a `COUNT(*)` statement answered with.
+pub(crate) fn row_count_of(first: Option<Value>) -> Result<u64, String> {
+    match first {
+        Some(Value::Int(n)) => u64::try_from(n).map_err(|_| "Unexpected row count".to_owned()),
+        Some(Value::UInt(n)) => Ok(n),
+        Some(Value::Decimal(text) | Value::Text(text)) => {
+            text.parse().map_err(|_| "Unexpected row count".to_owned())
         }
+        _ => Err("The database returned no row count.".to_owned()),
     }
 }

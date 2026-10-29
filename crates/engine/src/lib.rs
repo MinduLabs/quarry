@@ -13,6 +13,8 @@ mod dispatch;
 mod edit;
 mod engine;
 mod event;
+mod export;
+mod export_job;
 mod favorites;
 mod history;
 mod metadata;
@@ -33,8 +35,8 @@ use std::thread;
 
 use crate::engine::Engine;
 
-pub use command::{Command, Password, PerfMark, RequestId, TabId};
-pub use event::{ConnState, Event, LogEntry, LogSource, NoticeKind};
+pub use command::{Command, ExportSource, Password, PerfMark, RequestId, TabId};
+pub use event::{ConnState, Event, ExportFormatState, LogEntry, LogSource, NoticeKind};
 /// Pure SQL text helpers (statement splitting, …), shared with clients.
 pub use quarry_sql as sql;
 
