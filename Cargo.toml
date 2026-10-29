@@ -93,3 +93,9 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Driver binaries (release.yml). Each runs in its own process, so a panic ends only that
+# session, and the engine reports the connection lost: unwinding buys nothing there.
+[profile.driver]
+inherits = "release"
+panic = "abort"
