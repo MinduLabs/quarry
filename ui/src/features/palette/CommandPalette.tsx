@@ -303,7 +303,12 @@ function useCommandItems(): Item[] {
           s.transfer(
             "export",
             browse && activeTab.paged
-              ? { kind: "table", conn: activeTab.connId, table: browse.table }
+              ? {
+                  kind: "table",
+                  conn: activeTab.connId,
+                  table: browse.table,
+                  query: browse.query,
+                }
               : { kind: "result", tab: id },
           ),
       });

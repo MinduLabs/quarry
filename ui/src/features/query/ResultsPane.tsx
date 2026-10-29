@@ -1,4 +1,4 @@
-import { Columns3, Filter, Minus, Plus, RotateCw, Square } from "lucide-react";
+import { Columns3, Download, Filter, Minus, Plus, RotateCw, Square } from "lucide-react";
 import { memo, Profiler, type ReactNode, useCallback, useMemo, useState } from "react";
 import type { Value } from "@/bindings/Value";
 import { Button } from "@/components/ui/Button";
@@ -98,7 +98,7 @@ export const ResultsPane = memo(function ResultsPane({
       transfer(
         "export",
         tab.browse && tab.paged
-          ? { kind: "table", conn: tab.connId, table: tab.browse.table }
+          ? { kind: "table", conn: tab.connId, table: tab.browse.table, query: tab.browse.query }
           : { kind: "result", tab: tab.id },
       ),
     [tab.id, tab.connId, tab.browse, tab.paged, transfer],
@@ -218,6 +218,7 @@ export const ResultsPane = memo(function ResultsPane({
           isFiltering={showFilters}
           onToggleFilters={() => setFiltering((f) => !f)}
           columnItems={active?.columns && planText === null ? columnItems : null}
+          onExport={exportResult}
           end={barEnd}
         />
       )}
@@ -371,6 +372,7 @@ function DataBar({
   isFiltering,
   onToggleFilters,
   columnItems,
+  onExport,
   end,
 }: {
   tab: Tab;
@@ -380,6 +382,8 @@ function DataBar({
   onToggleFilters: () => void;
   /** The column visibility menu, when the rows have columns. */
   columnItems: MenuItem[] | null;
+  /** Open the export dialog for what the data bar shows. */
+  onExport: () => void;
   end?: ReactNode;
 }) {
   const rows = span
@@ -435,6 +439,9 @@ function DataBar({
           }
         />
       )}
+      <IconButton label="Export" size="sm" disabled={tab.running} onClick={onExport}>
+        <Download size={14} strokeWidth={1.75} />
+      </IconButton>
       {target && (
         <div className="ml-1 flex items-center gap-0.5 border-line border-l pl-1.5">
           {target.canInsert && (

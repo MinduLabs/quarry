@@ -63,6 +63,8 @@ russh = { version = "0.63", default-features = false, features = ["ring"] }
 tauri = { version = "2.12", features = [] }
 tauri-build = { version = "2.7", features = [] }
 tauri-plugin-window-state = "2"
+# The native "save as" dialog of an export. The UI may open nothing else (see the capability).
+tauri-plugin-dialog = "2"
 # The GTK 3 bindings Tauri already uses on Linux, to stop the webview's pinch-zoom gesture.
 gtk = "0.18"
 ts-rs = { version = "12", features = ["chrono-impl", "uuid-impl", "no-serde-warnings"] }

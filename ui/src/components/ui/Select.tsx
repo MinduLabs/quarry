@@ -4,6 +4,8 @@ import { Check, ChevronDown } from "lucide-react";
 export interface Option<T extends string> {
   value: T;
   label: string;
+  /** Shown but not choosable. */
+  disabled?: boolean;
 }
 
 export function Select<T extends string>({
@@ -37,7 +39,8 @@ export function Select<T extends string>({
               <RadixSelect.Item
                 key={option.value}
                 value={option.value}
-                className="relative flex h-7 cursor-default select-none items-center rounded-md pr-2 pl-7 text-base text-fg outline-none data-highlighted:bg-accent data-highlighted:text-accent-fg"
+                disabled={option.disabled}
+                className="relative flex h-7 cursor-default select-none items-center rounded-md pr-2 pl-7 text-base text-fg outline-none data-disabled:text-faint data-highlighted:bg-accent data-highlighted:text-accent-fg"
               >
                 <RadixSelect.ItemIndicator className="absolute left-2">
                   <Check size={14} strokeWidth={2} />

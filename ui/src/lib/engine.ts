@@ -7,6 +7,7 @@
  * Command/Event types are generated from Rust (`just bindings`); never edit ui/src/bindings.
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import type { Command } from "@/bindings/Command";
 import type { CompletionContext } from "@/bindings/CompletionContext";
 import type { Event } from "@/bindings/Event";
@@ -40,4 +41,18 @@ export async function completionContext(
   offset: number,
 ): Promise<CompletionContext | null> {
   return invoke<CompletionContext | null>("completion_context", { text, offset });
+}
+
+/** Ask the user where to save an export, in the system's own dialog. The dialog only picks a
+ * path; the engine writes the file. `null` when the user cancels. */
+export async function chooseSavePath(
+  fileName: string,
+  extension: string,
+  kind: string,
+): Promise<string | null> {
+  return save({
+    title: "Export",
+    defaultPath: fileName,
+    filters: [{ name: kind, extensions: [extension] }],
+  });
 }
