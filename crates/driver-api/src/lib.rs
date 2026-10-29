@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnectionConfig, DialectSpec, DriverId, ErrorLocation,
-    PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns,
-    TableInfo, TableRef, Value,
+    Capabilities, ColumnMeta, ConnectionConfig, DialectSpec, DriverId, ErrorLocation, IdentQuote,
+    PagingStyle, PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow,
+    TableColumns, TableInfo, TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -181,15 +181,20 @@ impl SpecDialect {
 
 impl Dialect for SpecDialect {
     fn quote_ident(&self, ident: &str) -> String {
-        let quote = self.spec.quote;
-        let doubled: String = [quote, quote].iter().collect();
-        format!("{quote}{}{quote}", ident.replace(quote, &doubled))
+        let (open, close) = match self.spec.quote {
+            IdentQuote::Double => ('"', '"'),
+            IdentQuote::Backtick => ('`', '`'),
+            IdentQuote::Brackets => ('[', ']'),
+        };
+        let doubled: String = [close, close].iter().collect();
+        format!("{open}{}{close}", ident.replace(close, &doubled))
     }
 
     fn placeholder(&self, index: usize) -> String {
         match self.spec.placeholder {
             PlaceholderStyle::Question => "?".to_owned(),
             PlaceholderStyle::Numbered => format!("${index}"),
+            PlaceholderStyle::AtP => format!("@P{index}"),
         }
     }
 
@@ -206,13 +211,25 @@ impl Dialect for SpecDialect {
             sql.push_str(" WHERE ");
             sql.push_str(filter);
         }
-        if let Some(order) = order {
-            sql.push_str(" ORDER BY ");
-            sql.push_str(order);
-        }
-        sql.push_str(&format!(" LIMIT {limit}"));
-        if offset > 0 {
-            sql.push_str(&format!(" OFFSET {offset}"));
+        match self.spec.paging {
+            PagingStyle::LimitOffset => {
+                if let Some(order) = order {
+                    sql.push_str(" ORDER BY ");
+                    sql.push_str(order);
+                }
+                sql.push_str(&format!(" LIMIT {limit}"));
+                if offset > 0 {
+                    sql.push_str(&format!(" OFFSET {offset}"));
+                }
+            }
+            PagingStyle::OffsetFetch => {
+                // OFFSET needs an ORDER BY; without a sort the server picks the order.
+                sql.push_str(" ORDER BY ");
+                sql.push_str(order.unwrap_or("(SELECT NULL)"));
+                sql.push_str(&format!(
+                    " OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
+                ));
+            }
         }
         sql
     }
@@ -230,12 +247,20 @@ impl Dialect for SpecDialect {
     fn literal(&self, value: &Value) -> String {
         let style = self.spec.literals;
         match value {
-            Value::Text(text) | Value::Json(text) | Value::Other { text, .. }
-                if style.backslash_escapes =>
-            {
-                format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
+            Value::Text(text) | Value::Json(text) | Value::Other { text, .. } => {
+                let text = if style.backslash_escapes {
+                    text.replace('\\', "\\\\")
+                } else {
+                    text.clone()
+                };
+                let prefix = if style.national_strings { "N" } else { "" };
+                format!("{prefix}'{}'", text.replace('\'', "''"))
             }
             Value::Bool(b) if style.bool_as_int => if *b { "1" } else { "0" }.to_owned(),
+            Value::Bytes(bytes) if style.hex_bytes => {
+                let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+                format!("0x{hex}")
+            }
             other => ansi_literal(other),
         }
     }
@@ -369,11 +394,14 @@ mod tests {
 
     fn ansi_spec() -> SpecDialect {
         SpecDialect::new(DialectSpec {
-            quote: '"',
+            quote: IdentQuote::Double,
             placeholder: PlaceholderStyle::Numbered,
+            paging: PagingStyle::LimitOffset,
             literals: quarry_model::LiteralStyle {
                 backslash_escapes: false,
                 bool_as_int: false,
+                national_strings: false,
+                hex_bytes: false,
             },
             explain: None,
         })
@@ -395,6 +423,39 @@ mod tests {
         assert_eq!(
             dialect.select_page(&table, Some("\"a\" = $1"), None, 10, 0),
             "SELECT * FROM \"public\".\"t\" WHERE \"a\" = $1 LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn sql_server_syntax_from_its_spec() {
+        let dialect = SpecDialect::new(DialectSpec {
+            quote: IdentQuote::Brackets,
+            placeholder: PlaceholderStyle::AtP,
+            paging: PagingStyle::OffsetFetch,
+            literals: quarry_model::LiteralStyle {
+                backslash_escapes: false,
+                bool_as_int: true,
+                national_strings: true,
+                hex_bytes: true,
+            },
+            explain: None,
+        });
+        assert_eq!(dialect.quote_ident("a]b[c"), "[a]]b[c]");
+        assert_eq!(dialect.placeholder(3), "@P3");
+        assert_eq!(dialect.literal(&Value::Text("it's ✓".into())), "N'it''s ✓'");
+        assert_eq!(dialect.literal(&Value::Bytes(vec![0xde, 0x01])), "0xDE01");
+        let table = TableRef {
+            database: Some("dbo".into()),
+            schema: None,
+            name: "t".into(),
+        };
+        assert_eq!(
+            dialect.select_page(&table, None, None, 100, 0),
+            "SELECT * FROM [dbo].[t] ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+        assert_eq!(
+            dialect.select_page(&table, Some("[a] = @P1"), Some("[b] DESC"), 50, 200),
+            "SELECT * FROM [dbo].[t] WHERE [a] = @P1 ORDER BY [b] DESC OFFSET 200 ROWS FETCH NEXT 50 ROWS ONLY"
         );
     }
 

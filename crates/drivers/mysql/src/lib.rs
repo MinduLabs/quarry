@@ -16,9 +16,9 @@ use quarry_driver_api::{
     Result, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
-    Capabilities, DialectSpec, DriverId, ErrorLocation, ExplainSyntax, LiteralStyle, ObjectKind,
-    PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, SslMode,
-    TableColumns, TableInfo, TableRef, Value,
+    Capabilities, DialectSpec, DriverId, ErrorLocation, ExplainSyntax, IdentQuote, LiteralStyle,
+    ObjectKind, PagingStyle, PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind,
+    ServerInfoRow, SslMode, TableColumns, TableInfo, TableRef, Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
@@ -440,12 +440,15 @@ impl CancelHandle for MysqlCancel {
 pub(crate) fn dialect() -> &'static SpecDialect {
     static DIALECT: LazyLock<SpecDialect> = LazyLock::new(|| {
         SpecDialect::new(DialectSpec {
-            quote: '`',
+            quote: IdentQuote::Backtick,
+            paging: PagingStyle::LimitOffset,
             placeholder: PlaceholderStyle::Question,
             // MySQL reads `\` as an escape inside strings (unless NO_BACKSLASH_ESCAPES).
             literals: LiteralStyle {
                 backslash_escapes: true,
                 bool_as_int: true,
+                national_strings: false,
+                hex_bytes: false,
             },
             // MySQL 5.6+ and MariaDB 10.1+ both accept FORMAT=JSON.
             explain: Some(ExplainSyntax {

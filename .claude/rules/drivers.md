@@ -27,8 +27,10 @@ paths:
 
 1. New crate under `crates/drivers/<name>` (see [rust-core.md](rust-core.md) for the crate steps).
 2. Implement `Driver` and `Session`, and describe the syntax with a `DialectSpec`.
-3. Add `src/main.rs` that calls `quarry_driver_proto::driver_main`. The engine finds the binary in
-   the driver directory; nothing registers it. Build it in the `dev`, `test-db` and `bench` recipes.
+3. Add `src/main.rs` that installs rustls's ring provider as the default, then calls
+   `quarry_driver_proto::driver_main`. A workspace build gives rustls two providers, and a
+   dependency that asks for the default panics without one. The engine finds the binary in the
+   driver directory; nothing registers it. Add it to `drivers` in the justfile.
 4. Add a service to `tests/docker-compose.yml`, fixtures in `tests/fixtures/<name>/`, an integration
    test gated by `QUARRY_TEST_<NAME>`, and a CI step.
 5. Update the crate table in `docs/ARCHITECTURE.md`.

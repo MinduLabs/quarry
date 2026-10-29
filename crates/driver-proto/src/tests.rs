@@ -9,7 +9,7 @@ use quarry_driver_api::{
 };
 use quarry_model::{
     Capabilities, ColumnMeta, ConnId, ConnectionConfig, DialectSpec, DriverId, Environment,
-    LiteralStyle, PlaceholderStyle, SchemaObject, SslMode, Value,
+    IdentQuote, LiteralStyle, PagingStyle, PlaceholderStyle, SchemaObject, SslMode, Value,
 };
 
 use crate::client::connect_over;
@@ -24,11 +24,14 @@ impl Fake {
     fn new() -> Self {
         Self {
             dialect: SpecDialect::new(DialectSpec {
-                quote: '"',
+                quote: IdentQuote::Double,
                 placeholder: PlaceholderStyle::Numbered,
+                paging: PagingStyle::LimitOffset,
                 literals: LiteralStyle {
                     backslash_escapes: false,
                     bool_as_int: false,
+                    national_strings: false,
+                    hex_bytes: false,
                 },
                 explain: None,
             }),

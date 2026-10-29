@@ -37,7 +37,7 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
  driver-proto  sql        store       tunnel
     │  stdin / stdout, one process per session
     ▼
- quarry-driver-mysql, quarry-driver-postgres   (binaries: drivers/* + driver-proto + driver-api)
+ quarry-driver-{mysql,postgres,sqlserver}   (binaries: drivers/* + driver-proto + driver-api)
     └───────────┴───────────┴───────────┘
                        ▼
                  crates/model   plain types, no IO
@@ -49,6 +49,7 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
 | `driver-api` | `Driver` / `Session` traits, `SpecDialect` (SQL written from a `DialectSpec`: quoting, placeholders, paging, literals, explain), `ExecItem`, the shared error type. DDL stays driver code (`Driver::schema_change`). |
 | `driver-proto` | The wire between the engine and a driver binary: `hello` (what the binary serves), then one session per process over stdin / stdout. Messages are JSON; row batches use a binary form, since rows are most of the traffic. `ProcessDriver` is the engine's end, `driver_main` the binary's. |
 | `drivers/postgres` | The `quarry-driver-postgres` binary: PostgreSQL via `tokio-postgres` + rustls. The tree's databases are the schemas of the database the connection opens, so a table is `"schema"."table"` and a tab's database sets the `search_path`. Values are decoded from the binary format by type; parameters go as text, so the server reads them as the column's type. Cancel with PostgreSQL's cancel request. |
+| `drivers/sqlserver` | The `quarry-driver-sqlserver` binary: SQL Server via `tiberius` + rustls. Like PostgreSQL, the tree's databases are the schemas of the connection's database (`[schema].[table]`). Pages use `OFFSET … FETCH`, parameters `@P1` and go as text. A statement without result sets reads its row count from `@@ROWCOUNT` in the next batch, since tiberius keeps it. Cancel is a TDS attention; tiberius 0.13 never reads its confirmation (tiberius#459), so a cancelled session is given up and the tab opens a new one. There is no read-only session: a read-only connection still refuses grid and schema edits, but only the login's rights stop typed SQL. |
 | `drivers/mysql` | The `quarry-driver-mysql` binary: MySQL / MariaDB via `mysql_async` + rustls, under the ids `mysql` and `mariadb`. Introspection through `information_schema`, cancel with `KILL QUERY` on a side connection. |
 | `sql` | Statement splitting, statement at cursor, classification (read / write / schema / destructive), transaction effect, completion context. No IO. |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs, query history, secrets in the OS keyring. |

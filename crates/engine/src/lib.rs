@@ -29,6 +29,8 @@ mod mysql_tests;
 #[cfg(test)]
 mod postgres_tests;
 #[cfg(test)]
+mod sqlserver_tests;
+#[cfg(test)]
 mod tests;
 
 use std::path::PathBuf;

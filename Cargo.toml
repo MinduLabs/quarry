@@ -9,6 +9,7 @@ members = [
     "crates/tunnel",
     "crates/drivers/mysql",
     "crates/drivers/postgres",
+    "crates/drivers/sqlserver",
     "crates/engine",
     "src-tauri",
 ]
@@ -32,6 +33,7 @@ quarry-tunnel = { path = "crates/tunnel" }
 quarry-engine = { path = "crates/engine" }
 quarry-driver-mysql = { path = "crates/drivers/mysql" }
 quarry-driver-postgres = { path = "crates/drivers/postgres" }
+quarry-driver-sqlserver = { path = "crates/drivers/sqlserver" }
 
 # Core
 async-channel = "2.5"

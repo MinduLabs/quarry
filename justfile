@@ -8,7 +8,7 @@ gid := `id -g`
 docker_linux := "docker buildx build -f docker/linux.Dockerfile"
 
 # Every driver binary, for the recipes that build or test them
-drivers := "-p quarry-driver-mysql -p quarry-driver-postgres"
+drivers := "-p quarry-driver-mysql -p quarry-driver-postgres -p quarry-driver-sqlserver"
 
 default:
     @just --list
@@ -44,7 +44,7 @@ db-down:
 # Integration tests against the test database (and the SSH server for tunnels)
 test-db:
     cargo build {{drivers}} --bins
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_POSTGRES=127.0.0.1:15432 QUARRY_TEST_SSH=127.0.0.1:12222 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" cargo test {{drivers}} -p quarry-engine
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_POSTGRES=127.0.0.1:15432 QUARRY_TEST_SQLSERVER=127.0.0.1:11433 QUARRY_TEST_SSH=127.0.0.1:12222 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" cargo test {{drivers}} -p quarry-engine
 
 # Benchmarks in a release build: the history file, and query latency on the test MySQL (`just db-up` first)
 bench:

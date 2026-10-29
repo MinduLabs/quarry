@@ -28,7 +28,9 @@ pub use completion::{CompletionContext, CompletionNames, StatementTable};
 pub use connection::{ConnId, ConnectionConfig, DriverId, SshAuth, SshConfig, SslMode};
 pub use data_source::{DataSource, DataSourceSection};
 pub use ddl::{AlterOp, ColumnDef, IndexDef, SchemaChange};
-pub use dialect::{DialectSpec, ExplainSyntax, LiteralStyle, PlaceholderStyle};
+pub use dialect::{
+    DialectSpec, ExplainSyntax, IdentQuote, LiteralStyle, PagingStyle, PlaceholderStyle,
+};
 pub use edit::{CellValue, RowChange};
 pub use environment::Environment;
 pub use error_location::ErrorLocation;

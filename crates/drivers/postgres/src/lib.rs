@@ -21,8 +21,9 @@ use quarry_driver_api::{
     SharedCancel, SpecDialect,
 };
 use quarry_model::{
-    Capabilities, DialectSpec, DriverId, ExplainSyntax, LiteralStyle, ObjectKind, PlaceholderStyle,
-    SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, TableRef, Value,
+    Capabilities, DialectSpec, DriverId, ExplainSyntax, IdentQuote, LiteralStyle, ObjectKind,
+    PagingStyle, PlaceholderStyle, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns,
+    TableInfo, TableRef, Value,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -43,11 +44,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) fn dialect() -> &'static SpecDialect {
     static DIALECT: LazyLock<SpecDialect> = LazyLock::new(|| {
         SpecDialect::new(DialectSpec {
-            quote: '"',
+            quote: IdentQuote::Double,
+            paging: PagingStyle::LimitOffset,
             placeholder: PlaceholderStyle::Numbered,
             literals: LiteralStyle {
                 backslash_escapes: false,
                 bool_as_int: false,
+                national_strings: false,
+                hex_bytes: false,
             },
             explain: Some(ExplainSyntax {
                 table: "EXPLAIN".to_owned(),
