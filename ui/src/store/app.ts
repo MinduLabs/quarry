@@ -11,6 +11,7 @@ import type { ColumnInfo } from "@/bindings/ColumnInfo";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { DataSource } from "@/bindings/DataSource";
+import type { DriverInstallState } from "@/bindings/DriverInstallState";
 import type { ErrorLocation } from "@/bindings/ErrorLocation";
 import type { Event } from "@/bindings/Event";
 import type { Favorite } from "@/bindings/Favorite";
@@ -447,6 +448,9 @@ export interface AppState {
   connections: ConnectionConfig[];
   /** What a new connection can point at, from the engine; usable ones have a `driver`. */
   dataSources: DataSource[];
+  /** Driver downloads in progress or failed, by driver id; gone once installed. */
+  driverInstalls: Record<string, DriverInstallState>;
+  installDriver: (driver: string) => void;
   nodes: Record<string, ConnNode>;
   /** Last connection/database the user worked with (target of "New query"). */
   active: { connId: string; database: string | null } | null;
@@ -937,6 +941,7 @@ export const useApp = create<AppState>()((set, get) => {
     engineVersion: null,
     connections: [],
     dataSources: [],
+    driverInstalls: {},
     nodes: {},
     active: null,
     tabs: [],
@@ -1088,6 +1093,17 @@ export const useApp = create<AppState>()((set, get) => {
           break;
         case "DataSources":
           set({ dataSources: event.sources });
+          break;
+        case "DriverInstall":
+          set((s) => {
+            const { [event.driver]: _, ...others } = s.driverInstalls;
+            return {
+              driverInstalls:
+                event.state.kind === "Installed"
+                  ? others
+                  : { ...others, [event.driver]: event.state },
+            };
+          });
           break;
         case "TestResult": {
           const test = get().test;
@@ -1428,6 +1444,15 @@ export const useApp = create<AppState>()((set, get) => {
     dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
     openDialog: (dialog) => set({ dialog, test: null }),
+    installDriver: (driver) => {
+      set((s) => ({
+        driverInstalls: {
+          ...s.driverInstalls,
+          [driver]: { kind: "Downloading", fraction: null },
+        },
+      }));
+      send({ type: "InstallDriver", driver });
+    },
     testConnection: (config, password, sshSecret) => {
       const request = nextRequest++;
       set({ test: { request, pending: true, ok: null, message: "" } });

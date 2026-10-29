@@ -206,6 +206,6 @@ impl Engine {
             .config_of(conn)
             .ok_or_else(|| "Connection not found".to_owned())?;
         self.driver(&config.driver)
-            .ok_or_else(|| format!("No driver for “{}”", config.driver.0))
+            .ok_or_else(|| crate::drivers::missing(&config.driver))
     }
 }

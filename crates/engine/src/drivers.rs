@@ -52,6 +52,14 @@ impl Engine {
     }
 }
 
+/// Why a connection cannot open when its driver is not on this computer, and what to do.
+pub(crate) fn missing(driver: &DriverId) -> String {
+    format!(
+        "The {} driver is not on this computer. Open the connection's settings and download it.",
+        driver.0
+    )
+}
+
 /// The driver binaries in `dir`. Build leftovers next to them (`quarry-driver-mysql.d`) are not
 /// binaries.
 fn programs_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {

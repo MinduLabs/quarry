@@ -29,7 +29,7 @@ impl Engine {
             return self.emit(failed("This connection is read-only.".into()));
         }
         let Some(driver) = self.driver(&config.driver) else {
-            return self.emit(failed(format!("No driver for “{}”", config.driver.0)));
+            return self.emit(failed(crate::drivers::missing(&config.driver)));
         };
         let statements = match edit::statements(driver.dialect(), &table, &changes) {
             Ok(statements) if statements.is_empty() => {

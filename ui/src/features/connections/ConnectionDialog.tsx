@@ -176,7 +176,8 @@ export function ConnectionDialog() {
               )}
             </div>
             <Button
-              disabled={test?.pending}
+              // A test needs the driver on this computer.
+              disabled={test?.pending || (source !== undefined && !source.is_installed)}
               onClick={() => {
                 const config = build();
                 if (config) testConnection(config, password, sshSecret);

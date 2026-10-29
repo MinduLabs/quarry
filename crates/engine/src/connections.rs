@@ -222,7 +222,7 @@ impl Engine {
     ) -> Result<Box<dyn Session>, String> {
         let driver = self
             .driver(&resolved.config.driver)
-            .ok_or_else(|| format!("No driver for “{}”", resolved.config.driver.0))?;
+            .ok_or_else(|| crate::drivers::missing(&resolved.config.driver))?;
         let mut session = driver.connect(resolved).await.map_err(|e| describe(&e))?;
         if resolved.config.read_only {
             session
