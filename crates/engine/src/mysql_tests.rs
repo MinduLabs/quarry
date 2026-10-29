@@ -56,6 +56,7 @@ async fn save_connect_browse_and_query() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -166,6 +167,7 @@ async fn browse_pages_and_table_info() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -261,6 +263,7 @@ async fn grid_edits_commit_or_roll_back_together() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -405,6 +408,7 @@ async fn schema_review_then_run_and_edits_without_a_key() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -552,6 +556,7 @@ async fn filters_counts_columns_and_plans() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -732,6 +737,7 @@ async fn closing_a_busy_tab_stops_its_query() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -786,6 +792,7 @@ async fn transactions_follow_commands_and_sql() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -951,6 +958,7 @@ async fn connects_through_an_ssh_tunnel() {
             disable_keyring: true,
             perf_log: None,
             driver_dir: None,
+            driver_manifest: None,
             in_process_drivers: Default::default(),
         })
         .unwrap();
@@ -1023,6 +1031,7 @@ async fn saved_engine(config: ConnectionConfig) -> (EngineHandle, EngineEvents) 
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -1194,6 +1203,7 @@ async fn sorted_pages_cover_every_row_once() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
@@ -1278,6 +1288,7 @@ async fn schema_tree_recovers_after_the_metadata_connection_dies() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();

@@ -45,8 +45,9 @@ impl CancelHandle for TabCancel {
 pub(crate) struct Engine {
     pub(crate) events: async_channel::Sender<Event>,
     pub(crate) registry: RwLock<DriverRegistry>,
-    /// Where `load_drivers` looks for driver binaries.
+    /// Where `load_drivers` looks for driver binaries, and `install_driver` puts them.
     pub(crate) driver_dir: Option<PathBuf>,
+    pub(crate) driver_manifest: Option<String>,
     pub(crate) config: Option<ConfigStore>,
     pub(crate) favorite_store: Option<FavoritesStore>,
     pub(crate) favorites: Mutex<Vec<Favorite>>,
@@ -111,10 +112,6 @@ impl Engine {
         for driver in options.in_process_drivers.0 {
             registry.register(driver);
         }
-        let driver_dir = options
-            .driver_dir
-            .or_else(|| std::env::var_os("QUARRY_DRIVER_DIR").map(PathBuf::from));
-
         let config = match options
             .config_dir
             .map(Ok)
@@ -131,6 +128,10 @@ impl Engine {
             .data_dir
             .map(Ok)
             .unwrap_or_else(quarry_store::default_data_dir);
+        let driver_dir = options
+            .driver_dir
+            .or_else(|| std::env::var_os("QUARRY_DRIVER_DIR").map(PathBuf::from))
+            .or_else(|| data_dir.as_ref().ok().map(|dir| dir.join("drivers")));
         let perf = options
             .perf_log
             .or_else(|| perf::path_from_env(data_dir.as_deref().ok()))
@@ -158,6 +159,7 @@ impl Engine {
             events,
             registry: RwLock::new(registry),
             driver_dir,
+            driver_manifest: options.driver_manifest,
             config,
             favorite_store,
             favorites: Mutex::new(Vec::new()),

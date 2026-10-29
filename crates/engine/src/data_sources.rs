@@ -9,18 +9,22 @@ struct Entry {
     id: &'static str,
     name: &'static str,
     section: DataSourceSection,
-    /// Driver id once Quarry has one; empty for entries no driver will serve directly.
+    /// Driver id once Quarry has code for it; empty while it has none (Coming soon).
     driver: &'static str,
+    /// The driver binary that serves it, downloaded on first use.
+    package: &'static str,
     default_port: Option<u16>,
 }
 
-/// Listed in this order. An entry turns usable when a driver with its id is registered.
+/// Listed in this order. An entry with a driver can be picked; its driver is installed once its
+/// binary is on this machine.
 const CATALOG: &[Entry] = &[
     Entry {
         id: "mysql",
         name: "MySQL",
         section: DataSourceSection::Database,
         driver: "mysql",
+        package: "quarry-driver-mysql",
         default_port: Some(3306),
     },
     Entry {
@@ -28,6 +32,7 @@ const CATALOG: &[Entry] = &[
         name: "MariaDB",
         section: DataSourceSection::Database,
         driver: "mariadb",
+        package: "quarry-driver-mysql",
         default_port: Some(3306),
     },
     Entry {
@@ -35,6 +40,7 @@ const CATALOG: &[Entry] = &[
         name: "PostgreSQL",
         section: DataSourceSection::Database,
         driver: "postgres",
+        package: "quarry-driver-postgres",
         default_port: Some(5432),
     },
     Entry {
@@ -42,6 +48,7 @@ const CATALOG: &[Entry] = &[
         name: "Microsoft SQL Server",
         section: DataSourceSection::Database,
         driver: "sqlserver",
+        package: "quarry-driver-sqlserver",
         default_port: Some(1433),
     },
     Entry {
@@ -49,6 +56,7 @@ const CATALOG: &[Entry] = &[
         name: "Google Cloud",
         section: DataSourceSection::Cloud,
         driver: "",
+        package: "",
         default_port: None,
     },
     Entry {
@@ -56,6 +64,7 @@ const CATALOG: &[Entry] = &[
         name: "AWS",
         section: DataSourceSection::Cloud,
         driver: "",
+        package: "",
         default_port: None,
     },
     Entry {
@@ -63,6 +72,7 @@ const CATALOG: &[Entry] = &[
         name: "Azure",
         section: DataSourceSection::Cloud,
         driver: "",
+        package: "",
         default_port: None,
     },
     Entry {
@@ -70,6 +80,7 @@ const CATALOG: &[Entry] = &[
         name: "Demo PostgreSQL",
         section: DataSourceSection::Demo,
         driver: "",
+        package: "",
         default_port: None,
     },
     Entry {
@@ -77,6 +88,7 @@ const CATALOG: &[Entry] = &[
         name: "Demo MySQL",
         section: DataSourceSection::Demo,
         driver: "",
+        package: "",
         default_port: None,
     },
     Entry {
@@ -84,6 +96,7 @@ const CATALOG: &[Entry] = &[
         name: "Demo SQLite",
         section: DataSourceSection::Demo,
         driver: "",
+        package: "",
         default_port: None,
     },
 ];
@@ -93,13 +106,12 @@ impl Engine {
         let sources = CATALOG
             .iter()
             .map(|entry| {
-                let driver = DriverId(entry.driver.to_owned());
-                let driver = self.driver(&driver).map(|_| driver);
+                let driver = (!entry.driver.is_empty()).then(|| DriverId(entry.driver.to_owned()));
                 DataSource {
                     id: entry.id.to_owned(),
                     name: entry.name.to_owned(),
                     section: entry.section,
-                    is_installed: driver.is_some(),
+                    is_installed: driver.as_ref().is_some_and(|id| self.driver(id).is_some()),
                     driver,
                     default_port: entry.default_port,
                 }
@@ -107,4 +119,12 @@ impl Engine {
             .collect();
         self.emit(Event::DataSources { sources });
     }
+}
+
+/// The binary that serves `driver`, or `None` when Quarry has no driver of that id.
+pub(crate) fn package_of(driver: &DriverId) -> Option<&'static str> {
+    CATALOG
+        .iter()
+        .find(|entry| entry.driver == driver.0 && !entry.package.is_empty())
+        .map(|entry| entry.package)
 }

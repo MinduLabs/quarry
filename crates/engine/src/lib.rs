@@ -17,6 +17,7 @@ mod engine;
 mod event;
 mod favorites;
 mod history;
+mod install;
 mod metadata;
 mod perf;
 mod query;
@@ -40,7 +41,7 @@ use std::thread;
 use crate::engine::Engine;
 
 pub use command::{Command, Password, PerfMark, RequestId, TabId};
-pub use event::{ConnState, Event, LogEntry, LogSource, NoticeKind, Rows};
+pub use event::{ConnState, DriverInstallState, Event, LogEntry, LogSource, NoticeKind, Rows};
 /// Pure SQL text helpers (statement splitting, …), shared with clients.
 pub use quarry_sql as sql;
 
@@ -66,8 +67,12 @@ pub struct EngineOptions {
     pub disable_keyring: bool,
     /// Performance log (`perf.jsonl`); `None` = the `QUARRY_PERF` environment variable decides.
     pub perf_log: Option<PathBuf>,
-    /// Where the driver binaries are; `None` = the `QUARRY_DRIVER_DIR` environment variable.
+    /// Where the driver binaries are and get installed; `None` = the `QUARRY_DRIVER_DIR`
+    /// environment variable, or `drivers` in the data directory.
     pub driver_dir: Option<PathBuf>,
+    /// The list of downloadable drivers; `None` = the `QUARRY_DRIVER_MANIFEST` environment
+    /// variable, or this version's release.
+    pub driver_manifest: Option<String>,
     /// Drivers run inside the engine instead of from a binary. Tests only: Quarry itself runs
     /// every driver from its binary.
     pub in_process_drivers: InProcessDrivers,

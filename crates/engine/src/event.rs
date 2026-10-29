@@ -1,8 +1,8 @@
 use quarry_driver_api::RowBatch;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnId, ConnectionConfig, DataSource, ErrorLocation, Favorite,
-    HistoryEntry, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns,
-    TableInfo, Value, Workspace,
+    Capabilities, ColumnMeta, ConnId, ConnectionConfig, DataSource, DriverId, ErrorLocation,
+    Favorite, HistoryEntry, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow,
+    TableColumns, TableInfo, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -20,6 +20,21 @@ pub enum ConnState {
         capabilities: Capabilities,
     },
     Disconnected,
+    Failed {
+        error: String,
+    },
+}
+
+/// Where a driver download is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind")]
+#[ts(export)]
+pub enum DriverInstallState {
+    /// `fraction` from 0 to 1; `null` while the size is unknown.
+    Downloading {
+        fraction: Option<f32>,
+    },
+    Installed,
     Failed {
         error: String,
     },
@@ -95,6 +110,11 @@ pub enum Event {
     /// Answer to `LoadDataSources`, in display order.
     DataSources {
         sources: Vec<DataSource>,
+    },
+    /// Progress of `InstallDriver`.
+    DriverInstall {
+        driver: DriverId,
+        state: DriverInstallState,
     },
     /// `error: null` means the connection worked; `server_version` is then set.
     TestResult {

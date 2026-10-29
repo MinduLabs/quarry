@@ -1,7 +1,7 @@
 use std::fmt;
 
 use quarry_model::{
-    BrowseQuery, ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, SchemaChange,
+    BrowseQuery, ConnId, ConnectionConfig, DriverId, Favorite, FavoriteId, RowChange, SchemaChange,
     ServerInfoKind, TableRef, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,11 @@ pub enum Command {
     LoadConnections,
     /// What the user can connect to, and which of it this build can open → `Event::DataSources`.
     LoadDataSources,
+    /// Download the binary that serves `driver` for this machine, check it and load it →
+    /// `Event::DriverInstall` while it runs, then `Event::DataSources`.
+    InstallDriver {
+        driver: DriverId,
+    },
     /// Insert or update a connection (matched by `config.id`).
     /// `password: null` keeps the current password; same for `ssh_secret` (SSH password or key
     /// passphrase). `remember_password` applies to both.

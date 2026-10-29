@@ -11,11 +11,10 @@ export type DataSource = {
  */
 id: string, name: string, section: DataSourceSection, 
 /**
- * Driver a connection to it uses. `None` while Quarry has no code for it.
+ * Driver a connection to it uses. `None` while Quarry has no code for it (Coming soon).
  */
 driver: DriverId | null, default_port: number | null, 
 /**
- * The driver is on this machine. Drivers built into the binary always are; downloaded
- * drivers are only after their first download.
+ * The driver's binary is on this machine; until then it is downloaded with `InstallDriver`.
  */
 is_installed: boolean, };

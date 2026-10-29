@@ -57,6 +57,7 @@ async fn connect_browse_and_edit_a_postgres_table() {
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,
+        driver_manifest: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();
