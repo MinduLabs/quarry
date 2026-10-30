@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use quarry_driver_api::{
-    CancelHandle, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig, Result,
-    RowSink, Session, SharedCancel, SpecDialect,
+    CancelHandle, Driver, DriverError, ExecItem, ExecOpts, ExecSink, FnSink, ResolvedConfig,
+    Result, RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
     Capabilities, ColumnMeta, DialectSpec, DriverId, IdentQuote, LiteralStyle, ObjectKind,
@@ -192,9 +192,7 @@ async fn login(tds: &Config, host: &str, port: u16) -> std::result::Result<Conn,
     let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(tds.get_addr()))
         .await
         .map_err(|_| LoginError::Failed(diagnose::timed_out(&target, CONNECT_TIMEOUT)))?
-        .map_err(|err| {
-            LoginError::Failed(diagnose::io_error(&target, err.kind(), &err.to_string()))
-        })?;
+        .map_err(|err| LoginError::Failed(diagnose::io_error(&target, &err)))?;
     // Small requests (a cancel, a short query) should not wait for more bytes.
     let _ = tcp.set_nodelay(true);
     match tokio::time::timeout(
@@ -302,17 +300,6 @@ impl Sets {
         self.rows = 0;
         self.truncated = false;
         sink.accept(item).await
-    }
-}
-
-/// A plain callback as a [`RowSink`]: it never waits and never stops the read.
-struct FnSink<'a>(ExecSink<'a>);
-
-#[async_trait]
-impl RowSink for FnSink<'_> {
-    async fn accept(&mut self, item: ExecItem) -> bool {
-        (self.0)(item);
-        true
     }
 }
 

@@ -330,14 +330,9 @@ mod tests {
     fn engine(drivers: &Path, manifest: String) -> (EngineHandle, EngineEvents) {
         let dir = std::env::temp_dir().join(format!("quarry-install-{}", uuid::Uuid::new_v4()));
         EngineHandle::spawn_with(EngineOptions {
-            config_dir: Some(dir.clone()),
-            data_dir: Some(dir),
-            known_hosts: None,
-            disable_keyring: true,
-            perf_log: None,
             driver_dir: Some(drivers.to_path_buf()),
             driver_manifest: Some(manifest),
-            in_process_drivers: Default::default(),
+            ..crate::test_support::options(&dir)
         })
         .unwrap()
     }

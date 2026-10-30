@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, QueryResult, SslOpts};
 use quarry_driver_api::{
-    CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig,
-    Result, RowSink, Session, SharedCancel, SpecDialect,
+    CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, FnSink,
+    ResolvedConfig, Result, RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
     Capabilities, DialectSpec, DriverId, ErrorLocation, ExplainSyntax, IdentQuote, LiteralStyle,
@@ -360,17 +360,6 @@ impl Session for MysqlSession {
 
     async fn close(self: Box<Self>) -> Result<()> {
         self.conn.disconnect().await.map_err(map_err)
-    }
-}
-
-/// A plain callback as a [`RowSink`]: it never waits and never stops the read.
-struct FnSink<'a>(ExecSink<'a>);
-
-#[async_trait]
-impl RowSink for FnSink<'_> {
-    async fn accept(&mut self, item: ExecItem) -> bool {
-        (self.0)(item);
-        true
     }
 }
 

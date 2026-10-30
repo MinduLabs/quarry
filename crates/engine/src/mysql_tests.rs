@@ -2,64 +2,21 @@
 
 use std::time::Duration;
 
-use quarry_model::{
-    BrowseQuery, ConnId, ConnectionConfig, DriverId, Environment, RowChange, ServerInfoKind,
-    SslMode, TableRef,
-};
+use quarry_model::{BrowseQuery, ConnId, ConnectionConfig, RowChange, ServerInfoKind, TableRef};
 
 use super::*;
+use crate::test_support::{db_config, next_matching, options, saved_engine, temp_dir};
 
 fn config() -> Option<ConnectionConfig> {
-    let addr = std::env::var("QUARRY_TEST_MYSQL").ok()?;
-    let (host, port) = addr.split_once(':')?;
-    Some(ConnectionConfig {
-        id: ConnId::new(),
-        name: "Local MySQL".into(),
-        driver: DriverId("mysql".into()),
-        host: Some(host.into()),
-        port: port.parse().ok(),
-        database: None,
-        user: Some("quarry".into()),
-        path: None,
-        ssl: SslMode::Prefer,
-        ssh: None,
-        environment: Environment::Local,
-        read_only: false,
-        color: None,
-        group: None,
-    })
-}
-
-async fn next_matching(events: &EngineEvents, pred: impl Fn(&Event) -> bool) -> Event {
-    let wait = async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if pred(&event) {
-                return event;
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(20), wait)
-        .await
-        .unwrap()
+    db_config("QUARRY_TEST_MYSQL", "mysql", "quarry", None)
 }
 
 #[tokio::test]
 async fn save_connect_browse_and_query() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
+    let dir = temp_dir();
+    let (engine, events) = EngineHandle::spawn_with(options(&dir)).unwrap();
 
     engine
         .send(Command::SaveConnection {
@@ -159,27 +116,7 @@ async fn save_connect_browse_and_query() {
 async fn browse_pages_and_table_info() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, dir) = saved_engine(config, "quarry").await;
 
     let table = TableRef {
         database: Some("shop".into()),
@@ -255,27 +192,7 @@ async fn grid_edits_commit_or_roll_back_together() {
     use quarry_model::{CellValue, Value};
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, dir) = saved_engine(config, "quarry").await;
 
     let run = |sql: &str| Command::Run {
         tab: 3,
@@ -400,27 +317,7 @@ async fn schema_review_then_run_and_edits_without_a_key() {
     use quarry_model::{CellValue, SchemaChange, Value};
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, dir) = saved_engine(config, "quarry").await;
     let run = |sql: &str| Command::Run {
         tab: 4,
         conn: id,
@@ -548,27 +445,7 @@ async fn filters_counts_columns_and_plans() {
     use quarry_model::{ColumnFilter, FilterOp, SortKey, Value};
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, dir) = saved_engine(config, "quarry").await;
     engine.send(Command::Connect { id }).unwrap();
     let Event::ConnState { state, .. } = next_matching(&events, |e| {
         matches!(
@@ -729,27 +606,7 @@ async fn filters_counts_columns_and_plans() {
 async fn closing_a_busy_tab_stops_its_query() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, dir) = saved_engine(config, "quarry").await;
     engine
         .send(Command::Run {
             tab: 8,
@@ -784,27 +641,7 @@ async fn transactions_follow_commands_and_sql() {
     use quarry_model::{CellValue, Value};
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, dir) = saved_engine(config, "quarry").await;
 
     let run = |sql: &str| Command::Run {
         tab: 6,
@@ -931,7 +768,7 @@ async fn connects_through_an_ssh_tunnel() {
     else {
         return;
     };
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+    let dir = temp_dir();
     std::fs::create_dir_all(&dir).unwrap();
     let known_hosts = dir.join("known_hosts");
     let empty_known_hosts = dir.join("empty_known_hosts");
@@ -952,14 +789,8 @@ async fn connects_through_an_ssh_tunnel() {
 
     for (hosts, works) in [(&empty_known_hosts, false), (&known_hosts, true)] {
         let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-            config_dir: Some(dir.clone()),
-            data_dir: Some(dir.clone()),
             known_hosts: Some(hosts.clone()),
-            disable_keyring: true,
-            perf_log: None,
-            driver_dir: None,
-            driver_manifest: None,
-            in_process_drivers: Default::default(),
+            ..options(&dir)
         })
         .unwrap();
         engine
@@ -1021,32 +852,6 @@ async fn connects_through_an_ssh_tunnel() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// An engine with `config` saved (password `quarry`), not connected yet.
-async fn saved_engine(config: ConnectionConfig) -> (EngineHandle, EngineEvents) {
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
-    (engine, events)
-}
-
 /// Collects the run's events until it finishes or fails.
 async fn run_events(
     engine: &EngineHandle,
@@ -1093,7 +898,7 @@ async fn run_events(
 async fn bad_sql_keeps_the_tab_usable_and_names_the_statement() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let (engine, events) = saved_engine(config).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
 
     // One statement per run, in order; the failing one is named with its location.
     let seen = run_events(&engine, &events, 5, id, "SELECT 1;\nSELEC 2;\nSELECT 3").await;
@@ -1195,27 +1000,7 @@ async fn bad_sql_keeps_the_tab_usable_and_names_the_statement() {
 async fn sorted_pages_cover_every_row_once() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
 
     let table = TableRef {
         database: Some("shop".into()),
@@ -1280,18 +1065,8 @@ async fn schema_tree_recovers_after_the_metadata_connection_dies() {
     // never those of tests running at the same time.
     config.user = Some("demo".into());
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
+    let dir = temp_dir();
+    let (engine, events) = EngineHandle::spawn_with(options(&dir)).unwrap();
     engine
         .send(Command::SaveConnection {
             config,
@@ -1409,27 +1184,7 @@ async fn export_reads_keys_and_samples_and_writes_from_a_real_database() {
     use quarry_model::{ExportFormat, ExportOptions};
     let Some(config) = config() else { return };
     let id = config.id;
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
-    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
-        driver_dir: None,
-        driver_manifest: None,
-        in_process_drivers: Default::default(),
-    })
-    .unwrap();
-    engine
-        .send(Command::SaveConnection {
-            config,
-            password: Some(Password("quarry".into())),
-            ssh_secret: None,
-            remember_password: false,
-        })
-        .unwrap();
-    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    let (engine, events, dir) = saved_engine(config, "quarry").await;
 
     // A table: every table format is offered, with a sample for the preview.
     let orders = TableRef {
@@ -1715,7 +1470,7 @@ const CROSS_JOIN: &str = "SELECT a.id AS x, b.id AS y FROM orders a CROSS JOIN o
 async fn covers_ae5_cancelling_a_big_export_kills_the_query_and_leaves_no_file() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let (engine, events) = saved_engine(config).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
     let columns = grid_columns(&engine, &events, id, CROSS_JOIN).await;
     let dir = export_dir();
     let path = dir.join("big.csv");
@@ -1753,7 +1508,7 @@ async fn covers_ae5_cancelling_a_big_export_kills_the_query_and_leaves_no_file()
 async fn a_limit_ends_the_statement_instead_of_reading_every_row() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let (engine, events) = saved_engine(config).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
     let columns = grid_columns(&engine, &events, id, CROSS_JOIN).await;
     let dir = export_dir();
     let path = dir.join("some.csv");
@@ -1786,7 +1541,7 @@ async fn a_limit_ends_the_statement_instead_of_reading_every_row() {
 async fn a_join_exports_every_row_not_only_the_ones_the_grid_keeps() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let (engine, events) = saved_engine(config).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
     let join = "SELECT o.id, c.full_name AS customer FROM orders o \
                 JOIN customers c ON c.id = o.customer_id ORDER BY o.id";
     let total = counted(
@@ -1825,7 +1580,7 @@ async fn a_table_export_follows_the_filter_and_its_count_matches() {
     use quarry_model::{ColumnFilter, ExportFormat, FilterOp, SortKey};
     let Some(config) = config() else { return };
     let id = config.id;
-    let (engine, events) = saved_engine(config).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
     let table = TableRef {
         database: Some("shop".into()),
         schema: None,
@@ -1924,7 +1679,7 @@ async fn a_table_export_follows_the_filter_and_its_count_matches() {
 async fn covers_ae6_rows_added_during_an_export_are_not_in_the_file() {
     let Some(config) = config() else { return };
     let id = config.id;
-    let (engine, events) = saved_engine(config).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
     let run = |sql: &str| {
         let engine = &engine;
         let events = &events;
@@ -1989,7 +1744,7 @@ async fn export_memory_does_not_follow_the_row_count() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(5_000_000);
-    let (engine, events) = saved_engine(config).await;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
     let columns = grid_columns(&engine, &events, id, CROSS_JOIN).await;
     let dir = export_dir();
     let path = dir.join("many.csv");

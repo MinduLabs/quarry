@@ -7,64 +7,20 @@
 
 use std::time::Duration;
 
-use quarry_driver_api::{
-    Driver, DriverError, ExecItem, ExecOpts, ResolvedConfig, RowSink, Session,
-};
+use quarry_driver_api::testing::{self, Count, rows, run};
+use quarry_driver_api::{Driver, DriverError, ExecItem, ExecOpts, ResolvedConfig, Session};
 use quarry_driver_sqlserver::SqlServerDriver;
-use quarry_model::{
-    ConnId, ConnectionConfig, DriverId, Environment, ObjectKind, ServerInfoKind, SslMode, TableRef,
-    Value,
-};
+use quarry_model::{ObjectKind, ServerInfoKind, TableRef, Value};
 
 fn config(password: &str) -> Option<ResolvedConfig> {
-    let addr = std::env::var("QUARRY_TEST_SQLSERVER").ok()?;
-    let (host, port) = addr.split_once(':')?;
     // tiberius builds rustls with two providers in a workspace test; the binary installs ring.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    Some(ResolvedConfig {
-        config: ConnectionConfig {
-            id: ConnId::new(),
-            name: "test".into(),
-            driver: DriverId("sqlserver".into()),
-            host: Some(host.into()),
-            port: port.parse().ok(),
-            database: Some("shop".into()),
-            user: Some("sa".into()),
-            path: None,
-            ssl: SslMode::Prefer,
-            ssh: None,
-            environment: Environment::Local,
-            read_only: false,
-            color: None,
-            group: None,
-        },
-        password: Some(password.into()),
-    })
+    testing::config("QUARRY_TEST_SQLSERVER", "sqlserver", "sa", password)
 }
 
 async fn session() -> Option<Box<dyn Session>> {
     let cfg = config("Quarry-test-1")?;
     Some(SqlServerDriver.connect(&cfg).await.unwrap())
-}
-
-async fn run(session: &mut Box<dyn Session>, sql: &str, opts: ExecOpts) -> Vec<ExecItem> {
-    let mut items = Vec::new();
-    session
-        .execute(sql, &opts, &mut |item| items.push(item))
-        .await
-        .unwrap();
-    items
-}
-
-fn rows(items: &[ExecItem]) -> Vec<Vec<Value>> {
-    items
-        .iter()
-        .filter_map(|item| match item {
-            ExecItem::Rows(rows) => Some(rows.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect()
 }
 
 #[tokio::test]
@@ -368,29 +324,6 @@ async fn server_info_lists_settings() {
     assert!(status.iter().any(|r| r.name == "User Connections"));
 }
 
-/// Counts the rows a stream sends; returns `false` once it has `stop_at` rows, when set.
-struct Count {
-    rows: usize,
-    batches: usize,
-    is_done: bool,
-    stop_at: Option<usize>,
-}
-
-#[async_trait::async_trait]
-impl RowSink for Count {
-    async fn accept(&mut self, item: ExecItem) -> bool {
-        match item {
-            ExecItem::Rows(rows) => {
-                self.rows += rows.len();
-                self.batches += 1;
-            }
-            ExecItem::SetDone { .. } => self.is_done = true,
-            _ => {}
-        }
-        self.stop_at.is_none_or(|stop| self.rows < stop)
-    }
-}
-
 #[tokio::test]
 async fn stream_reads_every_row_and_stops_when_told() {
     let Some(mut s) = session().await else { return };
@@ -399,22 +332,15 @@ async fn stream_reads_every_row_and_stops_when_told() {
         batch_size: 1000,
     };
     let sql = "SELECT id FROM orders ORDER BY id";
-    let mut all = Count {
-        rows: 0,
-        batches: 0,
-        is_done: false,
-        stop_at: None,
-    };
+    let mut all = Count::default();
     s.stream(sql, &[], &opts, &mut all).await.unwrap();
     assert_eq!((all.rows, all.batches), (5000, 5));
     assert!(all.is_done);
 
     let Some(mut s) = session().await else { return };
     let mut some = Count {
-        rows: 0,
-        batches: 0,
-        is_done: false,
         stop_at: Some(2000),
+        ..Count::default()
     };
     s.stream(sql, &[], &opts, &mut some).await.unwrap();
     assert_eq!((some.rows, some.batches), (2000, 2));

@@ -4,7 +4,10 @@
 //! driver. Every type crossing this boundary is serializable, so a driver can run in its own
 //! process (`quarry-driver-proto`).
 
+pub mod diagnose;
 mod rows;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -114,6 +117,24 @@ pub trait RowSink: Send {
     /// connection stopped that way still has rows in flight, so the caller cancels the statement
     /// through [`Session::cancel_handle`] before closing it.
     async fn accept(&mut self, item: ExecItem) -> bool;
+}
+
+/// A plain callback as a [`RowSink`]: it never waits and never stops the read. A driver reads
+/// `execute` and `stream` with one loop through it.
+pub struct FnSink<'a>(pub ExecSink<'a>);
+
+impl std::fmt::Debug for FnSink<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FnSink")
+    }
+}
+
+#[async_trait]
+impl RowSink for FnSink<'_> {
+    async fn accept(&mut self, item: ExecItem) -> bool {
+        (self.0)(item);
+        true
+    }
 }
 
 /// Cancels the running query; callable from another task.

@@ -1,68 +1,24 @@
-//! Turns connection failures into messages a person can act on.
-//!
-//! Every message has the same shape, which the UI renders line by line:
-//!
-//! ```text
-//! Can't connect to MySQL server on '127.0.0.1:3306' (111)   <- the server's own wording and code
-//! Connection refused. Nothing is accepting…                 <- why, and what to check
-//! Code: ECONNREFUSED (os error 111)                         <- the exact error, to search or report
-//! ```
-//!
-//! The first line is what MySQL itself reports, so it can be searched
-//! as is; the second line is Quarry's explanation.
+//! Turns MySQL failures into messages a person can act on (see `quarry_driver_api::diagnose`).
+//! A network failure's first line is what MySQL itself reports
+//! (`Can't connect to MySQL server on '127.0.0.1:3306' (111)`), so it can be searched as is.
 
-use std::io::{self, ErrorKind};
-use std::time::Duration;
+use std::io;
 
 use mysql_async::{DriverError as MyDriverError, Error, IoError};
 use quarry_driver_api::DriverError;
+pub use quarry_driver_api::diagnose::{Target, timed_out};
+use quarry_driver_api::diagnose::{
+    closed_during_handshake, io_code, message, network_error, tls_failed,
+};
 
-/// Where we tried to connect, as shown to the user.
-pub struct Target<'a> {
-    pub host: &'a str,
-    pub port: u16,
-}
-
-impl Target<'_> {
-    fn address(&self) -> String {
-        if self.host.contains(':') {
-            format!("[{}]:{}", self.host, self.port)
-        } else {
-            format!("{}:{}", self.host, self.port)
-        }
-    }
-
-    fn could_not_connect(&self) -> String {
-        format!("Couldn't connect to {}", self.address())
-    }
-}
-
-fn message(headline: String, why: &str, code: String) -> String {
-    format!("{headline}\n{why}\nCode: {code}")
-}
-
-pub fn timed_out(target: &Target, after: Duration) -> DriverError {
-    DriverError::Connect(message(
-        target.could_not_connect(),
-        &format!(
-            "No answer within {} s. The host may be unreachable, blocked by a firewall, \
-             or the address may be wrong.",
-            after.as_secs()
-        ),
-        "ETIMEDOUT (connection attempt timed out)".to_owned(),
-    ))
-}
+/// What the server is, as `diagnose` names it in its explanations.
+const SERVER: &str = "a MySQL server";
 
 pub fn connect_error(target: &Target, err: Error) -> DriverError {
     match err {
         Error::Server(e) => server_error(target, e.code, &e.state, &e.message),
         Error::Io(IoError::Io(e)) => io_error(target, &e),
-        Error::Io(IoError::Tls(e)) => DriverError::Connect(message(
-            target.could_not_connect(),
-            "The secure connection (SSL/TLS) could not be established. Try another SSL mode, \
-             or check the server certificate.",
-            format!("TLS — {e}"),
-        )),
+        Error::Io(IoError::Tls(e)) => tls_failed(target, &e.to_string()),
         Error::Driver(MyDriverError::UnknownAuthPlugin { name }) => DriverError::Connect(message(
             target.could_not_connect(),
             "The server uses a sign-in method Quarry doesn't support yet.",
@@ -70,7 +26,7 @@ pub fn connect_error(target: &Target, err: Error) -> DriverError {
         )),
         Error::Driver(MyDriverError::ConnectionClosed) => DriverError::Connect(message(
             target.could_not_connect(),
-            CLOSED_HINT,
+            &closed_during_handshake(SERVER),
             "the server closed the connection".to_owned(),
         )),
         other => DriverError::Connect(message(
@@ -81,14 +37,7 @@ pub fn connect_error(target: &Target, err: Error) -> DriverError {
     }
 }
 
-const CLOSED_HINT: &str = "The server closed the connection during the handshake. The port may not be a \
-     MySQL server, or the server may require a different SSL mode.";
-
 fn io_error(target: &Target, err: &io::Error) -> DriverError {
-    let code = match err.raw_os_error() {
-        Some(os) => format!("{} (os error {os})", errno_name(err.kind())),
-        None => err.to_string(),
-    };
     let headline = match err.raw_os_error() {
         Some(os) => format!(
             "Can't connect to MySQL server on '{}' ({os})",
@@ -96,52 +45,7 @@ fn io_error(target: &Target, err: &io::Error) -> DriverError {
         ),
         None => target.could_not_connect(),
     };
-    let why = match err.kind() {
-        ErrorKind::ConnectionRefused => {
-            "Connection refused. Nothing is accepting connections on that host and port — check \
-             that the server is running and the port is right. If the database is only reachable \
-             through a tunnel or VPN, start that first."
-        }
-        ErrorKind::TimedOut => {
-            "No answer from the host. It may be unreachable, blocked by a firewall, or the \
-             address may be wrong."
-        }
-        ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable => {
-            "There is no route to the host. Check your network or VPN connection."
-        }
-        ErrorKind::ConnectionReset
-        | ErrorKind::ConnectionAborted
-        | ErrorKind::BrokenPipe
-        | ErrorKind::UnexpectedEof => CLOSED_HINT,
-        _ if is_dns_failure(err) => {
-            "The host name can't be resolved. Check the spelling and your network connection."
-        }
-        _ => "A network error stopped the connection.",
-    };
-    DriverError::Connect(message(headline, why, code))
-}
-
-/// `getaddrinfo` failures carry no errno, only text.
-fn is_dns_failure(err: &io::Error) -> bool {
-    let text = err.to_string();
-    text.contains("lookup address")
-        || text.contains("Name or service not known")
-        || text.contains("nodename nor servname")
-        || text.contains("Temporary failure in name resolution")
-}
-
-fn errno_name(kind: ErrorKind) -> &'static str {
-    match kind {
-        ErrorKind::ConnectionRefused => "ECONNREFUSED",
-        ErrorKind::TimedOut => "ETIMEDOUT",
-        ErrorKind::HostUnreachable => "EHOSTUNREACH",
-        ErrorKind::NetworkUnreachable => "ENETUNREACH",
-        ErrorKind::ConnectionReset => "ECONNRESET",
-        ErrorKind::ConnectionAborted => "ECONNABORTED",
-        ErrorKind::BrokenPipe => "EPIPE",
-        ErrorKind::PermissionDenied => "EACCES",
-        _ => "I/O error",
-    }
+    network_error(headline, err.kind(), &err.to_string(), io_code(err), SERVER)
 }
 
 fn server_error(target: &Target, code: u16, state: &str, server_message: &str) -> DriverError {
@@ -200,18 +104,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn refused_names_the_address_and_the_code() {
-        let err = io::Error::from(ErrorKind::ConnectionRefused);
-        let lines: Vec<_> = text(io_error(&TARGET, &err))
-            .lines()
-            .map(str::to_owned)
-            .collect();
-        assert_eq!(lines[0], "Couldn't connect to 127.0.0.1:3306");
-        assert!(lines[1].starts_with("Connection refused."));
-        assert!(lines[2].starts_with("Code: "));
-    }
-
     /// errno values differ per OS: `ECONNREFUSED` is 111 on Linux and 61 on macOS.
     #[cfg(target_os = "linux")]
     const ECONNREFUSED: i32 = 111;
@@ -236,13 +128,6 @@ mod tests {
     }
 
     #[test]
-    fn dns_failure_is_recognised() {
-        let err =
-            io::Error::other("failed to lookup address information: Name or service not known");
-        assert!(text(io_error(&TARGET, &err)).contains("can't be resolved"));
-    }
-
-    #[test]
     fn access_denied_is_an_auth_error_with_the_server_text() {
         let err = server_error(&TARGET, 1045, "28000", "Access denied for user 'root'");
         let DriverError::Auth(msg) = err else {
@@ -250,14 +135,5 @@ mod tests {
         };
         assert!(msg.starts_with("ERROR 1045 (28000): Access denied for user 'root'"));
         assert!(msg.ends_with("Code: MySQL error 1045, SQLSTATE 28000"));
-    }
-
-    #[test]
-    fn ipv6_addresses_are_bracketed() {
-        let target = Target {
-            host: "::1",
-            port: 3306,
-        };
-        assert_eq!(target.address(), "[::1]:3306");
     }
 }

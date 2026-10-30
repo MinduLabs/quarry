@@ -28,11 +28,11 @@ mod session;
 mod workspace;
 
 #[cfg(test)]
+mod db_tests;
+#[cfg(test)]
 mod mysql_tests;
 #[cfg(test)]
-mod postgres_tests;
-#[cfg(test)]
-mod sqlserver_tests;
+mod test_support;
 #[cfg(test)]
 mod tests;
 

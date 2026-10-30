@@ -7,20 +7,15 @@ use crate::query::{safety_check, single_statement};
 use crate::session::transaction_after;
 
 fn test_engine() -> (EngineHandle, EngineEvents) {
-    let dir = std::env::temp_dir().join(format!("quarry-engine-{}", uuid::Uuid::new_v4()));
+    let dir = crate::test_support::temp_dir();
     EngineHandle::spawn_with(EngineOptions {
-        config_dir: Some(dir.clone()),
-        data_dir: Some(dir.clone()),
-        known_hosts: None,
-        disable_keyring: true,
-        perf_log: None,
         // A directory without driver binaries, so `QUARRY_DRIVER_DIR` cannot add any.
         driver_dir: Some(dir.clone()),
-        driver_manifest: None,
         in_process_drivers: InProcessDrivers(vec![
             Arc::new(quarry_driver_mysql::MysqlDriver::default()),
             Arc::new(quarry_driver_mysql::MysqlDriver::mariadb()),
         ]),
+        ..crate::test_support::options(&dir)
     })
     .unwrap()
 }

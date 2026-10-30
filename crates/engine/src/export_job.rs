@@ -837,17 +837,12 @@ mod tests {
         let script = Arc::new(script);
         let engine = Engine::new(
             EngineOptions {
-                config_dir: Some(dir.clone()),
-                data_dir: Some(dir.clone()),
-                known_hosts: None,
-                disable_keyring: true,
-                perf_log: None,
                 driver_dir: Some(dir.clone()),
-                driver_manifest: None,
                 in_process_drivers: InProcessDrivers(vec![Arc::new(FakeDriver {
                     script: script.clone(),
                     dialect: ansi_spec(),
                 })]),
+                ..crate::test_support::options(&dir)
             },
             tx,
         );

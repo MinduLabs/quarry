@@ -23,6 +23,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+quarry-driver-api = { workspace = true, features = ["testing"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
