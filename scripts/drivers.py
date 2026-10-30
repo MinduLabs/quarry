@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Driver downloads for `just dev`, without a release.
+"""The driver binaries of this checkout, for `just` recipes and CI.
 
-`refresh BUILT` replaces each driver already installed with the one just built, so a dev run
+`collect BUILD DRIVERS` copies every driver binary cargo built into BUILD (`target/debug` or
+`target/release`) to DRIVERS (`target/drivers`), the one folder dev, tests and benchmarks read.
+
+`refresh DRIVERS` replaces each driver already installed with the one in DRIVERS, so a dev run
 never uses old driver code. It looks where the app keeps drivers (`driver_dir`). Drivers that
 are not installed stay that way: the user downloads them from the app.
 
-`serve BUILT PORT` answers the app's download like a release does: `/drivers.json` lists every
-driver binary in BUILT with its SHA-256, and each binary is served by name. Only 127.0.0.1.
+`serve DRIVERS PORT` answers the app's download like a release does: `/drivers.json` lists every
+driver binary in DRIVERS with its SHA-256, and each binary is served by name. Only 127.0.0.1.
 """
 
 import hashlib
@@ -39,7 +42,7 @@ def target() -> str:
         return "x86_64-unknown-linux-gnu"
     if machine in ("aarch64", "arm64"):
         return "aarch64-unknown-linux-gnu"
-    raise SystemExit(f"dev-drivers: no driver target for {sys.platform} {machine}")
+    raise SystemExit(f"drivers: no driver target for {sys.platform} {machine}")
 
 
 def driver_dir() -> Path:
@@ -56,23 +59,36 @@ def driver_dir() -> Path:
     return data / "quarry" / "drivers"
 
 
+def install(new: Path, old: Path) -> None:
+    """Copied beside it, then renamed: a half-written driver is never loaded."""
+    staging = old.with_name(f".{old.name}.part")
+    shutil.copy2(new, staging)
+    os.chmod(staging, 0o755)
+    os.replace(staging, old)
+
+
+def collect(build: Path, drivers: Path) -> None:
+    built = binaries(build)
+    if not built:
+        raise SystemExit(f"drivers: no driver binaries in {build}")
+    drivers.mkdir(parents=True, exist_ok=True)
+    for new in built:
+        install(new, drivers / new.name)
+
+
 def refresh(built: Path) -> None:
     for old in binaries(driver_dir()):
         new = built / old.name
         if not new.is_file():
             continue
-        # Copied beside it, then renamed: a half-written driver is never loaded.
-        staging = old.with_name(f".{old.name}.dev")
-        shutil.copy2(new, staging)
-        os.chmod(staging, 0o755)
-        os.replace(staging, old)
-        print(f"dev-drivers: refreshed {old.name}")
+        install(new, old)
+        print(f"drivers: refreshed {old.name}")
 
 
 def serve(built: Path, port: int) -> None:
     files = {f"/{f.name}": f for f in binaries(built)}
     if not files:
-        raise SystemExit(f"dev-drivers: no driver binaries in {built}")
+        raise SystemExit(f"drivers: no driver binaries in {built}")
     base = f"http://127.0.0.1:{port}"
     manifest = json.dumps(
         {
@@ -101,7 +117,7 @@ def serve(built: Path, port: int) -> None:
         def log_message(self, format: str, *args: object) -> None:
             pass
 
-    print(f"dev-drivers: serving {', '.join(sorted(f.name for f in files.values()))} on {base}")
+    print(f"drivers: serving {', '.join(sorted(f.name for f in files.values()))} on {base}")
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 
@@ -116,7 +132,9 @@ def sha256(path: Path) -> str:
 def main() -> None:
     # No `match`: the python3 of Xcode's command line tools is 3.9.
     args = sys.argv[1:]
-    if len(args) == 2 and args[0] == "refresh":
+    if len(args) == 3 and args[0] == "collect":
+        collect(Path(args[1]), Path(args[2]))
+    elif len(args) == 2 and args[0] == "refresh":
         refresh(Path(args[1]))
     elif len(args) == 3 and args[0] == "serve":
         serve(Path(args[1]), int(args[2]))

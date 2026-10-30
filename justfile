@@ -8,23 +8,28 @@ gid := `id -g`
 docker_linux := "docker buildx build -f docker/linux.Dockerfile"
 
 # Every driver binary, for the recipes that build or test them
-drivers := "-p quarry-driver-mysql -p quarry-driver-postgres -p quarry-driver-sqlserver"
+driver_packages := "-p quarry-driver-mysql -p quarry-driver-postgres -p quarry-driver-sqlserver"
 
 default:
     @just --list
 
+# Build the driver binaries into target/drivers, the one folder dev, tests and benchmarks read.
+# `just drivers release` builds them optimized.
+drivers profile="debug":
+    cargo build {{ if profile == "release" { "--release" } else { "" } }} -q {{driver_packages}} --bins
+    python3 scripts/drivers.py collect target/{{profile}} target/drivers
+
 # Run the app with hot reload (needs Tauri's system deps: webkit2gtk-4.1 on Linux, Xcode CLT on macOS)
 # Drivers live where the installed app keeps them (the data directory's `drivers`). None is loaded
-# up front: download one from a connection's settings, as a user does. This build serves them,
+# up front: download one from a connection's settings, as a user does. target/drivers serves them,
 # and each run replaces the installed ones with the ones just built.
-dev:
+dev: drivers
     #!/usr/bin/env bash
     set -euo pipefail
     root="{{justfile_directory()}}"
     port="${QUARRY_DEV_DRIVER_PORT:-47821}"
-    cargo build {{drivers}} --bins
-    python3 "$root/scripts/dev-drivers.py" refresh "$root/target/debug"
-    python3 "$root/scripts/dev-drivers.py" serve "$root/target/debug" "$port" &
+    python3 "$root/scripts/drivers.py" refresh "$root/target/drivers"
+    python3 "$root/scripts/drivers.py" serve "$root/target/drivers" "$port" &
     server=$!
     trap 'kill "$server" 2>/dev/null || true' EXIT
     QUARRY_DRIVER_MANIFEST="http://127.0.0.1:$port/drivers.json" \
@@ -48,17 +53,16 @@ check-docker:
 
 # Integration tests against the test databases and the SSH server (tests/docker-compose.yml,
 # started here). `docker compose -f tests/docker-compose.yml down -v` drops them.
-test-db:
+test-db: drivers
     docker compose -f tests/docker-compose.yml up -d --wait
-    cargo build {{drivers}} --bins
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_POSTGRES=127.0.0.1:15432 QUARRY_TEST_SQLSERVER=127.0.0.1:11433 QUARRY_TEST_SSH=127.0.0.1:12222 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" cargo test {{drivers}} -p quarry-engine
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_POSTGRES=127.0.0.1:15432 QUARRY_TEST_SQLSERVER=127.0.0.1:11433 QUARRY_TEST_SSH=127.0.0.1:12222 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/drivers" cargo test {{driver_packages}} -p quarry-engine
 
 # Benchmarks in a release build: the history file, and query latency on the test MySQL
 bench:
     cargo test --release -q -p quarry-store --test bench -- --ignored --nocapture
     docker compose -f tests/docker-compose.yml up -d --wait mysql
-    cargo build --release -q {{drivers}} --bins
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/release" cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
+    just drivers release
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/drivers" cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
 
 # macOS universal .dmg → dist/Quarry_<version>_universal.dmg. macOS only: Tauri cannot cross-build it.
 [macos]
