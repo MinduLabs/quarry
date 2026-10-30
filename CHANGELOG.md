@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Controls sit with what they act on: an editor bar for SQL (Run turns into Stop while running), a data bar above every grid (reload, filter, columns, add and delete rows, save), and the status bar for pages. Table tabs have no separate toolbar. The row total is counted by clicking it.
 
 ### Added
+- Import CSV and TSV files into a table, from the table's menu in the sidebar or the command palette: map the file's columns, see the first rows, then insert them in one transaction. A refused row keeps nothing and is named; a duplicate key stops the import, skips the row or overwrites it (overwriting asks first). Production asks before any import.
 - Update available at the bottom of the sidebar when a newer Quarry is released. The macOS app and the AppImage download it, then restart into it; other packages open the release page.
 - Quick open lists the tables and routines you opened last first, under Recent, before everything else.
 - Exporting every row of a query or a table works with MySQL, MariaDB, PostgreSQL and SQL Server, read no faster than the file is written.

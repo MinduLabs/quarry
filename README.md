@@ -14,6 +14,34 @@
 - **Keyboard-first:** `Ctrl/⌘+Enter` runs the statement under the cursor.
 - **Open source:** AGPL-3.0-or-later.
 
+## Features
+
+- **Databases:** MySQL, MariaDB, PostgreSQL and Microsoft SQL Server, over SSL or an SSH tunnel.
+  Each driver is downloaded the first time you need it and checked before it runs. Passwords stay
+  in the system keyring.
+- **SQL editor:** completion that reads the statement you are in (tables, columns, aliases, the
+  keywords that fit), syntax errors underlined before you run, Format SQL, and explain plans. A
+  script runs one statement at a time and shows which one is running.
+- **Data:** browse a table page by page with filters and sort, count its rows, open the full value
+  of a cell, and copy a block of cells as TSV, CSV, JSON or INSERT statements.
+- **Editing:** change cells, set NULL, add and delete rows, then save them in one transaction.
+  Query results are editable when they come from one table.
+- **Schema:** a sidebar tree of tables, views, routines, triggers and events; a Structure view of
+  columns, indexes, foreign keys and DDL; add, change and drop columns, indexes, tables and
+  databases. Every change shows its SQL before it runs.
+- **Export:** a query result to SQL (INSERT, UPDATE, WHERE clause), Excel or CSV; a whole table
+  of any size to CSV, TSV, JSON, NDJSON, SQL INSERT or Excel, with progress and cancel.
+- **Import:** CSV and TSV into a table, with column mapping and a preview. Rows go in one
+  transaction, so a refused row keeps nothing, and the import names that row. On a duplicate key
+  it stops, skips the row or overwrites it.
+- **Safe mode:** production asks before any write, staging before `DROP`, `TRUNCATE` and
+  `UPDATE` / `DELETE` without `WHERE`; read-only connections refuse writes.
+- **Workspace:** tabs and split editor groups come back on the next launch. The output panel lists
+  every statement with its timing. Quick open (`Ctrl/⌘+K`), the command palette, query history
+  and favorites are a key away. Light and dark themes.
+- **Updates:** the macOS app and the AppImage download a new release and restart into it. Other
+  packages show that one is out and link to it.
+
 ## Install
 
 Download from [Releases](https://github.com/MinduLabs/quarry/releases):
@@ -34,15 +62,18 @@ messages whose TypeScript types are generated from Rust. Details and the reasons
 | --- | --- |
 | `crates/model` | Plain shared types, no IO. Exports TypeScript types. |
 | `crates/driver-api` | `Driver` / `Session` / `Dialect` traits every driver implements. |
-| `crates/drivers/*` | One crate per database (today `mysql`). |
+| `crates/drivers/*` | One driver binary per database: `mysql` (also MariaDB), `postgres`, `sqlserver`. |
+| `crates/driver-proto` | The wire between the engine and a driver binary. |
 | `crates/sql` | Statement splitting, statement at cursor, classification, completion context. |
 | `crates/store` | Config and data files, secrets in the OS keyring. |
 | `crates/tunnel` | SSH port forwarding. |
+| `crates/export` | File writers for exports: CSV, TSV, JSON, NDJSON, SQL, Excel. |
+| `crates/import` | Reads CSV and TSV one record at a time for imports. |
 | `crates/engine` | Owns the runtime and all state; turns `Command`s into `Event`s. |
 | `src-tauri/` | Thin bridge between the webview and the engine. |
 | `ui/src/` | React UI: `features/` by feature, `components/ui/` primitives, `store/` state, `bindings/` generated. |
 | `docker/`, `packaging/` | Linux package builds, Flatpak manifest, desktop entry, metainfo. |
-| `tests/` | Test MySQL and SSH server (Docker Compose) and their fixtures. |
+| `tests/` | Test databases (MySQL, PostgreSQL, SQL Server) and SSH server (Docker Compose), with fixtures. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [UI style guide](docs/STYLE-GUIDE.md). |
 
 ## Development setup

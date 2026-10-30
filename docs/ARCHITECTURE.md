@@ -54,6 +54,8 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
 | `sql` | Statement splitting, statement at cursor, classification (read / write / schema / destructive), transaction effect, completion context. No IO. |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs, query history, secrets in the OS keyring. |
 | `tunnel` | SSH local port forwarding via `russh`. |
+| `export` | The file writers of an export (CSV, TSV, JSON, NDJSON, SQL, Excel). They take rows a batch at a time; the engine streams them from the database. |
+| `import` | Reads CSV and TSV one record at a time, so a file of any size costs one record of memory. No database: the engine maps records to columns and inserts them in one transaction on a session of its own, strict so a value the column cannot hold fails instead of being changed. |
 | `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Quarry ships without drivers: `InstallDriver` downloads a binary from the release's `drivers.json`, checks its SHA-256 and that it answers `hello`, then puts it in the driver directory (the data directory's `drivers`, or `QUARRY_DRIVER_DIR`). At start the engine asks every binary there what it serves. Holds the catalog of data sources (`LoadDataSources`): an entry is usable when a driver with its id is registered. Exports TypeScript types. |
 | `src-tauri` | Window, bundling, the bridge, and the self-update of the app (see Packaging). |
 
