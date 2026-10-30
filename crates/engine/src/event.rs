@@ -338,6 +338,44 @@ pub enum Event {
         error: String,
         cancelled: bool,
     },
+    /// Answer to `ImportPreview`: either `error` is set, or the rest is. `header` is empty when
+    /// the file has none; `width` is the number of values in every row.
+    ImportPreview {
+        request: RequestId,
+        header: Vec<String>,
+        rows: Vec<Vec<String>>,
+        width: u32,
+        error: Option<String>,
+    },
+    /// Nothing was inserted yet: the connection is a production one. Resend `ImportRun` with
+    /// `confirmed: true` to go on.
+    ImportConfirmRequired {
+        request: RequestId,
+        message: String,
+    },
+    /// An import is under way: rows inserted so far, a few times a second at most.
+    ImportProgress {
+        request: RequestId,
+        #[ts(type = "number")]
+        rows: u64,
+    },
+    /// Every row is in and committed.
+    ImportFinished {
+        request: RequestId,
+        /// Rows inserted or overwritten.
+        #[ts(type = "number")]
+        rows: u64,
+        /// Rows left out because their key was already in the table.
+        #[ts(type = "number")]
+        skipped: u64,
+    },
+    /// The import stopped and kept no row. `error` says what to do; `cancelled` means the user
+    /// asked for it.
+    ImportFailed {
+        request: RequestId,
+        error: String,
+        cancelled: bool,
+    },
     /// The statements a schema change would run. Nothing ran yet: resend `AlterSchema` with
     /// `confirmed: true` to run them. `warning` says what is risky about it.
     SchemaReview {

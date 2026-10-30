@@ -351,6 +351,17 @@ impl Session for MysqlSession {
             .map_err(map_err)
     }
 
+    async fn set_strict(&mut self) -> Result<()> {
+        // Added to the session's own mode, so the rest of what the server configured stays.
+        self.conn
+            .query_drop(
+                "SET SESSION sql_mode = CONCAT_WS(',', @@SESSION.sql_mode, \
+                 'STRICT_ALL_TABLES')",
+            )
+            .await
+            .map_err(map_err)
+    }
+
     fn cancel_handle(&self) -> SharedCancel {
         std::sync::Arc::new(MysqlCancel {
             opts: self.opts.clone(),
@@ -474,6 +485,7 @@ pub(crate) fn dialect() -> &'static SpecDialect {
     static DIALECT: LazyLock<SpecDialect> = LazyLock::new(|| {
         SpecDialect::new(DialectSpec {
             quote: IdentQuote::Backtick,
+            on_duplicate: quarry_model::DuplicateSyntax::OnDuplicateKey,
             paging: PagingStyle::LimitOffset,
             placeholder: PlaceholderStyle::Question,
             // MySQL reads `\` as an escape inside strings (unless NO_BACKSLASH_ESCAPES).

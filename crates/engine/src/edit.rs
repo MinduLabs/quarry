@@ -165,6 +165,7 @@ pub(crate) mod tests {
         use quarry_model::{DialectSpec, IdentQuote, LiteralStyle, PagingStyle, PlaceholderStyle};
         quarry_driver_api::SpecDialect::new(DialectSpec {
             quote: IdentQuote::Double,
+            on_duplicate: quarry_model::DuplicateSyntax::None,
             placeholder: PlaceholderStyle::Numbered,
             paging: PagingStyle::LimitOffset,
             literals: LiteralStyle {

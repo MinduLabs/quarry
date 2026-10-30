@@ -43,6 +43,7 @@ pub(crate) fn dialect() -> &'static SpecDialect {
     static DIALECT: LazyLock<SpecDialect> = LazyLock::new(|| {
         SpecDialect::new(DialectSpec {
             quote: IdentQuote::Brackets,
+            on_duplicate: quarry_model::DuplicateSyntax::None,
             placeholder: PlaceholderStyle::AtP,
             paging: PagingStyle::OffsetFetch,
             literals: LiteralStyle {

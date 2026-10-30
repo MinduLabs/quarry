@@ -1768,3 +1768,216 @@ async fn export_memory_does_not_follow_the_row_count() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn import_keeps_every_row_or_none_and_names_the_refused_row() {
+    let Some(config) = config() else { return };
+    let id = config.id;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
+    run_events(
+        &engine,
+        &events,
+        9,
+        id,
+        "DROP TABLE IF EXISTS import_people; \
+         CREATE TABLE import_people (id INT PRIMARY KEY, name VARCHAR(5) NOT NULL)",
+    )
+    .await;
+    let dir = export_dir();
+    let table = TableRef {
+        database: Some("shop".into()),
+        schema: None,
+        name: "import_people".into(),
+    };
+    let import = |request: RequestId, file: &str, text: &str| {
+        let path = dir.join(file);
+        std::fs::write(&path, text).unwrap();
+        Command::ImportRun {
+            request,
+            conn: id,
+            table: table.clone(),
+            columns: vec![Some("id".into()), Some("name".into())],
+            path: path.display().to_string(),
+            options: Default::default(),
+            confirmed: false,
+        }
+    };
+    let ends = |request: RequestId| {
+        move |e: &Event| {
+            matches!(
+                e,
+                Event::ImportFinished { request: r, .. } | Event::ImportFailed { request: r, .. }
+                    if *r == request
+            )
+        }
+    };
+    let count = |seen: Vec<Event>| {
+        let Some(Event::ResultRows { rows, .. }) = seen
+            .into_iter()
+            .find(|e| matches!(e, Event::ResultRows { .. }))
+        else {
+            panic!("no rows")
+        };
+        rows.values().unwrap()[0][0].clone()
+    };
+
+    engine
+        .send(import(1, "ok.csv", "id,name\n1,Ann\n2,Bob\n"))
+        .unwrap();
+    assert!(matches!(
+        next_matching(&events, ends(1)).await,
+        Event::ImportFinished { rows: 2, .. }
+    ));
+
+    // The third row repeats a key: none of this file's rows stay, and the error names row 3.
+    engine
+        .send(import(2, "dup.csv", "id,name\n3,Cy\n4,Di\n1,Ann\n"))
+        .unwrap();
+    match next_matching(&events, ends(2)).await {
+        Event::ImportFailed {
+            error, cancelled, ..
+        } => {
+            assert!(!cancelled);
+            assert!(error.contains("Row 3 "), "{error}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // A value the column cannot hold is refused, not cut to fit.
+    engine
+        .send(import(3, "long.csv", "id,name\n5,Eve\n6,TooLongName\n"))
+        .unwrap();
+    assert!(matches!(
+        next_matching(&events, ends(3)).await,
+        Event::ImportFailed { .. }
+    ));
+
+    let seen = run_events(
+        &engine,
+        &events,
+        9,
+        id,
+        "SELECT COUNT(*) FROM import_people",
+    )
+    .await;
+    assert_eq!(
+        count(seen),
+        quarry_model::Value::Int(2),
+        "only the first file's rows are there"
+    );
+    run_events(&engine, &events, 9, id, "DROP TABLE import_people").await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn import_skips_or_overwrites_a_key_that_exists() {
+    let Some(config) = config() else { return };
+    let id = config.id;
+    let (engine, events, _) = saved_engine(config, "quarry").await;
+    run_events(
+        &engine,
+        &events,
+        9,
+        id,
+        "DROP TABLE IF EXISTS import_dups; \
+         CREATE TABLE import_dups (id INT PRIMARY KEY, name VARCHAR(5) NOT NULL); \
+         INSERT INTO import_dups VALUES (1, 'Ann')",
+    )
+    .await;
+    let dir = export_dir();
+    let import = |request: RequestId, mode: quarry_model::OnDuplicate, confirmed: bool| {
+        let path = dir.join(format!("{request}.csv"));
+        std::fs::write(&path, "id,name\n1,Zed\n2,Bob\n").unwrap();
+        Command::ImportRun {
+            request,
+            conn: id,
+            table: TableRef {
+                database: Some("shop".into()),
+                schema: None,
+                name: "import_dups".into(),
+            },
+            columns: vec![Some("id".into()), Some("name".into())],
+            path: path.display().to_string(),
+            options: quarry_model::ImportOptions {
+                on_duplicate: mode,
+                ..Default::default()
+            },
+            confirmed,
+        }
+    };
+    let ends = |request: RequestId| {
+        move |e: &Event| {
+            matches!(
+                e,
+                Event::ImportFinished { request: r, .. }
+                    | Event::ImportFailed { request: r, .. }
+                    | Event::ImportConfirmRequired { request: r, .. }
+                    if *r == request
+            )
+        }
+    };
+    let name_of_1 = || async {
+        let seen = run_events(
+            &engine,
+            &events,
+            9,
+            id,
+            "SELECT name FROM import_dups WHERE id = 1",
+        )
+        .await;
+        let Some(Event::ResultRows { rows, .. }) = seen
+            .into_iter()
+            .find(|e| matches!(e, Event::ResultRows { .. }))
+        else {
+            panic!("no rows")
+        };
+        rows.values().unwrap()[0][0].clone()
+    };
+
+    // Stop is the default: the key that exists ends the import.
+    engine
+        .send(import(1, quarry_model::OnDuplicate::Fail, false))
+        .unwrap();
+    assert!(matches!(
+        next_matching(&events, ends(1)).await,
+        Event::ImportFailed { .. }
+    ));
+
+    // Skip keeps the table's row and takes the new one.
+    engine
+        .send(import(2, quarry_model::OnDuplicate::Skip, false))
+        .unwrap();
+    let skip = next_matching(&events, ends(2)).await;
+    assert!(
+        matches!(
+            skip,
+            Event::ImportFinished {
+                rows: 1,
+                skipped: 1,
+                ..
+            }
+        ),
+        "{skip:?}"
+    );
+    assert_eq!(name_of_1().await, quarry_model::Value::Text("Ann".into()));
+
+    // Overwrite asks first, then replaces the table's row.
+    engine
+        .send(import(3, quarry_model::OnDuplicate::Update, false))
+        .unwrap();
+    assert!(matches!(
+        next_matching(&events, ends(3)).await,
+        Event::ImportConfirmRequired { .. }
+    ));
+    engine
+        .send(import(4, quarry_model::OnDuplicate::Update, true))
+        .unwrap();
+    assert!(matches!(
+        next_matching(&events, ends(4)).await,
+        Event::ImportFinished { .. }
+    ));
+    assert_eq!(name_of_1().await, quarry_model::Value::Text("Zed".into()));
+
+    run_events(&engine, &events, 9, id, "DROP TABLE import_dups").await;
+    std::fs::remove_dir_all(dir).unwrap();
+}

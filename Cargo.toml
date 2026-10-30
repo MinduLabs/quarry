@@ -8,6 +8,7 @@ members = [
     "crates/store",
     "crates/tunnel",
     "crates/export",
+    "crates/import",
     "crates/drivers/mysql",
     "crates/drivers/postgres",
     "crates/drivers/sqlserver",
@@ -32,6 +33,7 @@ quarry-sql = { path = "crates/sql" }
 quarry-store = { path = "crates/store" }
 quarry-tunnel = { path = "crates/tunnel" }
 quarry-export = { path = "crates/export" }
+quarry-import = { path = "crates/import" }
 quarry-engine = { path = "crates/engine" }
 quarry-driver-mysql = { path = "crates/drivers/mysql" }
 quarry-driver-postgres = { path = "crates/drivers/postgres" }

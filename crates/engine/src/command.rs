@@ -2,7 +2,8 @@ use std::fmt;
 
 use quarry_model::{
     BrowseQuery, ColumnMeta, ConnId, ConnectionConfig, DriverId, ExportFormat, ExportOptions,
-    Favorite, FavoriteId, RowChange, SchemaChange, ServerInfoKind, TableRef, Value, Workspace,
+    Favorite, FavoriteId, ImportOptions, RowChange, SchemaChange, ServerInfoKind, TableRef, Value,
+    Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -233,6 +234,32 @@ pub enum Command {
     /// Stop the export or row count `request`: the statement is cancelled on the server and no
     /// file is left. Answers with `Event::ExportFailed { cancelled: true }`.
     CancelExport {
+        request: RequestId,
+    },
+    /// The first rows of the delimited file `path`, split the way `options` says → `Event::ImportPreview`.
+    /// Nothing is written. The client maps the file's columns to the table's from this.
+    ImportPreview {
+        request: RequestId,
+        path: String,
+        options: ImportOptions,
+    },
+    /// Insert every row of the file `path` into `table`, in one transaction on a connection of
+    /// its own: a bad row undoes the whole import. `columns` has one entry per file column, the
+    /// table column it goes to or `None` to skip it. In production the engine answers
+    /// `Event::ImportConfirmRequired` first; resend with `confirmed: true`.
+    /// → `Event::ImportProgress`, then `Event::ImportFinished` or `Event::ImportFailed`.
+    ImportRun {
+        request: RequestId,
+        conn: ConnId,
+        table: TableRef,
+        columns: Vec<Option<String>>,
+        path: String,
+        options: ImportOptions,
+        confirmed: bool,
+    },
+    /// Stop the import `request`; its transaction is rolled back, so no row is kept. Answers
+    /// with `Event::ImportFailed { cancelled: true }`.
+    CancelImport {
         request: RequestId,
     },
     /// Change the schema. With `confirmed: false` the engine only answers `Event::SchemaReview`

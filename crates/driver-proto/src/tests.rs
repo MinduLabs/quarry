@@ -27,6 +27,7 @@ impl Fake {
         Self {
             dialect: SpecDialect::new(DialectSpec {
                 quote: IdentQuote::Double,
+                on_duplicate: quarry_model::DuplicateSyntax::None,
                 placeholder: PlaceholderStyle::Numbered,
                 paging: PagingStyle::LimitOffset,
                 literals: LiteralStyle {

@@ -472,6 +472,10 @@ impl Session for ProcessSession {
         self.done(Call::SetReadOnly { read_only }).await
     }
 
+    async fn set_strict(&mut self) -> Result<()> {
+        self.done(Call::SetStrict).await
+    }
+
     fn cancel_handle(&self) -> SharedCancel {
         self.cancel.clone()
     }
