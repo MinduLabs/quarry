@@ -47,6 +47,12 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $VERSION (expected v$VERSION)"
             exit 1
           fi
+      # The release notes are the version's section of CHANGELOG.md; checked here, before the builds.
+      - name: CHANGELOG.md has notes for the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: sh packaging/release-notes.sh "$VERSION" > /dev/null
       - name: Updater public key is set
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -332,12 +338,13 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [flatpak, linux, macos, drivers-manifest, updater-manifest]
+    needs: [version, flatpak, linux, macos, drivers-manifest, updater-manifest]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
@@ -346,9 +353,11 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
+          sh packaging/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "Quarry $GITHUB_REF_NAME" \
-            --generate-notes \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             --verify-tag

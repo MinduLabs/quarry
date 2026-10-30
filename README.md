@@ -179,7 +179,9 @@ Linux build caches stay inside Docker; `docker builder prune` clears them.
 
 ### Release
 
-Bump `version` in `Cargo.toml` (the only place it is written), commit, then push the tag `v<version>`. The release workflow checks
+Bump `version` in `Cargo.toml` (the only place it is written), move the `[Unreleased]` notes of
+`CHANGELOG.md` under `## [<version>] - <date>` (that section becomes the release notes), commit,
+then push the tag `v<version>`. The release workflow checks
 the tag, runs CI, builds every package and publishes a GitHub Release.
 
 The macOS app and the AppImage update themselves from the release's `latest.json`. Its bundles are
