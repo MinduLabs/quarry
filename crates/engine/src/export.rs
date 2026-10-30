@@ -42,6 +42,31 @@ const NO_SINGLE_TABLE: &str = "The result mixes several tables or has computed c
      is no table to find its rows in. Use SQL Inserts, CSV or Excel.";
 
 impl Engine {
+    /// Logs how long an export took (`phase` names it in the performance log) and tells the
+    /// client the file is written.
+    pub(crate) fn export_finished(
+        &self,
+        phase: &str,
+        started: Instant,
+        request: RequestId,
+        path: String,
+        format: ExportFormat,
+        summary: &Summary,
+    ) {
+        self.perf(
+            phase,
+            started,
+            serde_json::json!({ "rows": summary.rows, "format": format!("{format:?}") }),
+        );
+        self.emit(Event::ExportFinished {
+            request,
+            path,
+            rows: summary.rows,
+            sheets: summary.sheets,
+            cut_cells: summary.cut_cells,
+        });
+    }
+
     pub(crate) async fn export_prepare(
         &self,
         request: RequestId,
@@ -125,18 +150,7 @@ impl Engine {
         .await;
         match result {
             Ok(summary) => {
-                self.perf(
-                    "export.rows",
-                    started,
-                    serde_json::json!({ "rows": summary.rows, "format": format!("{format:?}") }),
-                );
-                self.emit(Event::ExportFinished {
-                    request,
-                    path,
-                    rows: summary.rows,
-                    sheets: summary.sheets,
-                    cut_cells: summary.cut_cells,
-                });
+                self.export_finished("export.rows", started, request, path, format, &summary);
             }
             Err(error) => self.emit(Event::ExportFailed {
                 request,

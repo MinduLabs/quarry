@@ -20,8 +20,8 @@ use tokio::sync::mpsc;
 
 use crate::engine::{Engine, describe, lock};
 use crate::export::{RESULT_FORMATS, TABLE_FORMATS, read_statement};
-use crate::query::row_count_of;
-use crate::{Event, RequestId, browse};
+use crate::query::{first_value, row_count_of};
+use crate::{Event, RequestId};
 
 /// Batches waiting between the database and the file. Small on purpose: the point of the queue
 /// is that the reader waits.
@@ -357,18 +357,7 @@ impl Engine {
                 let format = job.format;
                 let end = self.stream_export(&job, &control).await;
                 if let End::Finished(summary) = &end {
-                    self.perf(
-                        "export.stream",
-                        started,
-                        serde_json::json!({ "rows": summary.rows, "format": format!("{format:?}") }),
-                    );
-                    self.emit(Event::ExportFinished {
-                        request,
-                        path,
-                        rows: summary.rows,
-                        sheets: summary.sheets,
-                        cut_cells: summary.cut_cells,
-                    });
+                    self.export_finished("export.stream", started, request, path, format, summary);
                 }
                 end
             }
@@ -527,38 +516,14 @@ impl Engine {
         query: &BrowseQuery,
         control: &ExportControl,
     ) -> Result<u64, String> {
-        let driver = self.driver_of(conn)?;
-        let dialect = driver.dialect();
-        let clauses = browse::clauses(dialect, query)?;
-        let sql = dialect.count_rows(table, clauses.filter.as_deref());
+        let (sql, params) = self.count_statement(conn, table, query)?;
         let mut session = self.open_export_session(conn, None, control).await?;
-        let mut first: Option<Value> = None;
-        let mut sink = |item: ExecItem| {
-            if first.is_some() {
-                return;
-            }
-            let rows = match item {
-                ExecItem::Rows(rows) => rows,
-                ExecItem::Batch(batch) => batch.decode().unwrap_or_default(),
-                _ => return,
-            };
-            first = rows.into_iter().next().and_then(|r| r.into_iter().next());
-        };
-        let opts = ExecOpts {
-            row_limit: Some(1),
-            ..ExecOpts::default()
-        };
-        let result = if clauses.params.is_empty() {
-            session.execute(&sql, &opts, &mut sink).await
-        } else {
-            session.query(&sql, &clauses.params, &opts, &mut sink).await
-        };
+        let result = first_value(session.as_mut(), &sql, &params).await;
         let _ = session.close().await;
         if control.is_cancelled() {
             return Err("Counting was cancelled.".to_owned());
         }
-        result.map_err(|err| describe(&err))?;
-        row_count_of(first)
+        row_count_of(result.map_err(|err| describe(&err))?)
     }
 }
 

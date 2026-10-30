@@ -166,13 +166,11 @@ fn keywords(statement: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
+        if let Some(next) = skip_literal(bytes, i) {
+            i = next;
+            continue;
+        }
         match bytes[i] {
-            quote @ (b'\'' | b'"' | b'`') => i = skip_quoted(bytes, i, quote),
-            b'-' if bytes.get(i + 1) == Some(&b'-') => i = skip_line(bytes, i),
-            b'#' => i = skip_line(bytes, i),
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = find(bytes, i + 2, b"*/").map_or(bytes.len(), |end| end + 2);
-            }
             b if b.is_ascii_alphabetic() || b == b'_' => {
                 let start = i;
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
@@ -225,13 +223,11 @@ pub(crate) fn scan(sql: &str) -> Scan {
             start = i;
             continue;
         }
+        if let Some(next) = skip_literal(bytes, i) {
+            i = next;
+            continue;
+        }
         match bytes[i] {
-            quote @ (b'\'' | b'"' | b'`') => i = skip_quoted(bytes, i, quote),
-            b'-' if bytes.get(i + 1) == Some(&b'-') => i = skip_line(bytes, i),
-            b'#' => i = skip_line(bytes, i),
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = find(bytes, i + 2, b"*/").map_or(bytes.len(), |end| end + 2);
-            }
             _ if bytes[i..].starts_with(delimiter) => {
                 i += delimiter.len();
                 segments.push(Segment {
@@ -268,30 +264,49 @@ fn delimiter_line(sql: &str, line: usize) -> Option<(&str, usize)> {
     Some((token, line_end))
 }
 
+/// Where a string, a quoted name or a comment starting at `i` ends; `None` when none starts
+/// there. Every scan that must not look inside them steps over them with this.
+pub(crate) fn skip_literal(bytes: &[u8], i: usize) -> Option<usize> {
+    match bytes.get(i)? {
+        quote @ (b'\'' | b'"' | b'`') => Some(skip_quoted(bytes, i, *quote)),
+        b'-' if bytes.get(i + 1) == Some(&b'-') => Some(skip_line(bytes, i)),
+        b'#' => Some(skip_line(bytes, i)),
+        b'/' if bytes.get(i + 1) == Some(&b'*') => {
+            Some(find(bytes, i + 2, b"*/").map_or(bytes.len(), |end| end + 2))
+        }
+        _ => None,
+    }
+}
+
 fn skip_quoted(bytes: &[u8], open: usize, quote: u8) -> usize {
+    quoted_end(bytes, open, quote).0
+}
+
+/// The end of the quoted text opening at `open`, and whether it closed. A doubled quote
+/// (`''`, `""`, ``` `` ```) or a backslash escape stays inside.
+pub(crate) fn quoted_end(bytes: &[u8], open: usize, quote: u8) -> (usize, bool) {
     let mut i = open + 1;
     while i < bytes.len() {
         match bytes[i] {
             b'\\' if quote != b'`' => i += 2,
             b if b == quote => {
-                // `''` / `""` / ``` `` ``` is an escaped quote
                 if bytes.get(i + 1) == Some(&quote) {
                     i += 2;
                 } else {
-                    return i + 1;
+                    return (i + 1, true);
                 }
             }
             _ => i += 1,
         }
     }
-    bytes.len()
+    (bytes.len(), false)
 }
 
 fn skip_line(bytes: &[u8], from: usize) -> usize {
     find(bytes, from, b"\n").map_or(bytes.len(), |nl| nl + 1)
 }
 
-fn find(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+pub(crate) fn find(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     bytes
         .get(from..)?
         .windows(needle.len())

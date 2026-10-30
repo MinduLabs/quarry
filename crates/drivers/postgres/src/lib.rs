@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use quarry_driver_api::{
-    CancelHandle, Dialect, Driver, ExecItem, ExecOpts, ExecSink, ResolvedConfig, Result, RowSink,
-    Session, SharedCancel, SpecDialect,
+    CancelHandle, Dialect, Driver, ExecItem, ExecOpts, ExecSink, FnSink, ResolvedConfig, Result,
+    RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
     Capabilities, DialectSpec, DriverId, ExplainSyntax, IdentQuote, LiteralStyle, ObjectKind,
@@ -194,12 +194,14 @@ impl PostgresSession {
             .map_err(|err| diagnose::query_error(&err, sql))
     }
 
+    /// Runs `sql` into `sink`: rows in batches up to `opts.row_limit`, then the set's end. A sink
+    /// that paces the read (an export) makes it wait; one that says stop ends it at once.
     async fn run(
         &mut self,
         sql: &str,
         params: &[Value],
         opts: &ExecOpts,
-        sink: ExecSink<'_>,
+        sink: &mut dyn RowSink,
     ) -> Result<()> {
         let started = Instant::now();
         let statement = match self.client.prepare(sql).await {
@@ -210,15 +212,9 @@ impl PostgresSession {
                     .batch_execute(sql)
                     .await
                     .map_err(|err| diagnose::query_error(&err, sql))?;
-                self.notices_to(sink);
-                sink(ExecItem::SetDone {
-                    affected: 0,
-                    rows: 0,
-                    truncated: false,
-                });
-                sink(ExecItem::Done {
-                    elapsed: started.elapsed(),
-                });
+                if self.notices_to(sink).await && sink.accept(set_done(0, 0, false)).await {
+                    sink.accept(done(started)).await;
+                }
                 return Ok(());
             }
             Err(err) => return Err(diagnose::query_error(&err, sql)),
@@ -233,91 +229,12 @@ impl PostgresSession {
                 .map_err(|err| diagnose::query_error(&err, sql))?;
             // A statement without rows may rename or drop a table.
             self.sources.clear();
-            self.notices_to(sink);
-            sink(ExecItem::SetDone {
-                affected,
-                rows: 0,
-                truncated: false,
-            });
-        } else {
-            let columns = statement.columns();
-            sink(ExecItem::Columns(
-                introspect::column_metas(&self.client, &mut self.sources, columns).await,
-            ));
-            let types: Vec<_> = columns.iter().map(|c| c.type_().clone()).collect();
-            let rows = self
-                .client
-                .query_raw(&statement, params.iter())
-                .await
-                .map_err(|err| diagnose::query_error(&err, sql))?;
-            futures_util::pin_mut!(rows);
-
-            let limit = opts.row_limit.unwrap_or(u64::MAX);
-            let batch_size = opts.batch_size.max(1);
-            let mut batch = Vec::with_capacity(batch_size);
-            let mut count: u64 = 0;
-            let mut truncated = false;
-            while let Some(row) = rows
-                .try_next()
-                .await
-                .map_err(|err| diagnose::query_error(&err, sql))?
-            {
-                if count >= limit {
-                    // Keep reading so the connection is free for the next statement.
-                    truncated = true;
-                    continue;
-                }
-                count += 1;
-                batch.push(values_of(&row, &types));
-                if batch.len() == batch_size {
-                    sink(ExecItem::Rows(std::mem::replace(
-                        &mut batch,
-                        Vec::with_capacity(batch_size),
-                    )));
-                }
+            if self.notices_to(sink).await && sink.accept(set_done(affected, 0, false)).await {
+                sink.accept(done(started)).await;
             }
-            if !batch.is_empty() {
-                sink(ExecItem::Rows(batch));
-            }
-            self.notices_to(sink);
-            sink(ExecItem::SetDone {
-                affected: 0,
-                rows: count,
-                truncated,
-            });
-        }
-        sink(ExecItem::Done {
-            elapsed: started.elapsed(),
-        });
-        Ok(())
-    }
-
-    /// Every row of one statement into `sink`, read no faster than it takes them. Stops as soon
-    /// as the sink says so. A script of several statements cannot stream (it has no rows here).
-    async fn stream_rows(
-        &mut self,
-        sql: &str,
-        params: &[Value],
-        opts: &ExecOpts,
-        sink: &mut dyn RowSink,
-    ) -> Result<()> {
-        let statement = self.prepare(sql).await?;
-        let params: Vec<TextParam> = params.iter().map(TextParam).collect();
-        if statement.columns().is_empty() {
-            let affected = self
-                .client
-                .execute_raw(&statement, params.iter())
-                .await
-                .map_err(|err| diagnose::query_error(&err, sql))?;
-            self.sources.clear();
-            sink.accept(ExecItem::SetDone {
-                affected,
-                rows: 0,
-                truncated: false,
-            })
-            .await;
             return Ok(());
         }
+
         let columns = statement.columns();
         let metas = introspect::column_metas(&self.client, &mut self.sources, columns).await;
         if !sink.accept(ExecItem::Columns(metas)).await {
@@ -330,6 +247,7 @@ impl PostgresSession {
             .await
             .map_err(|err| diagnose::query_error(&err, sql))?;
         futures_util::pin_mut!(rows);
+
         let limit = opts.row_limit.unwrap_or(u64::MAX);
         let batch_size = opts.batch_size.max(1);
         let mut batch = Vec::with_capacity(batch_size);
@@ -341,6 +259,7 @@ impl PostgresSession {
             .map_err(|err| diagnose::query_error(&err, sql))?
         {
             if count >= limit {
+                // Keep reading so the connection is free for the next statement.
                 truncated = true;
                 continue;
             }
@@ -356,19 +275,20 @@ impl PostgresSession {
         if !batch.is_empty() && !sink.accept(ExecItem::Rows(batch)).await {
             return Ok(());
         }
-        sink.accept(ExecItem::SetDone {
-            affected: 0,
-            rows: count,
-            truncated,
-        })
-        .await;
+        if self.notices_to(sink).await && sink.accept(set_done(0, count, truncated)).await {
+            sink.accept(done(started)).await;
+        }
         Ok(())
     }
 
-    fn notices_to(&mut self, sink: ExecSink<'_>) {
+    /// The server's notices so far; `false` once the sink stopped the read.
+    async fn notices_to(&mut self, sink: &mut dyn RowSink) -> bool {
         while let Ok(notice) = self.notices.try_recv() {
-            sink(ExecItem::Notice(notice));
+            if !sink.accept(ExecItem::Notice(notice)).await {
+                return false;
+            }
         }
+        true
     }
 
     async fn simple(&self, sql: &str) -> Result<()> {
@@ -376,6 +296,20 @@ impl PostgresSession {
             .batch_execute(sql)
             .await
             .map_err(|err| diagnose::query_error(&err, sql))
+    }
+}
+
+fn set_done(affected: u64, rows: u64, truncated: bool) -> ExecItem {
+    ExecItem::SetDone {
+        affected,
+        rows,
+        truncated,
+    }
+}
+
+fn done(started: Instant) -> ExecItem {
+    ExecItem::Done {
+        elapsed: started.elapsed(),
     }
 }
 
@@ -403,7 +337,7 @@ impl Session for PostgresSession {
     }
 
     async fn execute(&mut self, sql: &str, opts: &ExecOpts, sink: ExecSink<'_>) -> Result<()> {
-        self.run(sql, &[], opts, sink).await
+        self.run(sql, &[], opts, &mut FnSink(sink)).await
     }
 
     async fn query(
@@ -413,7 +347,7 @@ impl Session for PostgresSession {
         opts: &ExecOpts,
         sink: ExecSink<'_>,
     ) -> Result<()> {
-        self.run(sql, params, opts, sink).await
+        self.run(sql, params, opts, &mut FnSink(sink)).await
     }
 
     async fn stream(
@@ -423,13 +357,7 @@ impl Session for PostgresSession {
         opts: &ExecOpts,
         sink: &mut dyn RowSink,
     ) -> Result<()> {
-        let started = Instant::now();
-        self.stream_rows(sql, params, opts, sink).await?;
-        sink.accept(ExecItem::Done {
-            elapsed: started.elapsed(),
-        })
-        .await;
-        Ok(())
+        self.run(sql, params, opts, sink).await
     }
 
     async fn execute_params(&mut self, sql: &str, params: &[Value]) -> Result<u64> {

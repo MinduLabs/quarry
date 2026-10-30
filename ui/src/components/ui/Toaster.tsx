@@ -1,7 +1,8 @@
-import { ChevronRight, CircleAlert, CircleCheck, Info, TriangleAlert, X } from "lucide-react";
+import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { useApp } from "@/store/app";
+import { DetailsToggle } from "./DetailsToggle";
 
 const icons = { info: Info, success: CircleCheck, warning: TriangleAlert, error: CircleAlert };
 const colors = {
@@ -52,24 +53,7 @@ function ToastText({ message }: { message: string }) {
   return (
     <div className="min-w-0 flex-1 select-text text-base text-fg">
       <p className="break-words">{headline}</p>
-      {rest.length > 0 && (
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-          className="mt-0.5 -ml-0.5 inline-flex items-center gap-0.5 text-muted text-xs transition-colors-fast hover:text-fg"
-        >
-          <ChevronRight
-            size={12}
-            strokeWidth={2}
-            className={cn(
-              "transition-transform duration-(--duration-fast) ease-(--ease-out)",
-              open && "rotate-90",
-            )}
-          />
-          {open ? "Hide details" : "Details"}
-        </button>
-      )}
+      {rest.length > 0 && <DetailsToggle open={open} onToggle={() => setOpen(!open)} />}
       {open && (
         <p className="mt-1 whitespace-pre-line break-words text-muted text-sm">{rest.join("\n")}</p>
       )}

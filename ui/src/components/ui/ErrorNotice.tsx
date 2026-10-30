@@ -1,6 +1,6 @@
-import { Check, ChevronRight, CircleAlert, Copy } from "lucide-react";
+import { Check, CircleAlert, Copy } from "lucide-react";
 import { useState } from "react";
-import { cn } from "@/lib/cn";
+import { DetailsToggle } from "./DetailsToggle";
 import { IconButton } from "./IconButton";
 
 /**
@@ -33,24 +33,7 @@ export function ErrorNotice({ message }: { message: string }) {
       <CircleAlert size={14} strokeWidth={1.75} className="mt-0.5 shrink-0 text-danger" />
       <div className="min-w-0 flex-1 select-text">
         <p className="break-words font-medium text-fg">{headline}</p>
-        {rest.length > 0 && (
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen(!open)}
-            className="mt-0.5 -ml-0.5 inline-flex items-center gap-0.5 rounded-sm text-muted text-xs transition-colors-fast hover:text-fg"
-          >
-            <ChevronRight
-              size={12}
-              strokeWidth={2}
-              className={cn(
-                "transition-transform duration-(--duration-fast) ease-(--ease-out)",
-                open && "rotate-90",
-              )}
-            />
-            {open ? "Hide details" : "Details"}
-          </button>
-        )}
+        {rest.length > 0 && <DetailsToggle open={open} onToggle={() => setOpen(!open)} />}
         {open && (
           <>
             {why.map((line) => (

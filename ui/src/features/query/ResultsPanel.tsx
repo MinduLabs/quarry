@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, PanelTop, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 import { IconButton } from "@/components/ui/IconButton";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { useApp } from "@/store/app";
 import { ConsoleView } from "../console/ConsoleView";
 import { ResultsPane } from "./ResultsPane";
@@ -38,25 +39,6 @@ export function ResultsPanel() {
     );
   }
 
-  const startResize = (event: React.PointerEvent) => {
-    event.preventDefault();
-    const startY = event.clientY;
-    const start = height;
-    const move = (e: PointerEvent) =>
-      setHeight(
-        Math.max(
-          MIN_HEIGHT,
-          Math.min(window.innerHeight - EDITOR_MIN, start - (e.clientY - startY)),
-        ),
-      );
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-
   const actions = (
     <>
       <span className="mr-1 max-w-40 truncate text-faint text-sm">{tab.title}</span>
@@ -77,14 +59,17 @@ export function ResultsPanel() {
 
   return (
     <section aria-label="Output and results" style={{ height }} className="flex shrink-0 flex-col">
-      <div
-        role="separator"
-        aria-orientation="horizontal"
-        onPointerDown={startResize}
-        className="group relative h-px shrink-0 cursor-row-resize bg-line"
-      >
-        <div className="absolute inset-x-0 -top-1 h-2 transition-colors-fast group-hover:bg-accent-soft" />
-      </div>
+      <ResizeHandle
+        orientation="horizontal"
+        onStart={() => {
+          const start = height;
+          // The panel sits below the handle: dragging up makes it taller.
+          return (delta) =>
+            setHeight(
+              Math.max(MIN_HEIGHT, Math.min(window.innerHeight - EDITOR_MIN, start - delta)),
+            );
+        }}
+      />
       <div className="min-h-0 flex-1">
         {hasResults ? (
           <ResultsPane tab={tab} withOutput actions={actions} />

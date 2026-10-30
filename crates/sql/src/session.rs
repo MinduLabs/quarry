@@ -1,6 +1,6 @@
 //! Does a statement lean on state that only its own session holds?
 
-use super::{find, keywords, skip_line, skip_quoted};
+use super::{keywords, skip_literal};
 
 /// What a statement relies on from the session it runs in. Run on another connection, such a
 /// statement fails or answers differently. Only the text is read, so a statement that merely
@@ -37,13 +37,11 @@ fn has_user_variable(statement: &str) -> bool {
     let bytes = statement.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        if let Some(next) = skip_literal(bytes, i) {
+            i = next;
+            continue;
+        }
         match bytes[i] {
-            quote @ (b'\'' | b'"' | b'`') => i = skip_quoted(bytes, i, quote),
-            b'-' if bytes.get(i + 1) == Some(&b'-') => i = skip_line(bytes, i),
-            b'#' => i = skip_line(bytes, i),
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = find(bytes, i + 2, b"*/").map_or(bytes.len(), |end| end + 2);
-            }
             b'@' if bytes.get(i + 1) == Some(&b'@') => {
                 // `@@version`, `@@session.sql_mode`: a system variable.
                 i += 2;

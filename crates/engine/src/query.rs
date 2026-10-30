@@ -453,51 +453,74 @@ impl Engine {
         table: &TableRef,
         query: &BrowseQuery,
     ) -> Result<u64, String> {
-        let driver = self.driver_of(conn)?;
-        let dialect = driver.dialect();
-        let clauses = browse::clauses(dialect, query)?;
-        let sql = dialect.count_rows(table, clauses.filter.as_deref());
+        let (sql, params) = self.count_statement(conn, table, query)?;
         let slot = self.tab_slot(tab);
         let mut slot = slot.lock().await;
         self.ensure_tab_session(&mut slot, tab, conn).await?;
         let Some(tab_session) = slot.as_mut() else {
             return Err("The tab has no session.".to_owned());
         };
-        let mut first: Option<Value> = None;
-        let mut sink = |item: ExecItem| {
-            if first.is_some() {
-                return;
-            }
-            let rows = match item {
-                ExecItem::Rows(rows) => rows,
-                ExecItem::Batch(batch) => batch.decode().unwrap_or_default(),
-                _ => return,
-            };
-            first = rows.into_iter().next().and_then(|r| r.into_iter().next());
-        };
-        let opts = ExecOpts {
-            row_limit: Some(1),
-            ..ExecOpts::default()
-        };
         let mut logged = Logged::start(LogSource::Page, &sql);
         logged.columns();
         let mut session = tab_session.session.lock().await;
-        let result = if clauses.params.is_empty() {
-            session.execute(&sql, &opts, &mut sink).await
-        } else {
-            session.query(&sql, &clauses.params, &opts, &mut sink).await
-        };
+        let result = first_value(session.as_mut(), &sql, &params).await;
         drop(session);
         if result.is_ok() {
             logged.set_done(0, 1, false);
         }
         self.log(tab, logged, result.as_ref().err().map(describe));
-        if let Err(err) = result {
-            tab_session.is_lost |= is_lost(&err);
-            return Err(describe(&err));
+        match result {
+            Ok(first) => row_count_of(first),
+            Err(err) => {
+                tab_session.is_lost |= is_lost(&err);
+                Err(describe(&err))
+            }
         }
-        row_count_of(first)
     }
+
+    /// The `COUNT(*)` of `table` under `query`'s filter, in the connection's dialect.
+    pub(crate) fn count_statement(
+        &self,
+        conn: ConnId,
+        table: &TableRef,
+        query: &BrowseQuery,
+    ) -> Result<(String, Vec<Value>), String> {
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
+        let clauses = browse::clauses(dialect, query)?;
+        let sql = dialect.count_rows(table, clauses.filter.as_deref());
+        Ok((sql, clauses.params))
+    }
+}
+
+/// The first value `sql` answers with, reading one row at most (a `COUNT(*)`).
+pub(crate) async fn first_value(
+    session: &mut dyn Session,
+    sql: &str,
+    params: &[Value],
+) -> Result<Option<Value>, DriverError> {
+    let mut first: Option<Value> = None;
+    let mut sink = |item: ExecItem| {
+        if first.is_some() {
+            return;
+        }
+        let rows = match item {
+            ExecItem::Rows(rows) => rows,
+            ExecItem::Batch(batch) => batch.decode().unwrap_or_default(),
+            _ => return,
+        };
+        first = rows.into_iter().next().and_then(|r| r.into_iter().next());
+    };
+    let opts = ExecOpts {
+        row_limit: Some(1),
+        ..ExecOpts::default()
+    };
+    if params.is_empty() {
+        session.execute(sql, &opts, &mut sink).await?;
+    } else {
+        session.query(sql, params, &opts, &mut sink).await?;
+    }
+    Ok(first)
 }
 
 /// The number a `COUNT(*)` statement answered with.

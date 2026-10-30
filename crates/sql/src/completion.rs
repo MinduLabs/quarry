@@ -6,6 +6,8 @@ use std::ops::Range;
 
 use quarry_model::{CompletionContext, CompletionNames, StatementTable};
 
+use crate::{find, quoted_end};
+
 /// The completion context at byte `cursor` of `sql`, or `None` where nothing completes: inside a
 /// string, a quoted name or a comment, on a `DELIMITER` line, or after a dot that follows no name.
 pub fn completion_context(sql: &str, cursor: usize) -> Option<CompletionContext> {
@@ -237,33 +239,6 @@ fn lex(text: &str) -> Vec<Token> {
 
 fn line_end(bytes: &[u8], from: usize) -> usize {
     find(bytes, from, b"\n").unwrap_or(bytes.len())
-}
-
-fn find(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-    bytes
-        .get(from..)?
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|p| p + from)
-}
-
-/// The end of the quoted text opening at `open`, and whether it closed.
-fn quoted_end(bytes: &[u8], open: usize, quote: u8) -> (usize, bool) {
-    let mut i = open + 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' if quote != b'`' => i += 2,
-            b if b == quote => {
-                if bytes.get(i + 1) == Some(&quote) {
-                    i += 2;
-                } else {
-                    return (i + 1, true);
-                }
-            }
-            _ => i += 1,
-        }
-    }
-    (bytes.len(), false)
 }
 
 #[derive(Debug)]
