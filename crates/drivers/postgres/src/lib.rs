@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use quarry_driver_api::{
-    CancelHandle, Dialect, Driver, ExecItem, ExecOpts, ExecSink, ResolvedConfig, Result, Session,
-    SharedCancel, SpecDialect,
+    CancelHandle, Dialect, Driver, ExecItem, ExecOpts, ExecSink, ResolvedConfig, Result, RowSink,
+    Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
     Capabilities, DialectSpec, DriverId, ExplainSyntax, IdentQuote, LiteralStyle, ObjectKind,
@@ -27,7 +27,8 @@ use quarry_model::{
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_postgres::{AsyncMessage, CancelToken, Client, Statement};
+use tokio_postgres::types::Type;
+use tokio_postgres::{AsyncMessage, CancelToken, Client, Row, Statement};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::decode::Raw;
@@ -267,12 +268,7 @@ impl PostgresSession {
                     continue;
                 }
                 count += 1;
-                let mut values = Vec::with_capacity(types.len());
-                for (i, ty) in types.iter().enumerate() {
-                    let raw: Option<Raw> = row.try_get(i).unwrap_or(None);
-                    values.push(decode::value(ty, raw.map(|r| r.0)));
-                }
-                batch.push(values);
+                batch.push(values_of(&row, &types));
                 if batch.len() == batch_size {
                     sink(ExecItem::Rows(std::mem::replace(
                         &mut batch,
@@ -296,6 +292,79 @@ impl PostgresSession {
         Ok(())
     }
 
+    /// Every row of one statement into `sink`, read no faster than it takes them. Stops as soon
+    /// as the sink says so. A script of several statements cannot stream (it has no rows here).
+    async fn stream_rows(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        opts: &ExecOpts,
+        sink: &mut dyn RowSink,
+    ) -> Result<()> {
+        let statement = self.prepare(sql).await?;
+        let params: Vec<TextParam> = params.iter().map(TextParam).collect();
+        if statement.columns().is_empty() {
+            let affected = self
+                .client
+                .execute_raw(&statement, params.iter())
+                .await
+                .map_err(|err| diagnose::query_error(&err, sql))?;
+            self.sources.clear();
+            sink.accept(ExecItem::SetDone {
+                affected,
+                rows: 0,
+                truncated: false,
+            })
+            .await;
+            return Ok(());
+        }
+        let columns = statement.columns();
+        let metas = introspect::column_metas(&self.client, &mut self.sources, columns).await;
+        if !sink.accept(ExecItem::Columns(metas)).await {
+            return Ok(());
+        }
+        let types: Vec<_> = columns.iter().map(|c| c.type_().clone()).collect();
+        let rows = self
+            .client
+            .query_raw(&statement, params.iter())
+            .await
+            .map_err(|err| diagnose::query_error(&err, sql))?;
+        futures_util::pin_mut!(rows);
+        let limit = opts.row_limit.unwrap_or(u64::MAX);
+        let batch_size = opts.batch_size.max(1);
+        let mut batch = Vec::with_capacity(batch_size);
+        let mut count: u64 = 0;
+        let mut truncated = false;
+        while let Some(row) = rows
+            .try_next()
+            .await
+            .map_err(|err| diagnose::query_error(&err, sql))?
+        {
+            if count >= limit {
+                truncated = true;
+                continue;
+            }
+            count += 1;
+            batch.push(values_of(&row, &types));
+            if batch.len() == batch_size {
+                let full = std::mem::replace(&mut batch, Vec::with_capacity(batch_size));
+                if !sink.accept(ExecItem::Rows(full)).await {
+                    return Ok(());
+                }
+            }
+        }
+        if !batch.is_empty() && !sink.accept(ExecItem::Rows(batch)).await {
+            return Ok(());
+        }
+        sink.accept(ExecItem::SetDone {
+            affected: 0,
+            rows: count,
+            truncated,
+        })
+        .await;
+        Ok(())
+    }
+
     fn notices_to(&mut self, sink: ExecSink<'_>) {
         while let Ok(notice) = self.notices.try_recv() {
             sink(ExecItem::Notice(notice));
@@ -308,6 +377,17 @@ impl PostgresSession {
             .await
             .map_err(|err| diagnose::query_error(&err, sql))
     }
+}
+
+fn values_of(row: &Row, types: &[Type]) -> Vec<Value> {
+    types
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let raw: Option<Raw> = row.try_get(i).unwrap_or(None);
+            decode::value(ty, raw.map(|r| r.0))
+        })
+        .collect()
 }
 
 /// `cannot insert multiple commands into a prepared statement`.
@@ -334,6 +414,22 @@ impl Session for PostgresSession {
         sink: ExecSink<'_>,
     ) -> Result<()> {
         self.run(sql, params, opts, sink).await
+    }
+
+    async fn stream(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        opts: &ExecOpts,
+        sink: &mut dyn RowSink,
+    ) -> Result<()> {
+        let started = Instant::now();
+        self.stream_rows(sql, params, opts, sink).await?;
+        sink.accept(ExecItem::Done {
+            elapsed: started.elapsed(),
+        })
+        .await;
+        Ok(())
     }
 
     async fn execute_params(&mut self, sql: &str, params: &[Value]) -> Result<u64> {

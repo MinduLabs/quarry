@@ -9,7 +9,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Bumped on any change a driver built for the previous number would misread.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
+
+/// Row batches of a `Stream` call the driver may send ahead of the host's `Ack`s: enough to keep
+/// the pipe busy, few enough that a slow consumer holds the database back.
+pub const STREAM_WINDOW: usize = 4;
 
 /// A frame larger than this is garbage, not a message: refuse it before allocating.
 const MAX_FRAME: u32 = 512 * 1024 * 1024;
@@ -38,6 +42,14 @@ pub enum ToDriver {
     },
     /// Cancels the running call through the driver's cancel handle. Never waits behind it.
     Cancel,
+    /// The host took one batch of rows of `Stream` call `id`: the driver may send another.
+    Ack {
+        id: u64,
+    },
+    /// The host wants no more of `Stream` call `id`: the driver stops reading and replies.
+    Stop {
+        id: u64,
+    },
 }
 
 /// One method of `Driver` or `Session`.
@@ -59,6 +71,12 @@ pub enum Call {
         params: Vec<Value>,
     },
     Query {
+        sql: String,
+        params: Vec<Value>,
+        opts: ExecOpts,
+    },
+    /// Every row, paced by the host: at most `STREAM_WINDOW` batches are sent before an `Ack`.
+    Stream {
         sql: String,
         params: Vec<Value>,
         opts: ExecOpts,
@@ -106,6 +124,7 @@ impl std::fmt::Debug for Call {
             Self::Execute { .. } => "Execute",
             Self::ExecuteParams { .. } => "ExecuteParams",
             Self::Query { .. } => "Query",
+            Self::Stream { .. } => "Stream",
             Self::ListDatabases => "ListDatabases",
             Self::ListObjects { .. } => "ListObjects",
             Self::ListColumns { .. } => "ListColumns",
@@ -125,7 +144,7 @@ impl std::fmt::Debug for Call {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum FromDriver {
-    /// A result item of the running `Execute` or `Query`, in order.
+    /// A result item of the running `Execute`, `Query` or `Stream`, in order.
     Item { id: u64, item: ExecItem },
     Reply {
         id: u64,

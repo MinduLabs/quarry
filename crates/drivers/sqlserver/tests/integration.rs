@@ -7,7 +7,9 @@
 
 use std::time::Duration;
 
-use quarry_driver_api::{Driver, DriverError, ExecItem, ExecOpts, ResolvedConfig, Session};
+use quarry_driver_api::{
+    Driver, DriverError, ExecItem, ExecOpts, ResolvedConfig, RowSink, Session,
+};
 use quarry_driver_sqlserver::SqlServerDriver;
 use quarry_model::{
     ConnId, ConnectionConfig, DriverId, Environment, ObjectKind, ServerInfoKind, SslMode, TableRef,
@@ -364,4 +366,57 @@ async fn server_info_lists_settings() {
     assert!(settings.iter().any(|r| r.name == "max server memory (MB)"));
     let status = s.server_info(ServerInfoKind::Status).await.unwrap();
     assert!(status.iter().any(|r| r.name == "User Connections"));
+}
+
+/// Counts the rows a stream sends; returns `false` once it has `stop_at` rows, when set.
+struct Count {
+    rows: usize,
+    batches: usize,
+    is_done: bool,
+    stop_at: Option<usize>,
+}
+
+#[async_trait::async_trait]
+impl RowSink for Count {
+    async fn accept(&mut self, item: ExecItem) -> bool {
+        match item {
+            ExecItem::Rows(rows) => {
+                self.rows += rows.len();
+                self.batches += 1;
+            }
+            ExecItem::SetDone { .. } => self.is_done = true,
+            _ => {}
+        }
+        self.stop_at.is_none_or(|stop| self.rows < stop)
+    }
+}
+
+#[tokio::test]
+async fn stream_reads_every_row_and_stops_when_told() {
+    let Some(mut s) = session().await else { return };
+    let opts = ExecOpts {
+        row_limit: None,
+        batch_size: 1000,
+    };
+    let sql = "SELECT id FROM orders ORDER BY id";
+    let mut all = Count {
+        rows: 0,
+        batches: 0,
+        is_done: false,
+        stop_at: None,
+    };
+    s.stream(sql, &[], &opts, &mut all).await.unwrap();
+    assert_eq!((all.rows, all.batches), (5000, 5));
+    assert!(all.is_done);
+
+    let Some(mut s) = session().await else { return };
+    let mut some = Count {
+        rows: 0,
+        batches: 0,
+        is_done: false,
+        stop_at: Some(2000),
+    };
+    s.stream(sql, &[], &opts, &mut some).await.unwrap();
+    assert_eq!((some.rows, some.batches), (2000, 2));
+    assert!(!some.is_done);
 }

@@ -3,15 +3,17 @@
 
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use quarry_driver_api::{
-    Driver, DriverError, ExecItem, ResolvedConfig, RowBatch, Session, SharedCancel,
+    Driver, DriverError, ExecItem, ResolvedConfig, RowBatch, RowSink, Session, SharedCancel,
 };
 use quarry_model::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 use crate::wire::{
-    Call, FrameError, FromDriver, Reply, ToDriver, WireError, read_message, write_frame, write_rows,
+    Call, FrameError, FromDriver, Reply, STREAM_WINDOW, ToDriver, WireError, read_message,
+    write_frame, write_rows,
 };
 
 /// What the writer sends. Rows go apart from other messages, in their binary form.
@@ -19,6 +21,12 @@ enum Outgoing {
     Message(FromDriver),
     Rows { id: u64, rows: Vec<Vec<Value>> },
     Batch { id: u64, batch: RowBatch },
+}
+
+/// The host's pacing of a `Stream` call, by call id.
+enum Flow {
+    Ack(u64),
+    Stop(u64),
 }
 
 /// Answers calls until the host sends `Close` or closes `input`.
@@ -50,6 +58,8 @@ where
 
     let cancel: Arc<Mutex<Option<SharedCancel>>> = Arc::default();
     let (call_tx, mut call_rx) = mpsc::unbounded_channel::<(u64, Call)>();
+    // Apart from the calls: a stream waits for these while its call is still running.
+    let (flow_tx, mut flow_rx) = mpsc::unbounded_channel::<Flow>();
     let reader_cancel = cancel.clone();
     let reader = tokio::spawn(async move {
         while let Some(message) = read_message::<_, ToDriver>(&mut input).await? {
@@ -68,6 +78,12 @@ where
                         break;
                     }
                 }
+                ToDriver::Ack { id } => {
+                    let _ = flow_tx.send(Flow::Ack(id));
+                }
+                ToDriver::Stop { id } => {
+                    let _ = flow_tx.send(Flow::Stop(id));
+                }
             }
         }
         Ok::<_, FrameError>(())
@@ -76,7 +92,16 @@ where
     let mut session: Option<Box<dyn Session>> = None;
     while let Some((id, call)) = call_rx.recv().await {
         let is_close = matches!(call, Call::Close);
-        let result = answer(driver.as_ref(), &mut session, &cancel, id, call, &out_tx).await;
+        let result = answer(
+            driver.as_ref(),
+            &mut session,
+            &cancel,
+            id,
+            call,
+            &out_tx,
+            &mut flow_rx,
+        )
+        .await;
         let reply = FromDriver::Reply {
             id,
             result: result.map_err(WireError::from),
@@ -105,6 +130,7 @@ async fn answer(
     id: u64,
     call: Call,
     out: &mpsc::UnboundedSender<Outgoing>,
+    flow: &mut mpsc::UnboundedReceiver<Flow>,
 ) -> Result<Reply, DriverError> {
     let call = match call {
         Call::Connect { config, password } => {
@@ -150,6 +176,17 @@ async fn answer(
             open.query(&sql, &params, &opts, &mut sink).await?;
             Reply::Done
         }
+        Call::Stream { sql, params, opts } => {
+            let mut sink = PacedSink {
+                id,
+                out,
+                flow,
+                in_flight: 0,
+                is_stopped: false,
+            };
+            open.stream(&sql, &params, &opts, &mut sink).await?;
+            Reply::Done
+        }
         Call::ListDatabases => Reply::Names(open.list_databases().await?),
         Call::ListObjects { database } => Reply::Objects(open.list_objects(&database).await?),
         Call::ListColumns { database } => Reply::Columns(open.list_columns(&database).await?),
@@ -178,4 +215,55 @@ async fn answer(
         }
         Call::Connect { .. } | Call::SchemaChange { .. } | Call::Close => Reply::Done,
     })
+}
+
+/// Sends a stream's items, holding back once `STREAM_WINDOW` row batches wait for the host's
+/// `Ack`, so the database is read no faster than the host writes.
+struct PacedSink<'a> {
+    id: u64,
+    out: &'a mpsc::UnboundedSender<Outgoing>,
+    flow: &'a mut mpsc::UnboundedReceiver<Flow>,
+    in_flight: usize,
+    is_stopped: bool,
+}
+
+impl PacedSink<'_> {
+    /// Applies one pacing message. Those of an earlier stream are left over and ignored.
+    fn apply(&mut self, flow: Flow) {
+        match flow {
+            Flow::Ack(of) if of == self.id => self.in_flight = self.in_flight.saturating_sub(1),
+            Flow::Stop(of) if of == self.id => self.is_stopped = true,
+            _ => {}
+        }
+    }
+}
+
+#[async_trait]
+impl RowSink for PacedSink<'_> {
+    async fn accept(&mut self, item: ExecItem) -> bool {
+        while let Ok(flow) = self.flow.try_recv() {
+            self.apply(flow);
+        }
+        let is_rows = matches!(item, ExecItem::Rows(_) | ExecItem::Batch(_));
+        while is_rows && !self.is_stopped && self.in_flight >= STREAM_WINDOW {
+            match self.flow.recv().await {
+                Some(flow) => self.apply(flow),
+                // The host is gone: nobody reads what would be sent.
+                None => self.is_stopped = true,
+            }
+        }
+        if self.is_stopped {
+            return false;
+        }
+        let id = self.id;
+        let outgoing = match item {
+            ExecItem::Rows(rows) => Outgoing::Rows { id, rows },
+            ExecItem::Batch(batch) => Outgoing::Batch { id, batch },
+            item => Outgoing::Message(FromDriver::Item { id, item }),
+        };
+        if is_rows {
+            self.in_flight += 1;
+        }
+        self.out.send(outgoing).is_ok()
+    }
 }

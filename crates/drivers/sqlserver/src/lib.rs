@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use quarry_driver_api::{
     CancelHandle, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig, Result,
-    Session, SharedCancel, SpecDialect,
+    RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
     Capabilities, ColumnMeta, DialectSpec, DriverId, IdentQuote, LiteralStyle, ObjectKind,
@@ -234,12 +234,17 @@ struct Sets {
     any: bool,
 }
 
+/// Whether the read goes on after an item: `false` once the sink stopped it.
+type GoOn = bool;
+
 impl Sets {
-    fn start(&mut self, columns: &[tiberius::Column], sink: ExecSink<'_>) {
-        self.finish(sink);
+    async fn start(&mut self, columns: &[tiberius::Column], sink: &mut dyn RowSink) -> GoOn {
+        if !self.finish(sink).await {
+            return false;
+        }
         self.any = true;
         self.open = Some(columns.iter().map(tiberius::Column::column_type).collect());
-        sink(ExecItem::Columns(
+        sink.accept(ExecItem::Columns(
             columns
                 .iter()
                 .map(|c| ColumnMeta {
@@ -251,15 +256,18 @@ impl Sets {
                     source_column: None,
                 })
                 .collect(),
-        ));
+        ))
+        .await
     }
 
-    fn row(&mut self, row: tiberius::Row, sink: ExecSink<'_>) {
-        let Some(types) = &self.open else { return };
+    async fn row(&mut self, row: tiberius::Row, sink: &mut dyn RowSink) -> GoOn {
+        let Some(types) = &self.open else {
+            return true;
+        };
         if self.rows >= self.limit {
             // Keep reading so the connection is free for the next statement.
             self.truncated = true;
-            return;
+            return true;
         }
         self.rows += 1;
         self.batch.push(
@@ -268,38 +276,62 @@ impl Sets {
                 .map(|(data, ty)| decode::value(data, *ty))
                 .collect(),
         );
-        if self.batch.len() == self.batch_size {
-            sink(ExecItem::Rows(std::mem::replace(
-                &mut self.batch,
-                Vec::with_capacity(self.batch_size),
-            )));
+        if self.batch.len() < self.batch_size {
+            return true;
         }
+        let full = std::mem::replace(&mut self.batch, Vec::with_capacity(self.batch_size));
+        sink.accept(ExecItem::Rows(full)).await
     }
 
-    fn finish(&mut self, sink: ExecSink<'_>) {
+    async fn finish(&mut self, sink: &mut dyn RowSink) -> GoOn {
         if self.open.take().is_none() {
-            return;
+            return true;
         }
-        if !self.batch.is_empty() {
-            sink(ExecItem::Rows(std::mem::take(&mut self.batch)));
+        if !self.batch.is_empty()
+            && !sink
+                .accept(ExecItem::Rows(std::mem::take(&mut self.batch)))
+                .await
+        {
+            return false;
         }
-        sink(ExecItem::SetDone {
+        let item = ExecItem::SetDone {
             affected: 0,
             rows: self.rows,
             truncated: self.truncated,
-        });
+        };
         self.rows = 0;
         self.truncated = false;
+        sink.accept(item).await
     }
 }
 
+/// A plain callback as a [`RowSink`]: it never waits and never stops the read.
+struct FnSink<'a>(ExecSink<'a>);
+
+#[async_trait]
+impl RowSink for FnSink<'_> {
+    async fn accept(&mut self, item: ExecItem) -> bool {
+        (self.0)(item);
+        true
+    }
+}
+
+/// How a read ended.
+enum End {
+    Finished,
+    Cancelled,
+    /// The sink wanted no more.
+    Stopped,
+}
+
 impl SqlServerSession {
+    /// Runs `sql` into `sink`, which may pace the read (an export) or stop it.
     async fn run(
         &mut self,
         sql: &str,
         params: &[Value],
         opts: &ExecOpts,
-        sink: ExecSink<'_>,
+        sink: &mut dyn RowSink,
     ) -> Result<()> {
         let started = Instant::now();
         let params: Vec<Param> = params.iter().map(Param::new).collect();
@@ -316,7 +348,7 @@ impl SqlServerSession {
         let mut cancelled = self.cancelled.clone();
         cancelled.borrow_and_update();
 
-        let was_cancelled = 'run: {
+        let end = 'run: {
             // tiberius waits for the server's first answer before it hands over the stream, so
             // a statement that runs long before its first row is cancelled here.
             let start = async {
@@ -328,54 +360,69 @@ impl SqlServerSession {
             };
             let mut stream = tokio::select! {
                 biased;
-                Ok(()) = cancelled.changed() => break 'run true,
+                Ok(()) = cancelled.changed() => break 'run End::Cancelled,
                 stream = start => stream.map_err(|err| diagnose::query_error(&err, sql))?,
             };
             loop {
-                tokio::select! {
+                let item = tokio::select! {
                     biased;
                     // The sender lives in this session, so `changed` only fails once it is gone.
-                    Ok(()) = cancelled.changed() => break true,
-                    item = stream.try_next() => {
-                        match item.map_err(|err| diagnose::query_error(&err, sql))? {
-                            Some(QueryItem::Metadata(meta)) => sets.start(meta.columns(), sink),
-                            Some(QueryItem::Row(row)) => sets.row(row, sink),
-                            None => break false,
-                        }
-                    }
+                    Ok(()) = cancelled.changed() => break End::Cancelled,
+                    item = stream.try_next() => item.map_err(|err| diagnose::query_error(&err, sql))?,
+                };
+                let go_on = match item {
+                    Some(QueryItem::Metadata(meta)) => sets.start(meta.columns(), sink).await,
+                    Some(QueryItem::Row(row)) => sets.row(row, sink).await,
+                    None => break End::Finished,
+                };
+                if !go_on {
+                    break End::Stopped;
                 }
             }
         };
-        if was_cancelled {
-            // An attention signal: the server stops the batch and the connection stays usable.
-            // tiberius 0.13 reads only up to the end of the current message, and SQL Server
-            // confirms an attention in the next one, so the confirmation is never read
-            // (tiberius#459). The server has stopped, but the connection is out of step: it is
-            // given up, and the tab opens a new one.
-            return match tokio::time::timeout(CANCEL_TIMEOUT, self.client.cancel_query()).await {
-                Ok(Ok(())) => Err(DriverError::Cancelled),
-                Ok(Err(_)) | Err(_) => Err(DriverError::ConnectionLost(
-                    "Query cancelled. The connection was closed to stop it; the next query opens \
-                     a new one."
-                        .to_owned(),
-                )),
-            };
+        match end {
+            End::Finished => {}
+            // The rest of the answer is still on the wire; the caller cancels and closes.
+            End::Stopped => return Ok(()),
+            End::Cancelled => return self.cancelled_query().await,
         }
-        sets.finish(sink);
+        if !sets.finish(sink).await {
+            return Ok(());
+        }
         if !sets.any {
             // The stream keeps the server's row counts to itself; @@ROWCOUNT still has the last
             // statement's in the next batch.
             let affected = self.rowcount().await?;
-            sink(ExecItem::SetDone {
+            let item = ExecItem::SetDone {
                 affected,
                 rows: 0,
                 truncated: false,
-            });
+            };
+            if !sink.accept(item).await {
+                return Ok(());
+            }
         }
-        sink(ExecItem::Done {
+        sink.accept(ExecItem::Done {
             elapsed: started.elapsed(),
-        });
+        })
+        .await;
         Ok(())
+    }
+
+    async fn cancelled_query(&mut self) -> Result<()> {
+        // An attention signal: the server stops the batch and the connection stays usable.
+        // tiberius 0.13 reads only up to the end of the current message, and SQL Server
+        // confirms an attention in the next one, so the confirmation is never read
+        // (tiberius#459). The server has stopped, but the connection is out of step: it is
+        // given up, and the tab opens a new one.
+        match tokio::time::timeout(CANCEL_TIMEOUT, self.client.cancel_query()).await {
+            Ok(Ok(())) => Err(DriverError::Cancelled),
+            Ok(Err(_)) | Err(_) => Err(DriverError::ConnectionLost(
+                "Query cancelled. The connection was closed to stop it; the next query opens a \
+                 new one."
+                    .to_owned(),
+            )),
+        }
     }
 
     async fn rowcount(&mut self) -> Result<u64> {
@@ -414,7 +461,7 @@ impl Session for SqlServerSession {
     }
 
     async fn execute(&mut self, sql: &str, opts: &ExecOpts, sink: ExecSink<'_>) -> Result<()> {
-        self.run(sql, &[], opts, sink).await
+        self.run(sql, &[], opts, &mut FnSink(sink)).await
     }
 
     async fn query(
@@ -423,6 +470,16 @@ impl Session for SqlServerSession {
         params: &[Value],
         opts: &ExecOpts,
         sink: ExecSink<'_>,
+    ) -> Result<()> {
+        self.run(sql, params, opts, &mut FnSink(sink)).await
+    }
+
+    async fn stream(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        opts: &ExecOpts,
+        sink: &mut dyn RowSink,
     ) -> Result<()> {
         self.run(sql, params, opts, sink).await
     }

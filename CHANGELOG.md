@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Controls sit with what they act on: an editor bar for SQL (Run turns into Stop while running), a data bar above every grid (reload, filter, columns, add and delete rows, save), and the status bar for pages. Table tabs have no separate toolbar. The row total is counted by clicking it.
 
 ### Added
+- Exporting every row of a query or a table works with MySQL, MariaDB, PostgreSQL and SQL Server, read no faster than the file is written.
 - PostgreSQL and Microsoft SQL Server connections, next to MySQL and MariaDB. Their schemas are the databases in the sidebar. Values keep their exact type (numeric, intervals, network types, arrays, date and time with offsets).
 - Quarry ships without database drivers: each is downloaded the first time it is needed, from the connection's settings, with the size downloaded, a progress bar and the check that follows. A driver that does not match its checksum or does not run is never installed. Cloud providers and demo databases are still Coming soon.
 - New connection opens with a choice of data source (databases, cloud providers, demo databases) with their logos, then the settings. Sources Quarry cannot open yet show as Coming soon. MariaDB has its own entry and driver id.

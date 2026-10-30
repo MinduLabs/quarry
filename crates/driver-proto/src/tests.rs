@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_driver_api::{
     CancelHandle, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig, Result,
-    Session, SharedCancel, SpecDialect,
+    RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
     Capabilities, ColumnMeta, ConnId, ConnectionConfig, DialectSpec, DriverId, Environment,
@@ -18,6 +18,8 @@ use crate::serve;
 struct Fake {
     dialect: SpecDialect,
     cancelled: Arc<AtomicBool>,
+    /// Row batches its streams have handed to the sink so far.
+    produced: Arc<AtomicUsize>,
 }
 
 impl Fake {
@@ -36,6 +38,7 @@ impl Fake {
                 explain: None,
             }),
             cancelled: Arc::default(),
+            produced: Arc::default(),
         }
     }
 }
@@ -48,7 +51,13 @@ impl CancelHandle for FakeCancel {
     }
 }
 
-struct FakeSession(Arc<AtomicBool>);
+struct FakeSession {
+    cancelled: Arc<AtomicBool>,
+    produced: Arc<AtomicUsize>,
+}
+
+/// Batches of one row each that a fake `stream` sends: more than the window, so pacing shows.
+const STREAM_BATCHES: i64 = 20;
 
 #[async_trait]
 impl Driver for Fake {
@@ -65,7 +74,10 @@ impl Driver for Fake {
         if config.password.as_deref() != Some("right") {
             return Err(DriverError::Auth("Access denied".into()));
         }
-        Ok(Box::new(FakeSession(self.cancelled.clone())))
+        Ok(Box::new(FakeSession {
+            cancelled: self.cancelled.clone(),
+            produced: self.produced.clone(),
+        }))
     }
 }
 
@@ -77,7 +89,7 @@ impl Session for FakeSession {
     async fn execute(&mut self, sql: &str, _: &ExecOpts, sink: ExecSink<'_>) -> Result<()> {
         match sql {
             "slow" => {
-                while !self.0.load(Ordering::SeqCst) {
+                while !self.cancelled.load(Ordering::SeqCst) {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
                 Err(DriverError::Cancelled)
@@ -111,6 +123,30 @@ impl Session for FakeSession {
     async fn execute_params(&mut self, _: &str, params: &[Value]) -> Result<u64> {
         Ok(params.len() as u64)
     }
+    async fn stream(
+        &mut self,
+        _: &str,
+        _: &[Value],
+        _: &ExecOpts,
+        sink: &mut dyn RowSink,
+    ) -> Result<()> {
+        if !sink.accept(ExecItem::Columns(Vec::new())).await {
+            return Ok(());
+        }
+        for n in 0..STREAM_BATCHES {
+            self.produced.fetch_add(1, Ordering::SeqCst);
+            if !sink.accept(ExecItem::Rows(vec![vec![Value::Int(n)]])).await {
+                return Ok(());
+            }
+        }
+        sink.accept(ExecItem::SetDone {
+            affected: 0,
+            rows: STREAM_BATCHES as u64,
+            truncated: false,
+        })
+        .await;
+        Ok(())
+    }
     async fn list_databases(&mut self) -> Result<Vec<String>> {
         Ok(vec!["shop".into()])
     }
@@ -133,7 +169,7 @@ impl Session for FakeSession {
         Ok(())
     }
     fn cancel_handle(&self) -> SharedCancel {
-        Arc::new(FakeCancel(self.0.clone()))
+        Arc::new(FakeCancel(self.cancelled.clone()))
     }
     async fn close(self: Box<Self>) -> Result<()> {
         Ok(())
@@ -163,10 +199,95 @@ fn config(password: &str) -> ResolvedConfig {
 }
 
 async fn connect(password: &str) -> Result<Box<dyn Session>> {
+    connect_to(Arc::new(Fake::new()), password).await
+}
+
+async fn connect_to(fake: Arc<Fake>, password: &str) -> Result<Box<dyn Session>> {
     let (host_out, driver_in) = tokio::io::duplex(64 * 1024);
     let (driver_out, host_in) = tokio::io::duplex(64 * 1024);
-    tokio::spawn(serve(Arc::new(Fake::new()), driver_in, driver_out));
+    tokio::spawn(serve(fake, driver_in, driver_out));
     connect_over(host_in, host_out, &config(password)).await
+}
+
+/// Keeps the rows a stream sends; slow, so the driver must wait for it, and done after
+/// `stop_after` batches when set.
+struct Collect {
+    produced: Arc<AtomicUsize>,
+    rows: Vec<i64>,
+    /// The most batches the driver was ever ahead of this sink.
+    ahead: usize,
+    stop_after: Option<usize>,
+    is_done: bool,
+}
+
+#[async_trait]
+impl RowSink for Collect {
+    async fn accept(&mut self, item: ExecItem) -> bool {
+        match item {
+            ExecItem::Batch(batch) => {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                for row in batch.decode().unwrap() {
+                    let [Value::Int(n)] = row.as_slice() else {
+                        panic!("one int per row");
+                    };
+                    self.rows.push(*n);
+                }
+                let produced = self.produced.load(Ordering::SeqCst);
+                self.ahead = self.ahead.max(produced - self.rows.len());
+                self.stop_after.is_none_or(|stop| self.rows.len() < stop)
+            }
+            ExecItem::SetDone { .. } => {
+                self.is_done = true;
+                true
+            }
+            _ => true,
+        }
+    }
+}
+
+fn collect(fake: &Fake, stop_after: Option<usize>) -> Collect {
+    Collect {
+        produced: fake.produced.clone(),
+        rows: Vec::new(),
+        ahead: 0,
+        stop_after,
+        is_done: false,
+    }
+}
+
+#[tokio::test]
+async fn a_stream_sends_every_row_no_faster_than_the_host_takes_them() {
+    let fake = Arc::new(Fake::new());
+    let mut sink = collect(&fake, None);
+    let mut session = connect_to(fake.clone(), "right").await.unwrap();
+    session
+        .stream("SELECT", &[], &ExecOpts::default(), &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(sink.rows, (0..STREAM_BATCHES).collect::<Vec<_>>());
+    assert!(sink.is_done);
+    // The window, plus the batch the driver produced before it waited.
+    assert!(
+        sink.ahead <= crate::wire::STREAM_WINDOW + 1,
+        "{} ahead",
+        sink.ahead
+    );
+}
+
+#[tokio::test]
+async fn a_stopped_stream_ends_early_and_the_session_goes_on() {
+    let fake = Arc::new(Fake::new());
+    let mut sink = collect(&fake, Some(3));
+    let mut session = connect_to(fake.clone(), "right").await.unwrap();
+    session
+        .stream("SELECT", &[], &ExecOpts::default(), &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(sink.rows, vec![0, 1, 2]);
+    assert!(!sink.is_done);
+    let produced = fake.produced.load(Ordering::SeqCst);
+    assert!(produced < STREAM_BATCHES as usize, "{produced} produced");
+    assert_eq!(session.list_databases().await.unwrap(), vec!["shop"]);
 }
 
 #[tokio::test]

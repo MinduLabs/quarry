@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use quarry_driver_api::{
     CancelHandle, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig, Result,
-    Session, SharedCancel, SpecDialect,
+    RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
     Capabilities, DriverId, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow,
@@ -232,6 +232,52 @@ impl Remote {
         }
     }
 
+    /// Sends a `Stream` call and passes its items to `sink`, which paces it: each row batch the
+    /// sink takes is acknowledged, and a `false` stops the driver. Items that arrive after a stop
+    /// are dropped while the reply is awaited.
+    async fn stream(&mut self, call: Call, sink: &mut dyn RowSink) -> Result<Reply> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.to_driver
+            .send(ToDriver::Call {
+                id,
+                call: Box::new(call),
+            })
+            .map_err(|_| stopped())?;
+        let mut is_stopped = false;
+        loop {
+            let item = match read_frame::<_, FromDriver>(&mut self.from_driver).await {
+                Ok(Some(Frame::Rows { id: of, batch })) if of == id => ExecItem::Batch(batch),
+                Ok(Some(Frame::Message(FromDriver::Item { id: of, item }))) if of == id => item,
+                Ok(Some(Frame::Message(FromDriver::Reply { id: of, result }))) if of == id => {
+                    return result.map_err(DriverError::from);
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) => return Err(stopped()),
+                Err(err) => {
+                    return Err(DriverError::ConnectionLost(format!(
+                        "The driver sent a message Quarry cannot read: {err}. Reconnect to \
+                         continue."
+                    )));
+                }
+            };
+            if is_stopped {
+                continue;
+            }
+            let is_rows = matches!(item, ExecItem::Batch(_));
+            let flow = if sink.accept(item).await {
+                if !is_rows {
+                    continue;
+                }
+                ToDriver::Ack { id }
+            } else {
+                is_stopped = true;
+                ToDriver::Stop { id }
+            };
+            self.to_driver.send(flow).map_err(|_| stopped())?;
+        }
+    }
+
     fn cancel_handle(&self) -> SharedCancel {
         std::sync::Arc::new(RemoteCancel(self.to_driver.clone()))
     }
@@ -326,6 +372,24 @@ impl Session for ProcessSession {
             opts: opts.clone(),
         };
         match self.remote.call(call, Some(sink)).await? {
+            Reply::Done => Ok(()),
+            other => Err(unexpected(&other)),
+        }
+    }
+
+    async fn stream(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        opts: &ExecOpts,
+        sink: &mut dyn RowSink,
+    ) -> Result<()> {
+        let call = Call::Stream {
+            sql: sql.to_owned(),
+            params: params.to_vec(),
+            opts: opts.clone(),
+        };
+        match self.remote.stream(call, sink).await? {
             Reply::Done => Ok(()),
             other => Err(unexpected(&other)),
         }
