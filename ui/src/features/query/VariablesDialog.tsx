@@ -2,22 +2,24 @@ import { useId, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
+import type { QueryVariable } from "@/lib/variables";
 
-/** Ask for the values of the `{{variables}}` in a query, then run it. */
+/** Ask for the values of the `{{variables}}`, `:names` and bare `?` marks in a query, then run it. */
 export function VariablesDialog({
-  names,
+  variables,
   initial,
   onRun,
   onClose,
 }: {
-  names: string[];
+  variables: QueryVariable[];
   /** Values from the last run of this tab, so a repeated run is one Enter away. */
   initial: Record<string, string>;
   onRun: (values: Record<string, string>) => void;
   onClose: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>(initial);
-  const submit = () => onRun(Object.fromEntries(names.map((n) => [n, values[n] ?? ""])));
+  const submit = () =>
+    onRun(Object.fromEntries(variables.map((v) => [v.name, values[v.name] ?? ""])));
 
   return (
     <Dialog
@@ -35,14 +37,15 @@ export function VariablesDialog({
         </>
       }
     >
-      <div className="flex flex-col gap-3">
-        {names.map((name, i) => (
+      {/* The padding keeps the focus ring of the first and last input inside the scrolling body. */}
+      <div className="flex flex-col gap-3 py-1">
+        {variables.map((variable, i) => (
           <VariableField
-            key={name}
-            name={name}
+            key={variable.name}
+            variable={variable}
             isFirst={i === 0}
-            value={values[name] ?? ""}
-            onChange={(value) => setValues((v) => ({ ...v, [name]: value }))}
+            value={values[variable.name] ?? ""}
+            onChange={(value) => setValues((v) => ({ ...v, [variable.name]: value }))}
             onSubmit={submit}
           />
         ))}
@@ -52,13 +55,13 @@ export function VariablesDialog({
 }
 
 function VariableField({
-  name,
+  variable,
   isFirst,
   value,
   onChange,
   onSubmit,
 }: {
-  name: string;
+  variable: QueryVariable;
   isFirst: boolean;
   value: string;
   onChange: (value: string) => void;
@@ -66,12 +69,18 @@ function VariableField({
 }) {
   const id = useId();
   return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="font-mono text-muted text-sm">
-        {name}
+    <div className="flex items-center gap-3">
+      <label
+        htmlFor={id}
+        title={variable.hint}
+        className="flex min-w-0 basis-1/2 items-baseline gap-2 font-mono text-sm"
+      >
+        <span className="shrink-0">{variable.label}</span>
+        {variable.hint && <span className="truncate text-muted">{variable.hint}</span>}
       </label>
       <Input
         id={id}
+        className="basis-1/2"
         autoFocus={isFirst}
         value={value}
         onChange={(e) => onChange(e.target.value)}
