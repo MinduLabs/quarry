@@ -183,6 +183,20 @@ pub trait Dialect: Send + Sync {
         ansi_literal(value)
     }
 
+    /// The text that goes after the `VALUES` of an insert so a row whose key exists is skipped
+    /// or overwrites the table's row, or `None` when this database has no such form here (it has
+    /// none, or an overwrite needs a key and `key` is empty). `columns` are the columns the
+    /// insert names and `key` the table's primary key, both unquoted. `OnDuplicate::Fail` has no
+    /// text: the insert is left as it is.
+    fn on_duplicate(
+        &self,
+        _mode: quarry_model::OnDuplicate,
+        _columns: &[String],
+        _key: &[String],
+    ) -> Option<String> {
+        None
+    }
+
     /// Quoted, qualified table name: `database.schema.name`, skipping the parts that are unset.
     fn qualify(&self, table: &quarry_model::TableRef) -> String {
         [&table.database, &table.schema, &Some(table.name.clone())]
@@ -212,6 +226,57 @@ impl SpecDialect {
 }
 
 impl Dialect for SpecDialect {
+    fn on_duplicate(
+        &self,
+        mode: quarry_model::OnDuplicate,
+        columns: &[String],
+        key: &[String],
+    ) -> Option<String> {
+        use quarry_model::{DuplicateSyntax, OnDuplicate};
+        let first = self.quote_ident(columns.first()?);
+        let quoted = |name: &String| self.quote_ident(name);
+        match (self.spec.on_duplicate, mode) {
+            (_, OnDuplicate::Fail) | (DuplicateSyntax::None, _) => None,
+            // Setting a column to itself changes nothing but still accepts the duplicate; unlike
+            // `INSERT IGNORE`, other errors (a value that does not fit) are still errors.
+            (DuplicateSyntax::OnDuplicateKey, OnDuplicate::Skip) => {
+                Some(format!(" ON DUPLICATE KEY UPDATE {first} = {first}"))
+            }
+            (DuplicateSyntax::OnDuplicateKey, OnDuplicate::Update) => {
+                let sets: Vec<String> = columns
+                    .iter()
+                    .map(quoted)
+                    .map(|name| format!("{name} = VALUES({name})"))
+                    .collect();
+                Some(format!(" ON DUPLICATE KEY UPDATE {}", sets.join(", ")))
+            }
+            (DuplicateSyntax::OnConflict, OnDuplicate::Skip) => {
+                Some(" ON CONFLICT DO NOTHING".to_owned())
+            }
+            (DuplicateSyntax::OnConflict, OnDuplicate::Update) => {
+                // The conflict target is the key, so a table without one cannot overwrite.
+                if key.is_empty() {
+                    return None;
+                }
+                let sets: Vec<String> = columns
+                    .iter()
+                    .filter(|name| !key.iter().any(|k| k.eq_ignore_ascii_case(name)))
+                    .map(quoted)
+                    .map(|name| format!("{name} = EXCLUDED.{name}"))
+                    .collect();
+                let target: Vec<String> = key.iter().map(quoted).collect();
+                if sets.is_empty() {
+                    return Some(format!(" ON CONFLICT ({}) DO NOTHING", target.join(", ")));
+                }
+                Some(format!(
+                    " ON CONFLICT ({}) DO UPDATE SET {}",
+                    target.join(", "),
+                    sets.join(", ")
+                ))
+            }
+        }
+    }
+
     fn quote_ident(&self, ident: &str) -> String {
         let (open, close) = match self.spec.quote {
             IdentQuote::Double => ('"', '"'),
@@ -387,6 +452,13 @@ pub trait Session: Send {
     async fn commit(&mut self) -> Result<()>;
     async fn rollback(&mut self) -> Result<()>;
     async fn set_read_only(&mut self, read_only: bool) -> Result<()>;
+    /// Make the session refuse a value the column cannot hold exactly (text in a number
+    /// column, a string too long) instead of storing a changed one. Databases that are strict
+    /// already keep this default; MySQL, which can be configured to truncate and coerce
+    /// silently, overrides it. Used by imports, where a silently changed value is lost data.
+    async fn set_strict(&mut self) -> Result<()> {
+        Ok(())
+    }
     fn cancel_handle(&self) -> SharedCancel;
     async fn close(self: Box<Self>) -> Result<()>;
 }
@@ -439,6 +511,7 @@ mod tests {
     fn ansi_spec() -> SpecDialect {
         SpecDialect::new(DialectSpec {
             quote: IdentQuote::Double,
+            on_duplicate: quarry_model::DuplicateSyntax::None,
             placeholder: PlaceholderStyle::Numbered,
             paging: PagingStyle::LimitOffset,
             literals: quarry_model::LiteralStyle {
@@ -474,6 +547,7 @@ mod tests {
     fn sql_server_syntax_from_its_spec() {
         let dialect = SpecDialect::new(DialectSpec {
             quote: IdentQuote::Brackets,
+            on_duplicate: quarry_model::DuplicateSyntax::None,
             placeholder: PlaceholderStyle::AtP,
             paging: PagingStyle::OffsetFetch,
             literals: quarry_model::LiteralStyle {
@@ -517,5 +591,54 @@ mod tests {
             Some("EXPLAIN SELECT 1")
         );
         assert_eq!(dialect.explain("SELECT 1", true), None);
+    }
+
+    #[test]
+    fn duplicate_clauses_follow_the_dialect() {
+        use quarry_model::{DuplicateSyntax, OnDuplicate};
+        let columns = ["id".to_owned(), "name".to_owned()];
+        let key = ["id".to_owned()];
+        let with = |syntax| {
+            let mut spec = ansi_spec().spec().clone();
+            spec.on_duplicate = syntax;
+            SpecDialect::new(spec)
+        };
+
+        let mysql = with(DuplicateSyntax::OnDuplicateKey);
+        assert_eq!(mysql.on_duplicate(OnDuplicate::Fail, &columns, &key), None);
+        assert_eq!(
+            mysql
+                .on_duplicate(OnDuplicate::Skip, &columns, &key)
+                .unwrap(),
+            " ON DUPLICATE KEY UPDATE \"id\" = \"id\""
+        );
+        assert_eq!(
+            mysql
+                .on_duplicate(OnDuplicate::Update, &columns, &[])
+                .unwrap(),
+            " ON DUPLICATE KEY UPDATE \"id\" = VALUES(\"id\"), \"name\" = VALUES(\"name\")"
+        );
+
+        let postgres = with(DuplicateSyntax::OnConflict);
+        assert_eq!(
+            postgres
+                .on_duplicate(OnDuplicate::Skip, &columns, &[])
+                .unwrap(),
+            " ON CONFLICT DO NOTHING"
+        );
+        assert_eq!(
+            postgres
+                .on_duplicate(OnDuplicate::Update, &columns, &key)
+                .unwrap(),
+            " ON CONFLICT (\"id\") DO UPDATE SET \"name\" = EXCLUDED.\"name\""
+        );
+        assert_eq!(
+            postgres.on_duplicate(OnDuplicate::Update, &columns, &[]),
+            None,
+            "an overwrite needs a key to match by"
+        );
+
+        let none = with(DuplicateSyntax::None);
+        assert_eq!(none.on_duplicate(OnDuplicate::Skip, &columns, &key), None);
     }
 }

@@ -12,6 +12,8 @@ import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections
 import { ExportDialog } from "./features/export/ExportDialog";
 import { ExportProgress } from "./features/export/ExportProgress";
 import { HistoryDialog } from "./features/history/HistoryDialog";
+import { ImportDialog } from "./features/import/ImportDialog";
+import { ImportProgress } from "./features/import/ImportProgress";
 import { CommandPalette } from "./features/palette/CommandPalette";
 import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
 import { ConfirmDeleteRowsDialog } from "./features/query/ConfirmDeleteRowsDialog";
@@ -181,6 +183,8 @@ export function App() {
       <SchemaReviewDialog />
       <ExportDialog />
       <ExportProgress />
+      <ImportDialog />
+      <ImportProgress />
       <CommandPalette />
       <HistoryDialog />
       <ServerInfoDialog />

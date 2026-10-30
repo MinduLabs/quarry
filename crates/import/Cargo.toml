@@ -1,0 +1,15 @@
+[package]
+name = "quarry-import"
+description = "Reads rows from delimited text files: CSV and TSV. No database access."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

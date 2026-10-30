@@ -11,6 +11,22 @@ pub struct DialectSpec {
     pub literals: LiteralStyle,
     /// `None` when the database cannot show query plans.
     pub explain: Option<ExplainSyntax>,
+    /// How an insert skips or overwrites a row whose key exists.
+    #[serde(default)]
+    pub on_duplicate: DuplicateSyntax,
+}
+
+/// The way a database lets `INSERT` meet an existing key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum DuplicateSyntax {
+    /// No form the engine can use: such an import can only stop at a duplicate.
+    #[default]
+    None,
+    /// `ON DUPLICATE KEY UPDATE col = col` (skip) or `… col = VALUES(col)` (overwrite).
+    OnDuplicateKey,
+    /// `ON CONFLICT DO NOTHING` (skip) or `ON CONFLICT (key) DO UPDATE SET col = EXCLUDED.col`.
+    OnConflict,
 }
 
 /// How identifiers are quoted. The closing quote is doubled inside a name.

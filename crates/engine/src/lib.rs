@@ -19,6 +19,7 @@ mod export;
 mod export_job;
 mod favorites;
 mod history;
+mod import;
 mod install;
 mod metadata;
 mod perf;

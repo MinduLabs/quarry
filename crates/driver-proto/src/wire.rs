@@ -106,6 +106,7 @@ pub enum Call {
     SetReadOnly {
         read_only: bool,
     },
+    SetStrict,
     Close,
 }
 
@@ -136,6 +137,7 @@ impl std::fmt::Debug for Call {
             Self::Commit => "Commit",
             Self::Rollback => "Rollback",
             Self::SetReadOnly { .. } => "SetReadOnly",
+            Self::SetStrict => "SetStrict",
             Self::Close => "Close",
         };
         f.write_str(name)

@@ -7,7 +7,7 @@
  * Command/Event types are generated from Rust (`just bindings`); never edit ui/src/bindings.
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type { Command } from "@/bindings/Command";
 import type { CompletionContext } from "@/bindings/CompletionContext";
 import type { Event } from "@/bindings/Event";
@@ -55,4 +55,16 @@ export async function chooseSavePath(
     defaultPath: fileName,
     filters: [{ name: kind, extensions: [extension] }],
   });
+}
+
+/** Ask the user which delimited file to import, in the system's own dialog. The dialog only
+ * picks a path; the engine reads the file. `null` when the user cancels. */
+export async function chooseImportPath(): Promise<string | null> {
+  const path = await open({
+    title: "Import",
+    multiple: false,
+    directory: false,
+    filters: [{ name: "CSV or TSV", extensions: ["csv", "tsv", "txt"] }],
+  });
+  return typeof path === "string" ? path : null;
 }

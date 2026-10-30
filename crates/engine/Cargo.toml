@@ -13,6 +13,7 @@ quarry-model.workspace = true
 quarry-driver-api.workspace = true
 quarry-driver-proto.workspace = true
 quarry-export.workspace = true
+quarry-import.workspace = true
 quarry-store.workspace = true
 quarry-sql.workspace = true
 quarry-tunnel.workspace = true

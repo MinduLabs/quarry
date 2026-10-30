@@ -40,7 +40,14 @@ import {
   parseLimit,
   previewInput,
 } from "@/features/export/exportModel";
-import { chooseSavePath, send } from "@/lib/engine";
+import {
+  autoMap,
+  guessDelimiter,
+  type ImportDialogState,
+  initialImportDialog,
+  isMappingValid,
+} from "@/features/import/importModel";
+import { chooseImportPath, chooseSavePath, send } from "@/lib/engine";
 import { suggestedFileName } from "@/lib/exportFile";
 import { setPerfEnabled } from "@/lib/perf";
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "@/lib/theme";
@@ -691,6 +698,21 @@ export interface AppState {
   closeExport: () => void;
   /** Ask where to save, then start. The dialog closes and the progress card takes over. */
   startExport: () => Promise<void>;
+  /** The import dialog, while it is open. */
+  importDialog: ImportDialogState | null;
+  /** Change how the file is read; the preview and the column pairing follow. */
+  setImportOptions: (patch: Partial<ImportDialogState["options"]>) => void;
+  /** Pair file column `index` with a table column, or `null` to leave it out. */
+  setImportColumn: (index: number, column: string | null) => void;
+  chooseImportFile: () => Promise<void>;
+  closeImport: () => void;
+  /** Insert the file's rows. `confirmed` answers the production question. */
+  startImport: (confirmed?: boolean) => void;
+  dismissImportConfirm: () => void;
+  /** The import that is inserting rows now. */
+  importRun: { request: number; name: string; rows: number } | null;
+  /** Stop the running import; no row is kept. */
+  cancelImport: () => void;
   /** The export that is writing a file now. */
   exportRun: ExportRun | null;
   /** Stop the running export; no file is left. */
@@ -865,6 +887,26 @@ const structureRequests = new Map<number, { tab: number; kind: "browse" | "resul
 
 /** `LoadTableInfo` requests made by the tree, waiting for their answer: request id → table key. */
 const treeInfoRequests = new Map<number, string>();
+
+/** The import dialog's file preview and table structure requests; a stale answer is ignored. */
+let importPreviewRequest = 0;
+let importInfoRequest = 0;
+
+/** The import dialog with the file's columns paired to the table's by name. */
+function remapImport(d: ImportDialogState): ImportDialogState {
+  if (!d.tableColumns) return d;
+  const header = d.options.has_header ? d.header : [];
+  return { ...d, mapping: autoMap(header, d.width, d.tableColumns) };
+}
+
+/** Ask the engine for the first rows of the import dialog's file, read as its options say. */
+function refreshImportPreview(): void {
+  const d = useApp.getState().importDialog;
+  if (!d?.path) return;
+  importPreviewRequest = nextRequest++;
+  useApp.setState({ importDialog: { ...d, isPreviewing: true, error: null } });
+  send({ type: "ImportPreview", request: importPreviewRequest, path: d.path, options: d.options });
+}
 
 /** `InsertSql` requests waiting for their text: request id → rows copied. */
 const insertRequests = new Map<number, number>();
@@ -1467,6 +1509,16 @@ export const useApp = create<AppState>()((set, get) => {
           );
           break;
         case "TableInfo": {
+          if (event.request === importInfoRequest) {
+            importInfoRequest = 0;
+            set((s) => {
+              if (!s.importDialog) return {};
+              const tableColumns = event.info?.columns.map((c) => c.name) ?? null;
+              const error = event.error ?? (tableColumns ? null : s.importDialog.error);
+              return { importDialog: remapImport({ ...s.importDialog, tableColumns, error }) };
+            });
+            break;
+          }
           const treeTable = treeInfoRequests.get(event.request);
           if (treeTable !== undefined) {
             treeInfoRequests.delete(event.request);
@@ -1665,6 +1717,58 @@ export const useApp = create<AppState>()((set, get) => {
           if (run?.request !== event.request) break;
           set({ exportRun: null });
           if (event.cancelled) get().toast("info", "Export cancelled. No file was written.");
+          else get().toast("error", event.error);
+          break;
+        }
+        case "ImportPreview":
+          if (event.request !== importPreviewRequest) break;
+          set((s) =>
+            s.importDialog
+              ? {
+                  importDialog: remapImport({
+                    ...s.importDialog,
+                    header: event.header,
+                    rows: event.rows,
+                    width: event.width,
+                    error: event.error,
+                    isPreviewing: false,
+                  }),
+                }
+              : {},
+          );
+          break;
+        case "ImportConfirmRequired":
+          set((s) =>
+            s.importRun?.request === event.request && s.importDialog
+              ? { importRun: null, importDialog: { ...s.importDialog, confirm: event.message } }
+              : {},
+          );
+          break;
+        case "ImportProgress":
+          set((s) =>
+            s.importRun?.request === event.request
+              ? { importRun: { ...s.importRun, rows: event.rows } }
+              : {},
+          );
+          break;
+        case "ImportFinished": {
+          const run = get().importRun;
+          if (run?.request !== event.request) break;
+          set({ importRun: null, importDialog: null });
+          const rows = event.rows === 1 ? "1 row" : `${event.rows.toLocaleString()} rows`;
+          const skipped =
+            event.skipped > 0
+              ? `, skipped ${event.skipped.toLocaleString()} already in the table`
+              : "";
+          get().toast("success", `Imported ${rows} into ${run.name}${skipped}`);
+          break;
+        }
+        case "ImportFailed": {
+          const run = get().importRun;
+          if (run?.request !== event.request) break;
+          // The dialog stays, so the mapping can be fixed and the import tried again.
+          set({ importRun: null });
+          if (event.cancelled) get().toast("info", "Import cancelled. No row was imported.");
           else get().toast("error", event.error);
           break;
         }
@@ -2348,7 +2452,19 @@ export const useApp = create<AppState>()((set, get) => {
     setPalette: (palette) => set({ palette }),
     transfer: (kind, target) => {
       if (kind === "import") {
-        get().toast("info", "Import is not available yet");
+        if (target.kind !== "table") {
+          get().toast("info", "Import works on a table: choose one in the sidebar");
+          return;
+        }
+        importInfoRequest = nextRequest++;
+        set({ importDialog: initialImportDialog(target.conn, target.table) });
+        send({
+          type: "LoadTableInfo",
+          request: importInfoRequest,
+          conn: target.conn,
+          table: target.table,
+        });
+        void get().chooseImportFile();
         return;
       }
       const from = exportOrigin(get().tabs, target);
@@ -2477,6 +2593,82 @@ export const useApp = create<AppState>()((set, get) => {
     cancelExport: () => {
       const run = get().exportRun;
       if (run) send({ type: "CancelExport", request: run.request });
+    },
+
+    importDialog: null,
+    importRun: null,
+    setImportOptions: (patch) => {
+      set((s) =>
+        s.importDialog
+          ? {
+              importDialog: { ...s.importDialog, options: { ...s.importDialog.options, ...patch } },
+            }
+          : {},
+      );
+      refreshImportPreview();
+    },
+    setImportColumn: (index, column) =>
+      set((s) => {
+        const d = s.importDialog;
+        if (!d) return {};
+        const mapping = d.mapping.map((c, i) => (i === index ? column : c));
+        return { importDialog: { ...d, mapping } };
+      }),
+    chooseImportFile: async () => {
+      const before = get().importDialog;
+      if (!before || before.isChoosingFile) return;
+      set({ importDialog: { ...before, isChoosingFile: true } });
+      const path = await chooseImportPath().catch((err: unknown) => {
+        get().toast("error", `Couldn't open the file dialog: ${String(err)}`);
+        return null;
+      });
+      const open = get().importDialog;
+      if (!open) return;
+      if (path === null) {
+        // Nothing chosen yet means the user backed out of the whole import.
+        set({ importDialog: open.path ? { ...open, isChoosingFile: false } : null });
+        return;
+      }
+      set({
+        importDialog: {
+          ...open,
+          path,
+          isChoosingFile: false,
+          options: { ...open.options, delimiter: guessDelimiter(path) },
+        },
+      });
+      refreshImportPreview();
+    },
+    closeImport: () => {
+      importPreviewRequest = 0;
+      importInfoRequest = 0;
+      set({ importDialog: null });
+    },
+    startImport: (confirmed = false) => {
+      const d = get().importDialog;
+      if (!d?.path || get().importRun || d.isPreviewing || d.error) return;
+      if (!isMappingValid(d.mapping)) return;
+      const request = nextRequest++;
+      set({
+        importDialog: { ...d, confirm: null },
+        importRun: { request, name: d.table.name, rows: 0 },
+      });
+      send({
+        type: "ImportRun",
+        request,
+        conn: d.conn,
+        table: d.table,
+        columns: d.mapping,
+        path: d.path,
+        options: d.options,
+        confirmed,
+      });
+    },
+    dismissImportConfirm: () =>
+      set((s) => (s.importDialog ? { importDialog: { ...s.importDialog, confirm: null } } : {})),
+    cancelImport: () => {
+      const run = get().importRun;
+      if (run) send({ type: "CancelImport", request: run.request });
     },
   };
 });

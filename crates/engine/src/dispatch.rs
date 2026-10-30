@@ -37,6 +37,9 @@ fn command_kind(command: &Command) -> &'static str {
         Command::ExportTable { .. } => "ExportTable",
         Command::ExportCountRows { .. } => "ExportCountRows",
         Command::CancelExport { .. } => "CancelExport",
+        Command::ImportPreview { .. } => "ImportPreview",
+        Command::ImportRun { .. } => "ImportRun",
+        Command::CancelImport { .. } => "CancelImport",
         Command::AlterSchema { .. } => "AlterSchema",
         Command::Cancel { .. } => "Cancel",
         Command::CloseTab { .. } => "CloseTab",
@@ -303,6 +306,24 @@ impl Engine {
                 query,
             } => self.export_count_rows(request, conn, table, query).await,
             Command::CancelExport { request } => self.cancel_export(request),
+            Command::ImportPreview {
+                request,
+                path,
+                options,
+            } => self.import_preview(request, path, options).await,
+            Command::ImportRun {
+                request,
+                conn,
+                table,
+                columns,
+                path,
+                options,
+                confirmed,
+            } => {
+                self.import_run(request, conn, table, columns, path, options, confirmed)
+                    .await;
+            }
+            Command::CancelImport { request } => self.cancel_export(request),
             Command::AlterSchema {
                 request,
                 conn,

@@ -42,7 +42,7 @@ pub(crate) struct ExportControl {
 }
 
 impl ExportControl {
-    fn is_cancelled(&self) -> bool {
+    pub(crate) fn is_cancelled(&self) -> bool {
         self.is_cancelled.load(Ordering::SeqCst)
     }
 
@@ -55,7 +55,7 @@ impl ExportControl {
     }
 
     /// Give the job's session to `cancel`. A cancel that came first fires at once.
-    fn arm(&self, kill: SharedCancel) {
+    pub(crate) fn arm(&self, kill: SharedCancel) {
         *lock(&self.kill) = Some(kill.clone());
         if self.is_cancelled() {
             kill.cancel();
@@ -338,7 +338,7 @@ impl Engine {
     }
 
     /// A cancel can come before the job is ready, so the job is findable from the first moment.
-    fn register_export(&self, request: RequestId) -> Arc<ExportControl> {
+    pub(crate) fn register_export(&self, request: RequestId) -> Arc<ExportControl> {
         let control = Arc::new(ExportControl::default());
         lock(&self.exports).insert(request, control.clone());
         control
@@ -388,7 +388,7 @@ impl Engine {
             Err(_) => return End::Failed(STOPPED.to_owned()),
         };
         let mut session = match self
-            .open_export_session(job.conn, job.database.as_deref(), control)
+            .open_export_session(job.conn, job.database.as_deref(), control, true)
             .await
         {
             Ok(session) => session,
@@ -476,11 +476,12 @@ impl Engine {
 
     /// A connection of the export's own: read only, in one transaction, so every row comes from
     /// the same moment.
-    async fn open_export_session(
+    pub(crate) async fn open_export_session(
         &self,
         conn: ConnId,
         database: Option<&str>,
         control: &ExportControl,
+        is_read_only: bool,
     ) -> Result<Box<dyn Session>, String> {
         let config = self
             .config_of(conn)
@@ -491,7 +492,7 @@ impl Engine {
         let mut session = self.open_session(&resolved).await?;
         control.arm(session.cancel_handle());
         let ready = async {
-            session.set_read_only(true).await?;
+            session.set_read_only(is_read_only).await?;
             if let Some(database) = database {
                 session.use_database(database).await?;
             }
@@ -517,7 +518,7 @@ impl Engine {
         control: &ExportControl,
     ) -> Result<u64, String> {
         let (sql, params) = self.count_statement(conn, table, query)?;
-        let mut session = self.open_export_session(conn, None, control).await?;
+        let mut session = self.open_export_session(conn, None, control, true).await?;
         let result = first_value(session.as_mut(), &sql, &params).await;
         let _ = session.close().await;
         if control.is_cancelled() {

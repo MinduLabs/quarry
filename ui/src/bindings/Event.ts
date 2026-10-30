@@ -51,4 +51,12 @@ sheets: number,
 /**
  * Spreadsheet cells whose text was cut to what a cell holds.
  */
-cut_cells: number, } | { "type": "ExportProgress", request: number, rows: number, bytes: number, } | { "type": "ExportRowCount", request: number, count: number | null, error: string | null, } | { "type": "ExportFailed", request: number, error: string, cancelled: boolean, } | { "type": "SchemaReview", request: number, conn: ConnId, change: SchemaChange, statements: Array<string>, warning: string | null, } | { "type": "SchemaChanged", request: number, conn: ConnId, change: SchemaChange, error: string | null, } | { "type": "Favorites", favorites: Array<Favorite>, } | { "type": "History", request: number, entries: Array<HistoryEntry>, } | { "type": "HistoryAdded", entry: HistoryEntry, } | { "type": "Workspace", workspace: Workspace, } | { "type": "WorkspaceSaved", request: number, error: string | null, };
+cut_cells: number, } | { "type": "ExportProgress", request: number, rows: number, bytes: number, } | { "type": "ExportRowCount", request: number, count: number | null, error: string | null, } | { "type": "ExportFailed", request: number, error: string, cancelled: boolean, } | { "type": "ImportPreview", request: number, header: Array<string>, rows: Array<Array<string>>, width: number, error: string | null, } | { "type": "ImportConfirmRequired", request: number, message: string, } | { "type": "ImportProgress", request: number, rows: number, } | { "type": "ImportFinished", request: number, 
+/**
+ * Rows inserted or overwritten.
+ */
+rows: number, 
+/**
+ * Rows left out because their key was already in the table.
+ */
+skipped: number, } | { "type": "ImportFailed", request: number, error: string, cancelled: boolean, } | { "type": "SchemaReview", request: number, conn: ConnId, change: SchemaChange, statements: Array<string>, warning: string | null, } | { "type": "SchemaChanged", request: number, conn: ConnId, change: SchemaChange, error: string | null, } | { "type": "Favorites", favorites: Array<Favorite>, } | { "type": "History", request: number, entries: Array<HistoryEntry>, } | { "type": "HistoryAdded", entry: HistoryEntry, } | { "type": "Workspace", workspace: Workspace, } | { "type": "WorkspaceSaved", request: number, error: string | null, };

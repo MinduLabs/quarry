@@ -52,6 +52,7 @@ exceptions = [
     { allow = ["AGPL-3.0-or-later"], crate = "quarry-store" },
     { allow = ["AGPL-3.0-or-later"], crate = "quarry-tunnel" },
     { allow = ["AGPL-3.0-or-later"], crate = "quarry-export" },
+    { allow = ["AGPL-3.0-or-later"], crate = "quarry-import" },
     { allow = ["AGPL-3.0-or-later"], crate = "quarry-engine" },
     { allow = ["AGPL-3.0-or-later"], crate = "quarry-driver-mysql" },
 ]

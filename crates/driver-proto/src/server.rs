@@ -213,6 +213,10 @@ async fn answer(
             open.set_read_only(read_only).await?;
             Reply::Done
         }
+        Call::SetStrict => {
+            open.set_strict().await?;
+            Reply::Done
+        }
         Call::Connect { .. } | Call::SchemaChange { .. } | Call::Close => Reply::Done,
     })
 }

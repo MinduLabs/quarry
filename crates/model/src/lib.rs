@@ -17,6 +17,7 @@ mod error_location;
 mod export;
 mod favorite;
 mod history;
+mod import;
 mod schema;
 mod server_info;
 mod value;
@@ -30,7 +31,8 @@ pub use connection::{ConnId, ConnectionConfig, DriverId, SshAuth, SshConfig, Ssl
 pub use data_source::{DataSource, DataSourceSection};
 pub use ddl::{AlterOp, ColumnDef, IndexDef, SchemaChange};
 pub use dialect::{
-    DialectSpec, ExplainSyntax, IdentQuote, LiteralStyle, PagingStyle, PlaceholderStyle,
+    DialectSpec, DuplicateSyntax, ExplainSyntax, IdentQuote, LiteralStyle, PagingStyle,
+    PlaceholderStyle,
 };
 pub use edit::{CellValue, RowChange};
 pub use environment::Environment;
@@ -38,6 +40,7 @@ pub use error_location::ErrorLocation;
 pub use export::{ExportFormat, ExportOptions};
 pub use favorite::{Favorite, FavoriteId, FavoriteItem};
 pub use history::HistoryEntry;
+pub use import::{ImportOptions, OnDuplicate};
 pub use schema::{
     ColumnInfo, ForeignKey, IndexInfo, SchemaObject, TableColumns, TableInfo, TableRef,
 };
