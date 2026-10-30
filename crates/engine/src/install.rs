@@ -162,6 +162,11 @@ impl Engine {
             .and_then(reqwest::Response::error_for_status)
             .map_err(|err| unreachable_release(&err))?;
         let total = response.content_length();
+        let progress = |received: u64| Event::DriverInstall {
+            driver: driver.clone(),
+            state: DriverInstallState::Downloading { received, total },
+        };
+        self.emit(progress(0));
         let mut file = tokio::fs::File::create(staging)
             .await
             .map_err(|err| format!("The driver could not be saved: {err}."))?;
@@ -181,19 +186,18 @@ impl Engine {
             received += chunk.len() as u64;
             if reported.elapsed() >= PROGRESS_EVERY {
                 reported = Instant::now();
-                self.emit(Event::DriverInstall {
-                    driver: driver.clone(),
-                    state: DriverInstallState::Downloading {
-                        fraction: total
-                            .map(|total| (received as f32 / total.max(1) as f32).min(1.0)),
-                    },
-                });
+                self.emit(progress(received));
             }
         }
         file.flush()
             .await
             .map_err(|err| format!("The driver could not be saved: {err}."))?;
         drop(file);
+        self.emit(progress(received));
+        self.emit(Event::DriverInstall {
+            driver: driver.clone(),
+            state: DriverInstallState::Verifying,
+        });
 
         let sum: String = digest
             .finish()
@@ -338,13 +342,18 @@ mod tests {
         .unwrap()
     }
 
-    async fn outcome(events: &EngineEvents) -> DriverInstallState {
+    /// The final state, and the progress states before it in order.
+    async fn outcome(events: &EngineEvents) -> (DriverInstallState, Vec<DriverInstallState>) {
         let wait = async {
+            let mut progress = Vec::new();
             loop {
-                if let Event::DriverInstall { state, .. } = events.recv().await.unwrap()
-                    && !matches!(state, DriverInstallState::Downloading { .. })
-                {
-                    return state;
+                if let Event::DriverInstall { state, .. } = events.recv().await.unwrap() {
+                    match state {
+                        DriverInstallState::Downloading { .. } | DriverInstallState::Verifying => {
+                            progress.push(state)
+                        }
+                        done => return (done, progress),
+                    }
                 }
             }
         };
@@ -366,7 +375,13 @@ mod tests {
     /// Serves `files` (the manifest names the server as `BASE`) and installs the MySQL driver.
     async fn install(
         files: impl FnOnce(&str) -> HashMap<String, Vec<u8>>,
-    ) -> (DriverInstallState, PathBuf, EngineEvents, EngineHandle) {
+    ) -> (
+        DriverInstallState,
+        PathBuf,
+        EngineEvents,
+        EngineHandle,
+        Vec<DriverInstallState>,
+    ) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -380,7 +395,8 @@ mod tests {
                 driver: DriverId("mysql".into()),
             })
             .unwrap();
-        (outcome(&events).await, drivers, events, engine)
+        let (state, progress) = outcome(&events).await;
+        (state, drivers, events, engine, progress)
     }
 
     #[tokio::test]
@@ -400,6 +416,40 @@ mod tests {
             "{state:?}"
         );
         assert!(leftovers(&drivers).is_empty(), "{:?}", leftovers(&drivers));
+    }
+
+    #[tokio::test]
+    async fn a_download_reports_its_bytes_then_verifies() {
+        let body = vec![7u8; 64 * 1024];
+        let sha = sha256(&body);
+        let size = body.len() as u64;
+        let (state, .., progress) = install(move |base| {
+            HashMap::from([
+                ("/drivers.json".to_owned(), manifest(base, &sha)),
+                ("/mysql".to_owned(), body),
+            ])
+        })
+        .await;
+        // The bytes are not a program, so it fails after the checks start.
+        assert!(
+            matches!(state, DriverInstallState::Failed { .. }),
+            "{state:?}"
+        );
+        let total = Some(size);
+        assert_eq!(
+            progress.first(),
+            Some(&DriverInstallState::Downloading { received: 0, total })
+        );
+        let len = progress.len();
+        assert!(len >= 3, "{progress:?}");
+        assert_eq!(
+            progress[len - 2],
+            DriverInstallState::Downloading {
+                received: size,
+                total
+            }
+        );
+        assert_eq!(progress[len - 1], DriverInstallState::Verifying);
     }
 
     #[tokio::test]
@@ -441,7 +491,7 @@ mod tests {
         };
         let body = std::fs::read(built).unwrap();
         let sha = sha256(&body);
-        let (state, drivers, events, engine) = install(move |base| {
+        let (state, drivers, events, engine, _) = install(move |base| {
             HashMap::from([
                 ("/drivers.json".to_owned(), manifest(base, &sha)),
                 ("/mysql".to_owned(), body),

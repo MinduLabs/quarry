@@ -3,4 +3,4 @@
 /**
  * Where a driver download is.
  */
-export type DriverInstallState = { "kind": "Downloading", fraction: number | null, } | { "kind": "Installed" } | { "kind": "Failed", error: string, };
+export type DriverInstallState = { "kind": "Downloading", received: number, total: number | null, } | { "kind": "Verifying" } | { "kind": "Installed" } | { "kind": "Failed", error: string, };

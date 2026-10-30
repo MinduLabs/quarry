@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
+import { formatBytes } from "@/lib/bytes";
 import { useApp } from "@/store/app";
-import { formatBytes } from "./exportModel";
 
 /** The export that is writing a file: rows so far, size, and a way to stop it. It is a card
  * beside the work, not a dialog, so the app stays usable while a big table is written. */

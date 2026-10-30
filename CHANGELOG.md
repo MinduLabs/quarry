@@ -10,7 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 - PostgreSQL and Microsoft SQL Server connections, next to MySQL and MariaDB. Their schemas are the databases in the sidebar. Values keep their exact type (numeric, intervals, network types, arrays, date and time with offsets).
-- Quarry ships without database drivers: each is downloaded the first time it is needed, from the connection's settings, with its progress shown. A driver that does not match its checksum or does not run is never installed. Cloud providers and demo databases are still Coming soon.
+- Quarry ships without database drivers: each is downloaded the first time it is needed, from the connection's settings, with the size downloaded, a progress bar and the check that follows. A driver that does not match its checksum or does not run is never installed. Cloud providers and demo databases are still Coming soon.
 - New connection opens with a choice of data source (databases, cloud providers, demo databases) with their logos, then the settings. Sources Quarry cannot open yet show as Coming soon. MariaDB has its own entry and driver id.
 - Split the editor area: a tab's menu has Split right and Split down, then Move to other group and Unsplit. Each group has its own tabs.
 - Output panel at the bottom of the window, always there: the output of the selected tab, and the results of a query tab beside it (running a query shows them). Table tabs show their rows in the tab, without an SQL editor. A button moves a query tab's results under its editor and back.

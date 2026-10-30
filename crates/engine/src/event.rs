@@ -30,10 +30,15 @@ pub enum ConnState {
 #[serde(tag = "kind")]
 #[ts(export)]
 pub enum DriverInstallState {
-    /// `fraction` from 0 to 1; `null` while the size is unknown.
+    /// `total` is `null` when the server does not say the size.
     Downloading {
-        fraction: Option<f32>,
+        #[ts(type = "number")]
+        received: u64,
+        #[ts(type = "number | null")]
+        total: Option<u64>,
     },
+    /// Downloaded; its checksum is checked and it is asked what it serves.
+    Verifying,
     Installed,
     Failed {
         error: String,
