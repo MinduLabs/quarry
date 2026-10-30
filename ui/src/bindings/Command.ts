@@ -3,6 +3,7 @@ import type { BrowseQuery } from "./BrowseQuery";
 import type { ColumnMeta } from "./ColumnMeta";
 import type { ConnId } from "./ConnId";
 import type { ConnectionConfig } from "./ConnectionConfig";
+import type { DriverId } from "./DriverId";
 import type { ExportFormat } from "./ExportFormat";
 import type { ExportOptions } from "./ExportOptions";
 import type { ExportSource } from "./ExportSource";
@@ -21,7 +22,7 @@ import type { Workspace } from "./Workspace";
  * A request from a client (the UI, later a CLI or MCP server) to the engine.
  * Results arrive asynchronously as [`crate::Event`]s.
  */
-export type Command = { "type": "Ping", id: number, } | { "type": "LoadConnections" } | { "type": "LoadDataSources" } | { "type": "SaveConnection", config: ConnectionConfig, password: Password | null, ssh_secret: Password | null, remember_password: boolean, } | { "type": "DeleteConnection", id: ConnId, } | { "type": "TestConnection", request: number, config: ConnectionConfig, password: Password | null, ssh_secret: Password | null, } | { "type": "Connect", id: ConnId, } | { "type": "Disconnect", id: ConnId, } | { "type": "LoadObjects", id: ConnId, database: string, } | { "type": "LoadColumns", id: ConnId, database: string, } | { "type": "LoadTableInfo", request: number, conn: ConnId, table: TableRef, } | { "type": "LoadServerInfo", request: number, conn: ConnId, kind: ServerInfoKind, } | { "type": "Run", tab: number, conn: ConnId, database: string | null, sql: string, confirmed: boolean, } | { "type": "Browse", tab: number, conn: ConnId, table: TableRef, limit: number, offset: number, 
+export type Command = { "type": "Ping", id: number, } | { "type": "LoadConnections" } | { "type": "LoadDataSources" } | { "type": "InstallDriver", driver: DriverId, } | { "type": "SaveConnection", config: ConnectionConfig, password: Password | null, ssh_secret: Password | null, remember_password: boolean, } | { "type": "DeleteConnection", id: ConnId, } | { "type": "TestConnection", request: number, config: ConnectionConfig, password: Password | null, ssh_secret: Password | null, } | { "type": "Connect", id: ConnId, } | { "type": "Disconnect", id: ConnId, } | { "type": "LoadObjects", id: ConnId, database: string, } | { "type": "LoadColumns", id: ConnId, database: string, } | { "type": "LoadTableInfo", request: number, conn: ConnId, table: TableRef, } | { "type": "LoadServerInfo", request: number, conn: ConnId, kind: ServerInfoKind, } | { "type": "Run", tab: number, conn: ConnId, database: string | null, sql: string, confirmed: boolean, } | { "type": "Browse", tab: number, conn: ConnId, table: TableRef, limit: number, offset: number, 
 /**
  * Filters and sort, applied by the database.
  */

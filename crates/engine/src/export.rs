@@ -71,8 +71,8 @@ impl Engine {
     ) {
         let result = async {
             let (options, columns) = self.writer_input(conn, format, &options, &columns).await?;
-            let dialect = self.driver_of(conn)?.dialect();
-            preview_text(dialect, format, &options, &columns, &rows)
+            let driver = self.driver_of(conn)?;
+            preview_text(driver.dialect(), format, &options, &columns, &rows)
         }
         .await;
         let (text, error) = match result {
@@ -108,9 +108,9 @@ impl Engine {
             let engine = self.clone();
             let target = path.clone();
             tokio::task::spawn_blocking(move || {
-                let dialect = engine.driver_of(conn)?.dialect();
+                let driver = engine.driver_of(conn)?;
                 write_rows(
-                    dialect,
+                    driver.dialect(),
                     format,
                     &options,
                     &columns,
@@ -249,6 +249,7 @@ impl Engine {
                 let mut sink = |item: ExecItem| match item {
                     ExecItem::Columns(found) => columns = found,
                     ExecItem::Rows(mut batch) => rows.append(&mut batch),
+                    ExecItem::Batch(batch) => rows.append(&mut batch.decode().unwrap_or_default()),
                     _ => {}
                 };
                 let opts = ExecOpts {

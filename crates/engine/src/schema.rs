@@ -3,11 +3,11 @@
 use quarry_driver_api::Dialect;
 use quarry_model::{Environment, SchemaChange, TableRef, Value};
 
-/// The statements for `change`, each checked to be exactly one statement: a type or default typed
-/// by the user must not smuggle in a second one.
-pub fn statements(dialect: &dyn Dialect, change: &SchemaChange) -> Result<Vec<String>, String> {
-    let statements = dialect
-        .schema_change(change)
+/// The statements a driver wrote for a change (`None` when it cannot change the schema), each
+/// checked to be exactly one statement: a type or default typed by the user must not smuggle in a
+/// second one.
+pub fn checked(written: Option<Result<Vec<String>, String>>) -> Result<Vec<String>, String> {
+    let statements = written
         .ok_or_else(|| "This database cannot change its schema from Quarry yet.".to_owned())??;
     for statement in &statements {
         if quarry_sql::split(statement).len() != 1 {
@@ -123,29 +123,23 @@ mod tests {
 
     #[test]
     fn a_default_cannot_add_a_statement() {
-        let column = |default: &str| ColumnDef {
-            name: "a".into(),
-            type_name: "varchar(10)".into(),
-            nullable: true,
-            default: Some(default.into()),
-            auto_increment: false,
-            on_update: None,
-            comment: None,
-        };
-        let change = |default: &str| SchemaChange::AlterTable {
-            table: table(),
-            ops: vec![AlterOp::AddColumn {
-                column: column(default),
-            }],
-        };
-        let mysql = quarry_driver_mysql::MysqlDialect;
-        assert!(statements(&mysql, &change("'a;b'")).is_ok());
-        assert!(statements(&mysql, &change("0; DROP TABLE orders")).is_err());
+        let written = |sql: &str| Some(Ok(vec![sql.to_owned()]));
+        assert!(
+            checked(written(
+                "ALTER TABLE `orders` ADD COLUMN `a` varchar(10) DEFAULT 'a;b'"
+            ))
+            .is_ok()
+        );
+        assert!(
+            checked(written(
+                "ALTER TABLE `orders` ADD COLUMN `a` int DEFAULT 0; DROP TABLE orders"
+            ))
+            .is_err()
+        );
     }
 
     #[test]
-    fn dialects_without_ddl_say_so() {
-        let change = SchemaChange::CreateDatabase { name: "x".into() };
-        assert!(statements(&Ansi, &change).is_err());
+    fn drivers_without_ddl_say_so() {
+        assert!(checked(None).is_err());
     }
 }

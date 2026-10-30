@@ -3,11 +3,14 @@ resolver = "3"
 members = [
     "crates/model",
     "crates/driver-api",
+    "crates/driver-proto",
     "crates/sql",
     "crates/store",
     "crates/tunnel",
     "crates/export",
     "crates/drivers/mysql",
+    "crates/drivers/postgres",
+    "crates/drivers/sqlserver",
     "crates/engine",
     "src-tauri",
 ]
@@ -24,12 +27,15 @@ authors = ["Quarry contributors"]
 # Internal crates
 quarry-model = { path = "crates/model" }
 quarry-driver-api = { path = "crates/driver-api" }
+quarry-driver-proto = { path = "crates/driver-proto" }
 quarry-sql = { path = "crates/sql" }
 quarry-store = { path = "crates/store" }
 quarry-tunnel = { path = "crates/tunnel" }
 quarry-export = { path = "crates/export" }
 quarry-engine = { path = "crates/engine" }
 quarry-driver-mysql = { path = "crates/drivers/mysql" }
+quarry-driver-postgres = { path = "crates/drivers/postgres" }
+quarry-driver-sqlserver = { path = "crates/drivers/sqlserver" }
 
 # Core
 async-channel = "2.5"
@@ -97,3 +103,9 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Driver binaries (release.yml). Each runs in its own process, so a panic ends only that
+# session, and the engine reports the connection lost: unwinding buys nothing there.
+[profile.driver]
+inherits = "release"
+panic = "abort"

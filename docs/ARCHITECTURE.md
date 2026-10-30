@@ -9,8 +9,8 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
 
 1. **Headless core.** Everything that talks to a database, the keyring or the disk lives in
    `crates/engine` and below. The UI is one client of the engine; a CLI or MCP server would be another.
-2. **One-way dependencies:** `src-tauri → engine → {driver-api, sql, store, tunnel} → model`.
-   Only the engine names a concrete driver.
+2. **One-way dependencies:** `src-tauri → engine → {driver-proto, sql, store, tunnel} → model`.
+   No crate of the app names a concrete driver: each driver is its own binary.
 3. **One protocol.** UI ↔ core talk only through `Command` (requests) and `Event` (results).
    TypeScript types are generated from Rust, so the two sides cannot drift.
 4. **Drivers declare capabilities; the UI reads them.** No `if driver == "mysql"` anywhere.
@@ -34,10 +34,10 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
 │ crates/engine  own tokio runtime             │  connections, per-tab sessions, safe mode
 └───┬───────────┬───────────┬───────────┬──────┘
     ▼           ▼           ▼           ▼
- driver-api    sql        store       tunnel
-    │
+ driver-proto  sql        store       tunnel
+    │  stdin / stdout, one process per session
     ▼
- drivers/mysql
+ quarry-driver-{mysql,postgres,sqlserver}   (binaries: drivers/* + driver-proto + driver-api)
     └───────────┴───────────┴───────────┘
                        ▼
                  crates/model   plain types, no IO
@@ -46,12 +46,15 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
 | Crate | Responsibility |
 |---|---|
 | `model` | Plain types that cross the boundary (`Value`, `ColumnMeta`, `ConnectionConfig`, `Capabilities`, …). Exports TypeScript types (ts-rs). |
-| `driver-api` | `Driver` / `Session` traits, `Dialect` (quoting, placeholders, paging, DDL), `ExecItem`, the shared error type. |
-| `drivers/mysql` | MySQL / MariaDB via `mysql_async` + rustls, registered under the ids `mysql` and `mariadb`. Introspection through `information_schema`, cancel with `KILL QUERY` on a side connection. |
+| `driver-api` | `Driver` / `Session` traits, `SpecDialect` (SQL written from a `DialectSpec`: quoting, placeholders, paging, literals, explain), `ExecItem`, the shared error type. DDL stays driver code (`Driver::schema_change`). |
+| `driver-proto` | The wire between the engine and a driver binary: `hello` (what the binary serves), then one session per process over stdin / stdout. Messages are JSON; row batches use a binary form, since rows are most of the traffic. `ProcessDriver` is the engine's end, `driver_main` the binary's. |
+| `drivers/postgres` | The `quarry-driver-postgres` binary: PostgreSQL via `tokio-postgres` + rustls. The tree's databases are the schemas of the database the connection opens, so a table is `"schema"."table"` and a tab's database sets the `search_path`. Values are decoded from the binary format by type; parameters go as text, so the server reads them as the column's type. Cancel with PostgreSQL's cancel request. |
+| `drivers/sqlserver` | The `quarry-driver-sqlserver` binary: SQL Server via `tiberius` + rustls. Like PostgreSQL, the tree's databases are the schemas of the connection's database (`[schema].[table]`). Pages use `OFFSET … FETCH`, parameters `@P1` and go as text. A statement without result sets reads its row count from `@@ROWCOUNT` in the next batch, since tiberius keeps it. Cancel is a TDS attention; tiberius 0.13 never reads its confirmation (tiberius#459), so a cancelled session is given up and the tab opens a new one. There is no read-only session: a read-only connection still refuses grid and schema edits, but only the login's rights stop typed SQL. |
+| `drivers/mysql` | The `quarry-driver-mysql` binary: MySQL / MariaDB via `mysql_async` + rustls, under the ids `mysql` and `mariadb`. Introspection through `information_schema`, cancel with `KILL QUERY` on a side connection. |
 | `sql` | Statement splitting, statement at cursor, classification (read / write / schema / destructive), transaction effect, completion context. No IO. |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs, query history, secrets in the OS keyring. |
 | `tunnel` | SSH local port forwarding via `russh`. |
-| `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Holds the catalog of data sources (`LoadDataSources`): an entry is usable when a driver with its id is registered. Exports TypeScript types. |
+| `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Quarry ships without drivers: `InstallDriver` downloads a binary from the release's `drivers.json`, checks its SHA-256 and that it answers `hello`, then puts it in the driver directory (the data directory's `drivers`, or `QUARRY_DRIVER_DIR`). At start the engine asks every binary there what it serves. Holds the catalog of data sources (`LoadDataSources`): an entry is usable when a driver with its id is registered. Exports TypeScript types. |
 | `src-tauri` | Window, bundling, the bridge. |
 
 ## Protocol

@@ -297,7 +297,7 @@ async fn schema_changes_round_trip() {
         comment: None,
     };
     let run = async |session: &mut Box<dyn quarry_driver_api::Session>, change: SchemaChange| {
-        for sql in driver.dialect().schema_change(&change).unwrap().unwrap() {
+        for sql in driver.schema_change(&change).await.unwrap().unwrap() {
             session
                 .execute(&sql, &ExecOpts::default(), &mut |_| {})
                 .await

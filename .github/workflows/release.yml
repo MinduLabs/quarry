@@ -1,7 +1,8 @@
 name: Release
 
 # Push a tag like v0.1.0 → run CI → build every package on GitHub runners → publish a public
-# GitHub Release with exactly these files: .AppImage, .deb, .flatpak, .dmg (`gh release create`).
+# GitHub Release with exactly these files: .AppImage, .deb, .flatpak, .dmg, the driver binaries and
+# drivers.json (`gh release create`).
 # A PR that changes this file, or a manual run (workflow_dispatch), builds the packages as
 # workflow artifacts without publishing.
 # Actions are pinned by commit SHA; the comment names the release.
@@ -159,9 +160,99 @@ jobs:
           path: target/universal-apple-darwin/release/bundle/dmg/Quarry_${{ needs.version.outputs.version }}_universal.dmg
           if-no-files-found: error
 
+  # Drivers ship apart from the app and are downloaded on first use (crates/engine/src/install.rs).
+  # Linux is built on 22.04 like the app, so the binaries run on the same glibc.
+  drivers:
+    needs: [version, ci]
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-latest
+            target: universal-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      PACKAGES: quarry-driver-mysql quarry-driver-postgres quarry-driver-sqlserver
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target == 'universal-apple-darwin' && 'aarch64-apple-darwin, x86_64-apple-darwin' || matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          key: ${{ matrix.target }}
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p out
+          packages=""
+          for p in $PACKAGES; do packages="$packages -p $p"; done
+          if [ "$TARGET" = universal-apple-darwin ]; then
+            for t in aarch64-apple-darwin x86_64-apple-darwin; do
+              cargo build --profile driver --locked --target "$t" $packages --bins
+            done
+            for p in $PACKAGES; do
+              lipo -create -output "out/$p-$TARGET" \
+                "target/aarch64-apple-darwin/driver/$p" "target/x86_64-apple-darwin/driver/$p"
+            done
+          else
+            cargo build --profile driver --locked --target "$TARGET" $packages --bins
+            for p in $PACKAGES; do cp "target/$TARGET/driver/$p" "out/$p-$TARGET"; done
+          fi
+          # Each must answer `hello` before it ships.
+          for p in $PACKAGES; do "out/$p-$TARGET" hello > /dev/null; done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-drivers-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+
+  # drivers.json: for each driver and target, the release file's URL and SHA-256.
+  drivers-manifest:
+    needs: [version, drivers]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-drivers-*
+          merge-multiple: true
+          path: out
+      - name: Write drivers.json
+        env:
+          BASE: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          packages = {}
+          for f in sorted(pathlib.Path("out").iterdir()):
+              package, target = None, None
+              for t in ("x86_64-unknown-linux-gnu", "universal-apple-darwin"):
+                  if f.name.endswith("-" + t):
+                      package, target = f.name[: -len(t) - 1], t
+              if package is None:
+                  raise SystemExit(f"unexpected file {f.name}")
+              sha = hashlib.sha256(f.read_bytes()).hexdigest()
+              packages.setdefault(package, {})[target] = {
+                  "url": f"{os.environ['BASE']}/{f.name}",
+                  "sha256": sha,
+              }
+          pathlib.Path("drivers.json").write_text(json.dumps({"packages": packages}, indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-drivers-manifest
+          path: drivers.json
+          if-no-files-found: error
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [flatpak, linux, macos]
+    needs: [flatpak, linux, macos, drivers-manifest]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:

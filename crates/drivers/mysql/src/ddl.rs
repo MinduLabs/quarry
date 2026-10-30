@@ -1,11 +1,9 @@
 //! MySQL statements for a [`SchemaChange`].
 
-use quarry_driver_api::Dialect;
+use quarry_driver_api::{Dialect, SpecDialect};
 use quarry_model::{AlterOp, ColumnDef, IndexDef, SchemaChange, Value};
 
-use crate::MysqlDialect;
-
-pub fn statements(d: &MysqlDialect, change: &SchemaChange) -> Result<Vec<String>, String> {
+pub fn statements(d: &SpecDialect, change: &SchemaChange) -> Result<Vec<String>, String> {
     let sql = match change {
         SchemaChange::CreateDatabase { name } => {
             format!(
@@ -71,7 +69,7 @@ pub fn statements(d: &MysqlDialect, change: &SchemaChange) -> Result<Vec<String>
     Ok(vec![sql])
 }
 
-fn alter(d: &MysqlDialect, op: &AlterOp) -> Result<String, String> {
+fn alter(d: &SpecDialect, op: &AlterOp) -> Result<String, String> {
     Ok(match op {
         AlterOp::AddColumn { column: c } => format!("ADD COLUMN {}", column(d, c)?),
         AlterOp::ModifyColumn { name, column: c } => format!(
@@ -90,7 +88,7 @@ fn alter(d: &MysqlDialect, op: &AlterOp) -> Result<String, String> {
     })
 }
 
-fn add_index(d: &MysqlDialect, index: &IndexDef) -> Result<String, String> {
+fn add_index(d: &SpecDialect, index: &IndexDef) -> Result<String, String> {
     if index.columns.is_empty() {
         return Err("Pick at least one column for the index.".to_owned());
     }
@@ -102,7 +100,7 @@ fn add_index(d: &MysqlDialect, index: &IndexDef) -> Result<String, String> {
     ))
 }
 
-fn column(d: &MysqlDialect, c: &ColumnDef) -> Result<String, String> {
+fn column(d: &SpecDialect, c: &ColumnDef) -> Result<String, String> {
     named(&c.name, "column")?;
     let type_name = c.type_name.trim();
     if type_name.is_empty() {
@@ -141,7 +139,7 @@ fn column(d: &MysqlDialect, c: &ColumnDef) -> Result<String, String> {
     Ok(sql)
 }
 
-fn idents(d: &MysqlDialect, names: &[String]) -> String {
+fn idents(d: &SpecDialect, names: &[String]) -> String {
     names
         .iter()
         .map(|n| d.quote_ident(n))
@@ -184,7 +182,7 @@ mod tests {
     }
 
     fn one(change: SchemaChange) -> String {
-        let mut out = statements(&MysqlDialect, &change).unwrap();
+        let mut out = statements(crate::dialect(), &change).unwrap();
         assert_eq!(out.len(), 1);
         out.remove(0)
     }
@@ -278,18 +276,18 @@ mod tests {
             columns: vec![col("id", "int", false)],
             primary_key: vec![],
         };
-        assert!(statements(&MysqlDialect, &empty_name).is_err());
+        assert!(statements(crate::dialect(), &empty_name).is_err());
         let no_type = SchemaChange::AlterTable {
             table: table(),
             ops: vec![AlterOp::AddColumn {
                 column: col("a", "", true),
             }],
         };
-        assert!(statements(&MysqlDialect, &no_type).is_err());
+        assert!(statements(crate::dialect(), &no_type).is_err());
         let no_ops = SchemaChange::AlterTable {
             table: table(),
             ops: vec![],
         };
-        assert!(statements(&MysqlDialect, &no_ops).is_err());
+        assert!(statements(crate::dialect(), &no_ops).is_err());
     }
 }

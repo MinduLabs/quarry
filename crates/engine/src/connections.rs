@@ -221,9 +221,8 @@ impl Engine {
         resolved: &ResolvedConfig,
     ) -> Result<Box<dyn Session>, String> {
         let driver = self
-            .registry
-            .get(&resolved.config.driver)
-            .ok_or_else(|| format!("No driver for “{}”", resolved.config.driver.0))?;
+            .driver(&resolved.config.driver)
+            .ok_or_else(|| crate::drivers::missing(&resolved.config.driver))?;
         let mut session = driver.connect(resolved).await.map_err(|e| describe(&e))?;
         if resolved.config.read_only {
             session
@@ -281,8 +280,7 @@ impl Engine {
         };
         let server_version = session.server_version();
         let capabilities = self
-            .registry
-            .get(&resolved.config.driver)
+            .driver(&resolved.config.driver)
             .map(|d| d.capabilities())
             .unwrap_or_default();
         lock(&self.meta).insert(id, Arc::new(tokio::sync::Mutex::new(session)));

@@ -1,3 +1,4 @@
+import { Download } from "lucide-react";
 import type { DataSource } from "@/bindings/DataSource";
 import type { DataSourceSection } from "@/bindings/DataSourceSection";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -10,7 +11,10 @@ const SECTIONS: { value: DataSourceSection; label: string }[] = [
   { value: "demo", label: "Demo databases" },
 ];
 
-/** Step 1: a click on a source opens its settings. Sources without a driver show but cannot be picked. */
+/**
+ * Step 1: a click on a source opens its settings. Sources without a driver show but cannot be
+ * picked; a driver not yet on this computer is downloaded from the settings.
+ */
 export function DriverSelectStep({
   sources,
   selectedId,
@@ -74,6 +78,12 @@ function SourceTile({
       <span className="line-clamp-2 text-center text-base text-fg leading-tight">
         {source.name}
       </span>
+      {isAvailable && !source.is_installed && (
+        <span className="-mt-2 flex items-center gap-1 text-faint text-xs">
+          <Download size={11} strokeWidth={1.75} />
+          Download
+        </span>
+      )}
     </button>
   );
   if (isAvailable) return tile;

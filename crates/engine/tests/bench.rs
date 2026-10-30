@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! End-to-end benchmarks against the test MySQL (`just db-up && just bench`). Ignored by
+//! End-to-end benchmarks against the test MySQL (`just bench`). Ignored by
 //! `cargo test`, and skipped when `QUARRY_TEST_MYSQL` is unset.
 
 use std::time::{Duration, Instant};
@@ -11,7 +11,11 @@ use quarry_model::{ConnId, ConnectionConfig, DriverId, Environment, HistoryEntry
 async fn until(events: &EngineEvents, pred: impl Fn(&Event) -> bool) {
     let wait = async {
         loop {
-            if pred(&events.recv().await.unwrap()) {
+            let event = events.recv().await.unwrap();
+            // What the Tauri bridge does with every event, so the time covers the rows'
+            // trip to JSON wherever it happens.
+            std::hint::black_box(serde_json::to_string(&event).unwrap());
+            if pred(&event) {
                 return;
             }
         }
@@ -36,7 +40,7 @@ fn summary(mut times: Vec<f64>) -> String {
 #[ignore = "benchmark: run with `just bench`"]
 async fn query_latency() {
     let Ok(addr) = std::env::var("QUARRY_TEST_MYSQL") else {
-        println!("bench skipped: set QUARRY_TEST_MYSQL (just db-up)");
+        println!("bench skipped: set QUARRY_TEST_MYSQL (just bench does)");
         return;
     };
     let (host, port) = addr.split_once(':').unwrap();
@@ -61,6 +65,9 @@ async fn query_latency() {
         known_hosts: None,
         disable_keyring: true,
         perf_log: None,
+        driver_dir: None,
+        driver_manifest: None,
+        in_process_drivers: Default::default(),
     })
     .unwrap();
     engine

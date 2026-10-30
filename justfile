@@ -7,12 +7,16 @@ gid := `id -g`
 # Linux builds run in docker/linux.Dockerfile. Caches stay inside Docker (`docker builder prune`).
 docker_linux := "docker buildx build -f docker/linux.Dockerfile"
 
+# Every driver binary, for the recipes that build or test them
+drivers := "-p quarry-driver-mysql -p quarry-driver-postgres -p quarry-driver-sqlserver"
+
 default:
     @just --list
 
 # Run the app with hot reload (needs Tauri's system deps: webkit2gtk-4.1 on Linux, Xcode CLT on macOS)
 dev:
-    pnpm tauri dev
+    cargo build {{drivers}} --bins
+    QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" pnpm tauri dev
 
 # Lint and test frontend + Rust
 check:
@@ -30,21 +34,19 @@ check-docker:
     pnpm check
     {{docker_linux}} --target check --output type=cacheonly .
 
-# Start / stop the test MySQL (127.0.0.1:13306) and SSH server (127.0.0.1:12222)
-db-up:
-    docker compose -f tests/docker-compose.yml up -d --wait
-
-db-down:
-    docker compose -f tests/docker-compose.yml down -v
-
-# Integration tests against the test database (and the SSH server for tunnels)
+# Integration tests against the test databases and the SSH server (tests/docker-compose.yml,
+# started here). `docker compose -f tests/docker-compose.yml down -v` drops them.
 test-db:
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_SSH=127.0.0.1:12222 cargo test -p quarry-driver-mysql -p quarry-engine
+    docker compose -f tests/docker-compose.yml up -d --wait
+    cargo build {{drivers}} --bins
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_TEST_POSTGRES=127.0.0.1:15432 QUARRY_TEST_SQLSERVER=127.0.0.1:11433 QUARRY_TEST_SSH=127.0.0.1:12222 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" cargo test {{drivers}} -p quarry-engine
 
-# Benchmarks in a release build: the history file, and query latency on the test MySQL (`just db-up` first)
+# Benchmarks in a release build: the history file, and query latency on the test MySQL
 bench:
     cargo test --release -q -p quarry-store --test bench -- --ignored --nocapture
-    QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
+    docker compose -f tests/docker-compose.yml up -d --wait mysql
+    cargo build --release -q {{drivers}} --bins
+    QUARRY_TEST_MYSQL=127.0.0.1:13306 QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/release" cargo test --release -q -p quarry-engine --test bench -- --ignored --nocapture
 
 # macOS universal .dmg → dist/Quarry_<version>_universal.dmg. macOS only: Tauri cannot cross-build it.
 [macos]

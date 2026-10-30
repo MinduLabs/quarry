@@ -111,12 +111,14 @@ enum End {
 }
 
 /// Why the reader stopped before the statement ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Stop {
     Cancelled,
     Limit,
     /// The writer is gone: it failed, and says why.
     WriterGone,
+    /// A batch from the driver could not be decoded.
+    Unreadable(String),
 }
 
 pub(crate) struct ExportJob {
@@ -180,29 +182,41 @@ impl RowSink for ChannelSink {
                 }
                 true
             }
-            ExecItem::Rows(mut batch) => {
-                if let Some(limit) = self.limit {
-                    let room = limit.saturating_sub(self.taken);
-                    batch.truncate(usize::try_from(room).unwrap_or(usize::MAX));
+            ExecItem::Rows(batch) => self.take_rows(batch).await,
+            // Out-of-process drivers send rows encoded; the writer takes them as values.
+            ExecItem::Batch(batch) => match batch.decode() {
+                Ok(rows) => self.take_rows(rows).await,
+                Err(err) => {
+                    self.stop = Some(Stop::Unreadable(format!("Couldn't read the rows: {err}")));
+                    false
                 }
-                self.taken += batch.len() as u64;
-                if self.tx.send(Msg::Rows(batch)).await.is_err() {
-                    self.stop = Some(Stop::WriterGone);
-                    return false;
-                }
-                if self.last_progress.elapsed() >= PROGRESS_EVERY {
-                    self.emit_progress();
-                }
-                if self.limit.is_some_and(|limit| self.taken >= limit) {
-                    self.stop = Some(Stop::Limit);
-                    return false;
-                }
-                true
-            }
+            },
             // The end of the first (only) result set.
             ExecItem::SetDone { .. } => false,
             ExecItem::Notice(_) | ExecItem::Done { .. } => true,
         }
+    }
+}
+
+impl ChannelSink {
+    async fn take_rows(&mut self, mut batch: Vec<Vec<Value>>) -> bool {
+        if let Some(limit) = self.limit {
+            let room = limit.saturating_sub(self.taken);
+            batch.truncate(usize::try_from(room).unwrap_or(usize::MAX));
+        }
+        self.taken += batch.len() as u64;
+        if self.tx.send(Msg::Rows(batch)).await.is_err() {
+            self.stop = Some(Stop::WriterGone);
+            return false;
+        }
+        if self.last_progress.elapsed() >= PROGRESS_EVERY {
+            self.emit_progress();
+        }
+        if self.limit.is_some_and(|limit| self.taken >= limit) {
+            self.stop = Some(Stop::Limit);
+            return false;
+        }
+        true
     }
 }
 
@@ -433,7 +447,7 @@ impl Engine {
         let result = session
             .stream(&job.sql, &job.params, &opts, &mut sink)
             .await;
-        let stop = sink.stop;
+        let stop = sink.stop.take();
         drop(sink);
         let is_cancelled = control.is_cancelled();
         if result.is_ok() && !is_cancelled && stop != Some(Stop::WriterGone) {
@@ -456,6 +470,9 @@ impl Engine {
         let written = writer.await.unwrap_or(WriteEnd::Failed(STOPPED.to_owned()));
         if is_cancelled {
             return End::Cancelled;
+        }
+        if let Some(Stop::Unreadable(error)) = stop {
+            return End::Failed(error);
         }
         match (written, result) {
             (WriteEnd::Failed(error), _) => End::Failed(error),
@@ -510,17 +527,22 @@ impl Engine {
         query: &BrowseQuery,
         control: &ExportControl,
     ) -> Result<u64, String> {
-        let dialect = self.driver_of(conn)?.dialect();
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
         let clauses = browse::clauses(dialect, query)?;
         let sql = dialect.count_rows(table, clauses.filter.as_deref());
         let mut session = self.open_export_session(conn, None, control).await?;
         let mut first: Option<Value> = None;
         let mut sink = |item: ExecItem| {
-            if let ExecItem::Rows(rows) = item
-                && first.is_none()
-            {
-                first = rows.into_iter().next().and_then(|r| r.into_iter().next());
+            if first.is_some() {
+                return;
             }
+            let rows = match item {
+                ExecItem::Rows(rows) => rows,
+                ExecItem::Batch(batch) => batch.decode().unwrap_or_default(),
+                _ => return,
+            };
+            first = rows.into_iter().next().and_then(|r| r.into_iter().next());
         };
         let opts = ExecOpts {
             row_limit: Some(1),
@@ -557,10 +579,11 @@ fn write_stream(
     mut rx: mpsc::Receiver<Msg>,
     progress: &Progress,
 ) -> WriteEnd {
-    let dialect: &dyn Dialect = match engine.driver_of(input.conn) {
-        Ok(driver) => driver.dialect(),
+    let driver = match engine.driver_of(input.conn) {
+        Ok(driver) => driver,
         Err(error) => return WriteEnd::Failed(error),
     };
+    let dialect: &dyn Dialect = driver.dialect();
     let mut pending = Some(output);
     let mut writer: Option<Writer<'_, Counted>> = None;
     loop {
@@ -634,15 +657,15 @@ mod tests {
 
     use async_trait::async_trait;
     use quarry_driver_api::{
-        CancelHandle, Driver, ExecSink, ResolvedConfig, Result as DriverResult,
+        CancelHandle, Driver, ExecSink, ResolvedConfig, Result as DriverResult, SpecDialect,
     };
     use quarry_model::{
         Capabilities, ConnectionConfig, DriverId, Environment, SchemaObject, SslMode,
     };
 
     use super::*;
-    use crate::edit::tests::Ansi;
-    use crate::{Command, EngineOptions};
+    use crate::edit::tests::ansi_spec;
+    use crate::{Command, EngineOptions, InProcessDrivers};
 
     /// What a fake database does with a statement, and what happened to its connection.
     #[derive(Default)]
@@ -662,7 +685,7 @@ mod tests {
 
     struct FakeDriver {
         script: Arc<Script>,
-        dialect: Ansi,
+        dialect: SpecDialect,
     }
 
     #[async_trait]
@@ -684,7 +707,7 @@ mod tests {
                 object_kinds: Vec::new(),
             }
         }
-        fn dialect(&self) -> &dyn Dialect {
+        fn dialect(&self) -> &SpecDialect {
             &self.dialect
         }
         async fn connect(&self, _: &ResolvedConfig) -> DriverResult<Box<dyn Session>> {
@@ -811,21 +834,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("quarry-export-job-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let (tx, events) = async_channel::unbounded();
-        let mut engine = Engine::new(
+        let script = Arc::new(script);
+        let engine = Engine::new(
             EngineOptions {
                 config_dir: Some(dir.clone()),
                 data_dir: Some(dir.clone()),
                 known_hosts: None,
                 disable_keyring: true,
                 perf_log: None,
+                driver_dir: Some(dir.clone()),
+                driver_manifest: None,
+                in_process_drivers: InProcessDrivers(vec![Arc::new(FakeDriver {
+                    script: script.clone(),
+                    dialect: ansi_spec(),
+                })]),
             },
             tx,
         );
-        let script = Arc::new(script);
-        engine.registry.register(Box::new(FakeDriver {
-            script: script.clone(),
-            dialect: Ansi,
-        }));
         let config = ConnectionConfig {
             id: ConnId::new(),
             name: "fake".into(),
