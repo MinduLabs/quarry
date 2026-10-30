@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-31
+
+The first public release: a fast, open-source database client for MySQL, MariaDB, PostgreSQL and
+Microsoft SQL Server on Linux and macOS. How to install it:
+[README › Install](https://github.com/MinduLabs/quarry#install).
+
+- Database drivers are not in the package. Each is downloaded from this release the first time a
+  connection needs it, then checked before it runs. The `quarry-driver-*` files and `drivers.json`
+  attached to the release are those downloads: there is no need to fetch them by hand.
+- The macOS build is not notarized yet. The first time, right-click the app and choose **Open**, or
+  run `xattr -cr /Applications/Quarry.app`.
+- From this release on, the macOS app and the AppImage install new releases themselves and restart
+  into them. The `.deb` and the Flatpak show when a new release is out and link to it.
+
 ### Changed
 - Quick open is Ctrl+K (⌘K), as in most apps; Ctrl+Shift+P still lists every command.
 - Controls sit with what they act on: an editor bar for SQL (Run turns into Stop while running), a data bar above every grid (reload, filter, columns, add and delete rows, save), and the status bar for pages. Table tabs have no separate toolbar. The row total is counted by clicking it.
@@ -95,3 +109,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - A database with thousands of tables no longer slows the app: the sidebar tree renders only the rows in view (opening a 5,000-table database went from 1.3 s to about 60 ms in a development build, and typing in the editor while it is open from 1 s to about 10 ms per key).
 - Typing in the editor no longer re-renders the results of every open tab, and dragging a selection no longer re-renders the toolbar and editor. Searching the history no longer slows down a query streaming in another tab.
 - A database refresh that fails keeps the tables already shown in the sidebar.
+
+[Unreleased]: https://github.com/MinduLabs/quarry/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/MinduLabs/quarry/releases/tag/v0.1.0
