@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use quarry_driver_api::{CancelHandle, DriverError, DriverRegistry, Session, SharedCancel};
 use quarry_model::{ConnId, ConnectionConfig, Favorite};
@@ -44,7 +44,10 @@ impl CancelHandle for TabCancel {
 
 pub(crate) struct Engine {
     pub(crate) events: async_channel::Sender<Event>,
-    pub(crate) registry: DriverRegistry,
+    pub(crate) registry: RwLock<DriverRegistry>,
+    /// Where `load_drivers` looks for driver binaries, and `install_driver` puts them.
+    pub(crate) driver_dir: Option<PathBuf>,
+    pub(crate) driver_manifest: Option<String>,
     pub(crate) config: Option<ConfigStore>,
     pub(crate) favorite_store: Option<FavoritesStore>,
     pub(crate) favorites: Mutex<Vec<Favorite>>,
@@ -108,8 +111,9 @@ pub(crate) async fn close_shared(session: SharedSession) {
 impl Engine {
     pub(crate) fn new(options: EngineOptions, events: async_channel::Sender<Event>) -> Self {
         let mut registry = DriverRegistry::default();
-        registry.register(Box::new(quarry_driver_mysql::MysqlDriver::default()));
-
+        for driver in options.in_process_drivers.0 {
+            registry.register(driver);
+        }
         let config = match options
             .config_dir
             .map(Ok)
@@ -126,6 +130,10 @@ impl Engine {
             .data_dir
             .map(Ok)
             .unwrap_or_else(quarry_store::default_data_dir);
+        let driver_dir = options
+            .driver_dir
+            .or_else(|| std::env::var_os("QUARRY_DRIVER_DIR").map(PathBuf::from))
+            .or_else(|| data_dir.as_ref().ok().map(|dir| dir.join("drivers")));
         let perf = options
             .perf_log
             .or_else(|| perf::path_from_env(data_dir.as_deref().ok()))
@@ -151,7 +159,9 @@ impl Engine {
 
         Self {
             events,
-            registry,
+            registry: RwLock::new(registry),
+            driver_dir,
+            driver_manifest: options.driver_manifest,
             config,
             favorite_store,
             favorites: Mutex::new(Vec::new()),
@@ -191,12 +201,14 @@ impl Engine {
         });
     }
 
-    pub(crate) fn driver_of(&self, conn: ConnId) -> Result<&dyn quarry_driver_api::Driver, String> {
+    pub(crate) fn driver_of(
+        &self,
+        conn: ConnId,
+    ) -> Result<Arc<dyn quarry_driver_api::Driver>, String> {
         let config = self
             .config_of(conn)
             .ok_or_else(|| "Connection not found".to_owned())?;
-        self.registry
-            .get(&config.driver)
-            .ok_or_else(|| format!("No driver for “{}”", config.driver.0))
+        self.driver(&config.driver)
+            .ok_or_else(|| crate::drivers::missing(&config.driver))
     }
 }

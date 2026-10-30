@@ -5,34 +5,13 @@
 //!   docker compose -f tests/docker-compose.yml up -d
 //!   QUARRY_TEST_MYSQL=127.0.0.1:13306 cargo test -p quarry-driver-mysql
 
+use quarry_driver_api::testing;
 use quarry_driver_api::{Driver, DriverError, ExecItem, ExecOpts, ResolvedConfig};
 use quarry_driver_mysql::MysqlDriver;
-use quarry_model::{
-    ConnId, ConnectionConfig, DriverId, Environment, ObjectKind, ServerInfoKind, SslMode, Value,
-};
+use quarry_model::{ObjectKind, ServerInfoKind, Value};
 
 fn config(password: &str) -> Option<ResolvedConfig> {
-    let addr = std::env::var("QUARRY_TEST_MYSQL").ok()?;
-    let (host, port) = addr.split_once(':')?;
-    Some(ResolvedConfig {
-        config: ConnectionConfig {
-            id: ConnId::new(),
-            name: "test".into(),
-            driver: DriverId("mysql".into()),
-            host: Some(host.into()),
-            port: port.parse().ok(),
-            database: Some("shop".into()),
-            user: Some("quarry".into()),
-            path: None,
-            ssl: SslMode::Prefer,
-            ssh: None,
-            environment: Environment::Local,
-            read_only: false,
-            color: None,
-            group: None,
-        },
-        password: Some(password.into()),
-    })
+    testing::config("QUARRY_TEST_MYSQL", "mysql", "quarry", password)
 }
 
 async fn run(sql: &str, opts: ExecOpts) -> Vec<ExecItem> {
@@ -297,7 +276,7 @@ async fn schema_changes_round_trip() {
         comment: None,
     };
     let run = async |session: &mut Box<dyn quarry_driver_api::Session>, change: SchemaChange| {
-        for sql in driver.dialect().schema_change(&change).unwrap().unwrap() {
+        for sql in driver.schema_change(&change).await.unwrap().unwrap() {
             session
                 .execute(&sql, &ExecOpts::default(), &mut |_| {})
                 .await

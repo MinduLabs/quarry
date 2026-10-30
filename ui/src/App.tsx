@@ -42,6 +42,7 @@ export function App() {
       .then(() => {
         send({ type: "Ping", id: 1 });
         send({ type: "LoadConnections" });
+        send({ type: "LoadDataSources" });
       })
       .catch((err: unknown) =>
         useApp.getState().toast("error", `Engine unavailable: ${String(err)}`),

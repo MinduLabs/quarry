@@ -11,13 +11,16 @@ publish = false
 [dependencies]
 quarry-model.workspace = true
 quarry-driver-api.workspace = true
+quarry-driver-proto.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 mysql_async.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+quarry-driver-api = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]

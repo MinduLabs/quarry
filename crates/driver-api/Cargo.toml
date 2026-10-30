@@ -11,8 +11,17 @@ publish = false
 [dependencies]
 quarry-model.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
+
+[features]
+# Helpers for drivers' integration tests (`testing`). Only their dev-dependencies turn it on.
+testing = []
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

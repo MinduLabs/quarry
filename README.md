@@ -92,23 +92,37 @@ just dev              # run the app with hot reload
 just check            # Biome + tsc + cargo fmt + clippy -D warnings + cargo test
 just check-docker     # same, Rust part in Docker (hosts without WebKitGTK)
 just bindings         # regenerate ui/src/bindings after changing Command, Event or model types
-just db-up            # test MySQL on 127.0.0.1:13306 and SSH server on 127.0.0.1:12222
-just test-db          # driver and engine integration tests against them
-just db-down          # stop them and drop their data
-just bench            # release benchmarks (query latency needs just db-up)
+just test-db          # start the test databases, then the driver and engine integration tests
+just bench            # release benchmarks
 pnpm format           # format the UI with Biome
 ```
 
-Integration tests skip themselves unless `QUARRY_TEST_MYSQL` is set, which `just test-db` does.
+Drivers live in one place for `just dev` and the installed app: `drivers` in the data dir
+(`~/.local/share/quarry/drivers`, `~/Library/Application Support/quarry/drivers`).
+`QUARRY_DRIVER_DIR` points elsewhere. `just dev` loads only what is there and downloads the rest
+from a connection's settings, as a user does: `scripts/drivers.py` serves the drivers in
+`target/drivers` on `127.0.0.1:47821` (`QUARRY_DEV_DRIVER_PORT` changes it). `just drivers`
+builds them there; `just dev`, `just test-db` and `just bench` do it first. Each run replaces the installed
+drivers with the ones just built. Delete a file there to download that driver again.
+
+Integration tests skip themselves unless `QUARRY_TEST_MYSQL`, `QUARRY_TEST_POSTGRES` or
+`QUARRY_TEST_SQLSERVER` is set, which `just test-db` does.
 
 ### Test database
 
-The test MySQL user is `quarry` / `quarry` (test values only). It loads the fixtures in
-`tests/fixtures/mysql/`, including `playground.samples`: one column of every MySQL type, edge values
-in the first rows, explained in
-[02-playground.sql](tests/fixtures/mysql/02-playground.sql). A feature that needs a kind of data the
-table lacks adds it there, with a line in the test `playground_samples_cover_every_type`. Fixtures
-load only into a fresh container: `just db-down && just db-up` after changing them.
+`tests/docker-compose.yml` runs the test databases (test values only):
+
+| Database | Address | User / password | Fixtures |
+|---|---|---|---|
+| MySQL | `127.0.0.1:13306` | `quarry` / `quarry` | `tests/fixtures/mysql/` |
+| PostgreSQL | `127.0.0.1:15432`, database `shop` | `quarry` / `quarry` | `tests/fixtures/postgres/` |
+| SQL Server | `127.0.0.1:11433`, database `shop` | `sa` / `Quarry-test-1` | `tests/fixtures/sqlserver/` |
+
+Each has a `playground.samples` table: one column of most of its types, edge values in the first
+row, explained in the fixture. A feature that needs a kind of data the table lacks adds it there,
+with a line in the test that reads it (`playground_samples_cover_every_type` for MySQL). Fixtures
+load only into a fresh container: `docker compose -f tests/docker-compose.yml down -v` after
+changing them, and the next `just test-db` loads them.
 
 ### Logs
 

@@ -59,6 +59,9 @@
   --icon-key: #a16207;
   --icon-link: #0e7490;
 
+  /* Behind brand logos: light in both themes, so dark marks (AWS, MariaDB) stay readable. */
+  --logo-plate: #ffffff;
+
   /* Grid edits */
   --cell-modified: rgb(245 158 11 / 0.16);
   --cell-inserted: rgb(22 163 74 / 0.14);
@@ -133,6 +136,8 @@
   --icon-index: #fb923c;
   --icon-key: #facc15;
   --icon-link: #22d3ee;
+
+  --logo-plate: #ececf0;
 
   --cell-modified: rgb(245 158 11 / 0.2);
   --cell-inserted: rgb(34 197 94 / 0.18);

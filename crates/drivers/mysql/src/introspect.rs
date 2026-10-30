@@ -5,7 +5,7 @@ use mysql_async::{Conn, Row};
 use quarry_driver_api::{Dialect, Result};
 use quarry_model::{ColumnInfo, ForeignKey, IndexInfo, TableColumns, TableInfo, TableRef};
 
-use crate::{MysqlDialect, map_err};
+use crate::map_err;
 
 const PRIMARY: &str = "PRIMARY";
 
@@ -143,8 +143,8 @@ pub async fn table_info(conn: &mut Conn, table: &TableRef, mariadb: bool) -> Res
 
     let qualified = format!(
         "{}.{}",
-        MysqlDialect.quote_ident(&database),
-        MysqlDialect.quote_ident(&table.name)
+        crate::dialect().quote_ident(&database),
+        crate::dialect().quote_ident(&table.name)
     );
     // Column 1 is the statement for both tables (`Create Table`) and views (`Create View`).
     let ddl = conn
@@ -242,7 +242,7 @@ fn default_sql(
     if numeric || (data_type.eq_ignore_ascii_case("bit") && default.starts_with("b'")) {
         return Some(default);
     }
-    Some(MysqlDialect.literal(&quarry_model::Value::Text(default)))
+    Some(crate::dialect().literal(&quarry_model::Value::Text(default)))
 }
 
 /// The expression after `on update` in `EXTRA`.

@@ -1,7 +1,8 @@
 name: CI
 
-# Every push to main and every PR: lint, unit tests (Linux and macOS), MySQL integration tests,
-# licenses, desktop metadata. Packaging runs in release.yml, which calls this workflow first.
+# Every push to main and every PR into main (PRs into other branches do not run it): lint, unit
+# tests (Linux and macOS), database integration tests, licenses, desktop metadata. Packaging runs
+# in release.yml, which calls this workflow first.
 # Docs-only changes skip CI (paths-ignore).
 # Actions are pinned by commit SHA; the comment names the release.
 on:
@@ -14,6 +15,7 @@ on:
       - "LICENSE"
       - ".github/ISSUE_TEMPLATE/**"
   pull_request:
+    branches: [main]
     paths-ignore:
       - "**.md"
       - "docs/**"
@@ -92,7 +94,7 @@ jobs:
       - run: cargo test --workspace --locked
 
   integration:
-    name: Integration (MySQL)
+    name: Integration (MySQL, PostgreSQL, SQL Server)
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -105,10 +107,18 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-      - run: cargo test -p quarry-driver-mysql -p quarry-engine --locked
+      # The engine runs MySQL from its driver binary, so build it first.
+      - run: cargo build -p quarry-driver-mysql -p quarry-driver-postgres -p quarry-driver-sqlserver --bins --locked
+      # Into target/drivers, the folder tests read them from (as `just test-db` does).
+      - run: python3 scripts/drivers.py collect target/debug target/drivers
+      - run: cargo test -p quarry-driver-mysql -p quarry-driver-postgres -p quarry-driver-sqlserver -p quarry-engine --locked
         env:
           QUARRY_TEST_MYSQL: 127.0.0.1:13306
+          QUARRY_TEST_POSTGRES: 127.0.0.1:15432
+          QUARRY_TEST_SQLSERVER: 127.0.0.1:11433
           QUARRY_TEST_SSH: 127.0.0.1:12222
+          # Absolute: cargo runs each test from its crate's folder, not the workspace root.
+          QUARRY_DRIVER_DIR: ${{ github.workspace }}/target/drivers
 
   deny:
     name: cargo-deny

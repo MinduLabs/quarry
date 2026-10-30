@@ -10,6 +10,8 @@ import type { CellValue } from "@/bindings/CellValue";
 import type { ColumnInfo } from "@/bindings/ColumnInfo";
 import type { ColumnMeta } from "@/bindings/ColumnMeta";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
+import type { DataSource } from "@/bindings/DataSource";
+import type { DriverInstallState } from "@/bindings/DriverInstallState";
 import type { ErrorLocation } from "@/bindings/ErrorLocation";
 import type { Event } from "@/bindings/Event";
 import type { Favorite } from "@/bindings/Favorite";
@@ -511,6 +513,11 @@ export interface AppState {
   ready: boolean;
   engineVersion: string | null;
   connections: ConnectionConfig[];
+  /** What a new connection can point at, from the engine; usable ones have a `driver`. */
+  dataSources: DataSource[];
+  /** Driver downloads in progress, failed, or just installed (shown briefly), by driver id. */
+  driverInstalls: Record<string, DriverInstallState>;
+  installDriver: (driver: string) => void;
   nodes: Record<string, ConnNode>;
   /** Last connection/database the user worked with (target of "New query"). */
   active: { connId: string; database: string | null } | null;
@@ -783,6 +790,13 @@ let nextQuery = 1;
 let nextToast = 1;
 let nextRequest = 1;
 
+/** A driver download stays on screen at least this long, so a fast one is seen, not a flash. */
+const INSTALL_SHOWN_MS = 1000;
+/** And its "installed" line at least this long. */
+const INSTALLED_SHOWN_MS = 600;
+/** When each driver's download started, by driver id. */
+const installStarted = new Map<string, number>();
+
 /** Only the newest history request is shown, so typing fast never shows stale results. */
 let historyRequest = 0;
 
@@ -1022,6 +1036,8 @@ export const useApp = create<AppState>()((set, get) => {
     ready: false,
     engineVersion: null,
     connections: [],
+    dataSources: [],
+    driverInstalls: {},
     nodes: {},
     active: null,
     tabs: [],
@@ -1171,6 +1187,27 @@ export const useApp = create<AppState>()((set, get) => {
             ),
           }));
           break;
+        case "DataSources":
+          set({ dataSources: event.sources });
+          break;
+        case "DriverInstall": {
+          const driver = event.driver;
+          set((s) => ({ driverInstalls: { ...s.driverInstalls, [driver]: event.state } }));
+          if (event.state.kind !== "Installed") break;
+          const elapsed = performance.now() - (installStarted.get(driver) ?? 0);
+          installStarted.delete(driver);
+          setTimeout(
+            () =>
+              set((s) => {
+                // A new download of the same driver may have started meanwhile.
+                if (s.driverInstalls[driver]?.kind !== "Installed") return s;
+                const { [driver]: _, ...others } = s.driverInstalls;
+                return { driverInstalls: others };
+              }),
+            Math.max(INSTALLED_SHOWN_MS, INSTALL_SHOWN_MS - elapsed),
+          );
+          break;
+        }
         case "TestResult": {
           const test = get().test;
           if (test?.request !== event.request) break;
@@ -1604,6 +1641,16 @@ export const useApp = create<AppState>()((set, get) => {
     dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
     openDialog: (dialog) => set({ dialog, test: null }),
+    installDriver: (driver) => {
+      installStarted.set(driver, performance.now());
+      set((s) => ({
+        driverInstalls: {
+          ...s.driverInstalls,
+          [driver]: { kind: "Downloading", received: 0, total: null },
+        },
+      }));
+      send({ type: "InstallDriver", driver });
+    },
     testConnection: (config, password, sshSecret) => {
       const request = nextRequest++;
       set({ test: { request, pending: true, ok: null, message: "" } });

@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 quarry-model.workspace = true
 quarry-driver-api.workspace = true
-quarry-driver-mysql.workspace = true
+quarry-driver-proto.workspace = true
 quarry-export.workspace = true
 quarry-store.workspace = true
 quarry-sql.workspace = true
@@ -23,12 +23,20 @@ serde.workspace = true
 serde_json.workspace = true
 ts-rs.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
+# Driver downloads: TLS through ring, as everywhere else in Quarry.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+futures-util.workspace = true
 
 [dev-dependencies]
+# Unit tests run MySQL inside the engine; Quarry itself runs it from its binary.
+quarry-driver-mysql.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
 uuid.workspace = true
 
 [lints]

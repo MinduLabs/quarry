@@ -160,6 +160,23 @@ pub(crate) mod tests {
     /// Quotes with `"` and numbers placeholders, so tests catch dialect mix-ups.
     pub(crate) struct Ansi;
 
+    /// `Ansi` as a driver declares it, for fake drivers.
+    pub(crate) fn ansi_spec() -> quarry_driver_api::SpecDialect {
+        use quarry_model::{DialectSpec, IdentQuote, LiteralStyle, PagingStyle, PlaceholderStyle};
+        quarry_driver_api::SpecDialect::new(DialectSpec {
+            quote: IdentQuote::Double,
+            placeholder: PlaceholderStyle::Numbered,
+            paging: PagingStyle::LimitOffset,
+            literals: LiteralStyle {
+                backslash_escapes: false,
+                bool_as_int: false,
+                national_strings: false,
+                hex_bytes: false,
+            },
+            explain: None,
+        })
+    }
+
     impl Dialect for Ansi {
         fn quote_ident(&self, ident: &str) -> String {
             format!("\"{}\"", ident.replace('"', "\"\""))

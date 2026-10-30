@@ -40,6 +40,7 @@
   --color-icon-index: var(--icon-index);
   --color-icon-key: var(--icon-key);
   --color-icon-link: var(--icon-link);
+  --color-logo-plate: var(--logo-plate);
   --color-env-staging: var(--env-staging);
   --color-env-production: var(--env-production);
   --color-cell-modified: var(--cell-modified);
@@ -144,6 +145,14 @@ textarea,
     transform: translateY(8px);
   }
 }
+@keyframes q-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
 @keyframes q-flash {
   from {
     background-color: var(--accent-soft);
@@ -161,6 +170,9 @@ textarea,
 }
 .animate-toast {
   animation: q-toast-in var(--duration-base) var(--ease-spring);
+}
+.animate-indeterminate {
+  animation: q-indeterminate 1.2s var(--ease-out) infinite;
 }
 .animate-flash {
   animation: q-flash 600ms var(--ease-out);

@@ -1,18 +1,26 @@
 //! The contract every database driver implements.
 //!
 //! The engine only talks to `dyn Driver` / `dyn Session`; the UI never sees a concrete
-//! driver. Every type crossing this boundary is serializable, so drivers can later move
-//! out of process as plugins.
+//! driver. Every type crossing this boundary is serializable, so a driver can run in its own
+//! process (`quarry-driver-proto`).
+
+pub mod diagnose;
+mod rows;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use quarry_model::{
-    Capabilities, ColumnMeta, ConnectionConfig, DriverId, ErrorLocation, SchemaChange,
-    SchemaObject, ServerInfoKind, ServerInfoRow, TableColumns, TableInfo, TableRef, Value,
+    Capabilities, ColumnMeta, ConnectionConfig, DialectSpec, DriverId, ErrorLocation, IdentQuote,
+    PagingStyle, PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind, ServerInfoRow,
+    TableColumns, TableInfo, TableRef, Value,
 };
 use serde::{Deserialize, Serialize};
+
+pub use rows::{RowBatch, RowsError};
 
 pub type Result<T, E = DriverError> = std::result::Result<T, E>;
 
@@ -82,6 +90,9 @@ impl Default for ExecOpts {
 pub enum ExecItem {
     Columns(Vec<ColumnMeta>),
     Rows(Vec<Vec<Value>>),
+    /// Rows still encoded, as a driver process sends them. Only made inside the engine.
+    #[serde(skip)]
+    Batch(RowBatch),
     /// End of a result set.
     SetDone {
         affected: u64,
@@ -106,6 +117,24 @@ pub trait RowSink: Send {
     /// connection stopped that way still has rows in flight, so the caller cancels the statement
     /// through [`Session::cancel_handle`] before closing it.
     async fn accept(&mut self, item: ExecItem) -> bool;
+}
+
+/// A plain callback as a [`RowSink`]: it never waits and never stops the read. A driver reads
+/// `execute` and `stream` with one loop through it.
+pub struct FnSink<'a>(pub ExecSink<'a>);
+
+impl std::fmt::Debug for FnSink<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FnSink")
+    }
+}
+
+#[async_trait]
+impl RowSink for FnSink<'_> {
+    async fn accept(&mut self, item: ExecItem) -> bool {
+        (self.0)(item);
+        true
+    }
 }
 
 /// Cancels the running query; callable from another task.
@@ -154,12 +183,6 @@ pub trait Dialect: Send + Sync {
         ansi_literal(value)
     }
 
-    /// The statements that make `change`, in order, or `None` when the driver cannot change
-    /// the schema. An error says what is wrong with the change (an empty name, …).
-    fn schema_change(&self, _change: &SchemaChange) -> Option<Result<Vec<String>, String>> {
-        None
-    }
-
     /// Quoted, qualified table name: `database.schema.name`, skipping the parts that are unset.
     fn qualify(&self, table: &quarry_model::TableRef) -> String {
         [&table.database, &table.schema, &Some(table.name.clone())]
@@ -168,6 +191,110 @@ pub trait Dialect: Send + Sync {
             .map(|part| self.quote_ident(part))
             .collect::<Vec<_>>()
             .join(".")
+    }
+}
+
+/// A [`Dialect`] written entirely from a [`DialectSpec`], so the engine never calls into a driver
+/// to build SQL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecDialect {
+    spec: DialectSpec,
+}
+
+impl SpecDialect {
+    pub fn new(spec: DialectSpec) -> Self {
+        Self { spec }
+    }
+
+    pub fn spec(&self) -> &DialectSpec {
+        &self.spec
+    }
+}
+
+impl Dialect for SpecDialect {
+    fn quote_ident(&self, ident: &str) -> String {
+        let (open, close) = match self.spec.quote {
+            IdentQuote::Double => ('"', '"'),
+            IdentQuote::Backtick => ('`', '`'),
+            IdentQuote::Brackets => ('[', ']'),
+        };
+        let doubled: String = [close, close].iter().collect();
+        format!("{open}{}{close}", ident.replace(close, &doubled))
+    }
+
+    fn placeholder(&self, index: usize) -> String {
+        match self.spec.placeholder {
+            PlaceholderStyle::Question => "?".to_owned(),
+            PlaceholderStyle::Numbered => format!("${index}"),
+            PlaceholderStyle::AtP => format!("@P{index}"),
+        }
+    }
+
+    fn select_page(
+        &self,
+        table: &quarry_model::TableRef,
+        filter: Option<&str>,
+        order: Option<&str>,
+        limit: u64,
+        offset: u64,
+    ) -> String {
+        let mut sql = format!("SELECT * FROM {}", self.qualify(table));
+        if let Some(filter) = filter {
+            sql.push_str(" WHERE ");
+            sql.push_str(filter);
+        }
+        match self.spec.paging {
+            PagingStyle::LimitOffset => {
+                if let Some(order) = order {
+                    sql.push_str(" ORDER BY ");
+                    sql.push_str(order);
+                }
+                sql.push_str(&format!(" LIMIT {limit}"));
+                if offset > 0 {
+                    sql.push_str(&format!(" OFFSET {offset}"));
+                }
+            }
+            PagingStyle::OffsetFetch => {
+                // OFFSET needs an ORDER BY; without a sort the server picks the order.
+                sql.push_str(" ORDER BY ");
+                sql.push_str(order.unwrap_or("(SELECT NULL)"));
+                sql.push_str(&format!(
+                    " OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
+                ));
+            }
+        }
+        sql
+    }
+
+    fn explain(&self, statement: &str, json: bool) -> Option<String> {
+        let syntax = self.spec.explain.as_ref()?;
+        let keywords = if json {
+            syntax.json.as_deref()?
+        } else {
+            &syntax.table
+        };
+        Some(format!("{keywords} {statement}"))
+    }
+
+    fn literal(&self, value: &Value) -> String {
+        let style = self.spec.literals;
+        match value {
+            Value::Text(text) | Value::Json(text) | Value::Other { text, .. } => {
+                let text = if style.backslash_escapes {
+                    text.replace('\\', "\\\\")
+                } else {
+                    text.clone()
+                };
+                let prefix = if style.national_strings { "N" } else { "" };
+                format!("{prefix}'{}'", text.replace('\'', "''"))
+            }
+            Value::Bool(b) if style.bool_as_int => if *b { "1" } else { "0" }.to_owned(),
+            Value::Bytes(bytes) if style.hex_bytes => {
+                let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+                format!("0x{hex}")
+            }
+            other => ansi_literal(other),
+        }
     }
 }
 
@@ -197,7 +324,12 @@ pub fn ansi_literal(value: &Value) -> String {
 pub trait Driver: Send + Sync + 'static {
     fn id(&self) -> DriverId;
     fn capabilities(&self) -> Capabilities;
-    fn dialect(&self) -> &dyn Dialect;
+    fn dialect(&self) -> &SpecDialect;
+    /// The statements that make `change`, in order, or `None` when the driver cannot change
+    /// the schema. An error says what is wrong with the change (an empty name, …).
+    async fn schema_change(&self, _change: &SchemaChange) -> Option<Result<Vec<String>, String>> {
+        None
+    }
     async fn connect(&self, config: &ResolvedConfig) -> Result<Box<dyn Session>>;
 }
 
@@ -259,10 +391,10 @@ pub trait Session: Send {
     async fn close(self: Box<Self>) -> Result<()>;
 }
 
-/// Drivers compiled into the binary.
+/// The drivers the engine can use.
 #[derive(Default)]
 pub struct DriverRegistry {
-    drivers: Vec<Box<dyn Driver>>,
+    drivers: Vec<Arc<dyn Driver>>,
 }
 
 impl std::fmt::Debug for DriverRegistry {
@@ -274,15 +406,15 @@ impl std::fmt::Debug for DriverRegistry {
 }
 
 impl DriverRegistry {
-    pub fn register(&mut self, driver: Box<dyn Driver>) {
+    /// Adds `driver`, replacing one with the same id.
+    pub fn register(&mut self, driver: Arc<dyn Driver>) {
+        let id = driver.id();
+        self.drivers.retain(|d| d.id() != id);
         self.drivers.push(driver);
     }
 
-    pub fn get(&self, id: &DriverId) -> Option<&dyn Driver> {
-        self.drivers
-            .iter()
-            .find(|d| &d.id() == id)
-            .map(|d| d.as_ref())
+    pub fn get(&self, id: &DriverId) -> Option<Arc<dyn Driver>> {
+        self.drivers.iter().find(|d| &d.id() == id).cloned()
     }
 
     pub fn ids(&self) -> impl Iterator<Item = DriverId> + '_ {
@@ -302,5 +434,88 @@ mod tests {
         assert_eq!(ansi_literal(&Value::Text("it's".into())), "'it''s'");
         assert_eq!(ansi_literal(&Value::Bytes(vec![0xde, 0x01])), "X'DE01'");
         assert_eq!(ansi_literal(&Value::Float(f64::NAN)), "'NaN'");
+    }
+
+    fn ansi_spec() -> SpecDialect {
+        SpecDialect::new(DialectSpec {
+            quote: IdentQuote::Double,
+            placeholder: PlaceholderStyle::Numbered,
+            paging: PagingStyle::LimitOffset,
+            literals: quarry_model::LiteralStyle {
+                backslash_escapes: false,
+                bool_as_int: false,
+                national_strings: false,
+                hex_bytes: false,
+            },
+            explain: None,
+        })
+    }
+
+    #[test]
+    fn spec_dialect_follows_its_spec() {
+        let dialect = ansi_spec();
+        assert_eq!(dialect.quote_ident("a\"b"), "\"a\"\"b\"");
+        assert_eq!(dialect.placeholder(2), "$2");
+        assert_eq!(dialect.literal(&Value::Text("a\\b'c".into())), "'a\\b''c'");
+        assert_eq!(dialect.literal(&Value::Bool(true)), "TRUE");
+        assert_eq!(dialect.explain("SELECT 1", false), None);
+        let table = TableRef {
+            database: None,
+            schema: Some("public".into()),
+            name: "t".into(),
+        };
+        assert_eq!(
+            dialect.select_page(&table, Some("\"a\" = $1"), None, 10, 0),
+            "SELECT * FROM \"public\".\"t\" WHERE \"a\" = $1 LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn sql_server_syntax_from_its_spec() {
+        let dialect = SpecDialect::new(DialectSpec {
+            quote: IdentQuote::Brackets,
+            placeholder: PlaceholderStyle::AtP,
+            paging: PagingStyle::OffsetFetch,
+            literals: quarry_model::LiteralStyle {
+                backslash_escapes: false,
+                bool_as_int: true,
+                national_strings: true,
+                hex_bytes: true,
+            },
+            explain: None,
+        });
+        assert_eq!(dialect.quote_ident("a]b[c"), "[a]]b[c]");
+        assert_eq!(dialect.placeholder(3), "@P3");
+        assert_eq!(dialect.literal(&Value::Text("it's ✓".into())), "N'it''s ✓'");
+        assert_eq!(dialect.literal(&Value::Bytes(vec![0xde, 0x01])), "0xDE01");
+        let table = TableRef {
+            database: Some("dbo".into()),
+            schema: None,
+            name: "t".into(),
+        };
+        assert_eq!(
+            dialect.select_page(&table, None, None, 100, 0),
+            "SELECT * FROM [dbo].[t] ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"
+        );
+        assert_eq!(
+            dialect.select_page(&table, Some("[a] = @P1"), Some("[b] DESC"), 50, 200),
+            "SELECT * FROM [dbo].[t] WHERE [a] = @P1 ORDER BY [b] DESC OFFSET 200 ROWS FETCH NEXT 50 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn json_plans_need_their_own_syntax() {
+        let dialect = SpecDialect::new(DialectSpec {
+            explain: Some(quarry_model::ExplainSyntax {
+                table: "EXPLAIN".into(),
+                json: None,
+            }),
+            ..ansi_spec().spec().clone()
+        });
+        assert_eq!(
+            dialect.explain("SELECT 1", false).as_deref(),
+            Some("EXPLAIN SELECT 1")
+        );
+        assert_eq!(dialect.explain("SELECT 1", true), None);
     }
 }

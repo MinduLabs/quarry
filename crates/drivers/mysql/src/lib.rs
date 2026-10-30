@@ -5,34 +5,53 @@ mod ddl;
 mod diagnose;
 mod introspect;
 
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, QueryResult, SslOpts};
 use quarry_driver_api::{
-    CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, ResolvedConfig,
-    Result, RowSink, Session, SharedCancel,
+    CancelHandle, Dialect, Driver, DriverError, ExecItem, ExecOpts, ExecSink, FnSink,
+    ResolvedConfig, Result, RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
-    Capabilities, DriverId, ErrorLocation, ObjectKind, SchemaChange, SchemaObject, ServerInfoKind,
+    Capabilities, DialectSpec, DriverId, ErrorLocation, ExplainSyntax, IdentQuote, LiteralStyle,
+    ObjectKind, PagingStyle, PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind,
     ServerInfoRow, SslMode, TableColumns, TableInfo, TableRef, Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
+pub const MARIADB_DRIVER_ID: &str = "mariadb";
 pub const DEFAULT_PORT: u16 = 3306;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Debug, Default)]
+/// Serves MySQL and, under its own id, MariaDB: the wire protocol is shared today, and the
+/// separate id lets MariaDB grow its own behavior without touching MySQL connections.
+#[derive(Debug)]
 pub struct MysqlDriver {
-    dialect: MysqlDialect,
+    id: &'static str,
+}
+
+impl Default for MysqlDriver {
+    fn default() -> Self {
+        Self { id: DRIVER_ID }
+    }
+}
+
+impl MysqlDriver {
+    pub fn mariadb() -> Self {
+        Self {
+            id: MARIADB_DRIVER_ID,
+        }
+    }
 }
 
 #[async_trait]
 impl Driver for MysqlDriver {
     fn id(&self) -> DriverId {
-        DriverId(DRIVER_ID.to_owned())
+        DriverId(self.id.to_owned())
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -58,8 +77,15 @@ impl Driver for MysqlDriver {
         }
     }
 
-    fn dialect(&self) -> &dyn Dialect {
-        &self.dialect
+    fn dialect(&self) -> &SpecDialect {
+        dialect()
+    }
+
+    async fn schema_change(
+        &self,
+        change: &SchemaChange,
+    ) -> Option<std::result::Result<Vec<String>, String>> {
+        Some(ddl::statements(dialect(), change))
     }
 
     async fn connect(&self, config: &ResolvedConfig) -> Result<Box<dyn Session>> {
@@ -298,7 +324,7 @@ impl Session for MysqlSession {
     }
 
     async fn use_database(&mut self, database: &str) -> Result<()> {
-        let sql = format!("USE {}", MysqlDialect.quote_ident(database));
+        let sql = format!("USE {}", dialect().quote_ident(database));
         self.conn.query_drop(sql).await.map_err(map_err)
     }
 
@@ -334,17 +360,6 @@ impl Session for MysqlSession {
 
     async fn close(self: Box<Self>) -> Result<()> {
         self.conn.disconnect().await.map_err(map_err)
-    }
-}
-
-/// A plain callback as a [`RowSink`]: it never waits and never stops the read.
-struct FnSink<'a>(ExecSink<'a>);
-
-#[async_trait]
-impl RowSink for FnSink<'_> {
-    async fn accept(&mut self, item: ExecItem) -> bool {
-        (self.0)(item);
-        true
     }
 }
 
@@ -454,68 +469,28 @@ impl CancelHandle for MysqlCancel {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MysqlDialect;
-
-impl Dialect for MysqlDialect {
-    fn quote_ident(&self, ident: &str) -> String {
-        format!("`{}`", ident.replace('`', "``"))
-    }
-
-    fn placeholder(&self, _index: usize) -> String {
-        "?".to_owned()
-    }
-
-    fn select_page(
-        &self,
-        table: &TableRef,
-        filter: Option<&str>,
-        order: Option<&str>,
-        limit: u64,
-        offset: u64,
-    ) -> String {
-        let mut sql = format!("SELECT * FROM {}", self.qualify(table));
-        if let Some(filter) = filter {
-            sql.push_str(" WHERE ");
-            sql.push_str(filter);
-        }
-        if let Some(order) = order {
-            sql.push_str(" ORDER BY ");
-            sql.push_str(order);
-        }
-        sql.push_str(&format!(" LIMIT {limit}"));
-        if offset > 0 {
-            sql.push_str(&format!(" OFFSET {offset}"));
-        }
-        sql
-    }
-
-    fn literal(&self, value: &Value) -> String {
-        match value {
+/// MySQL syntax. MariaDB shares it.
+pub(crate) fn dialect() -> &'static SpecDialect {
+    static DIALECT: LazyLock<SpecDialect> = LazyLock::new(|| {
+        SpecDialect::new(DialectSpec {
+            quote: IdentQuote::Backtick,
+            paging: PagingStyle::LimitOffset,
+            placeholder: PlaceholderStyle::Question,
             // MySQL reads `\` as an escape inside strings (unless NO_BACKSLASH_ESCAPES).
-            Value::Text(text) | Value::Json(text) | Value::Other { text, .. } => {
-                format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
-            }
-            Value::Bool(b) => if *b { "1" } else { "0" }.to_owned(),
-            other => quarry_driver_api::ansi_literal(other),
-        }
-    }
-
-    fn schema_change(
-        &self,
-        change: &SchemaChange,
-    ) -> Option<std::result::Result<Vec<String>, String>> {
-        Some(ddl::statements(self, change))
-    }
-
-    fn explain(&self, statement: &str, json: bool) -> Option<String> {
-        // MySQL 5.6+ and MariaDB 10.1+ both accept FORMAT=JSON.
-        Some(if json {
-            format!("EXPLAIN FORMAT=JSON {statement}")
-        } else {
-            format!("EXPLAIN {statement}")
+            literals: LiteralStyle {
+                backslash_escapes: true,
+                bool_as_int: true,
+                national_strings: false,
+                hex_bytes: false,
+            },
+            // MySQL 5.6+ and MariaDB 10.1+ both accept FORMAT=JSON.
+            explain: Some(ExplainSyntax {
+                table: "EXPLAIN".to_owned(),
+                json: Some("EXPLAIN FORMAT=JSON".to_owned()),
+            }),
         })
-    }
+    });
+    &DIALECT
 }
 
 fn map_err(err: mysql_async::Error) -> DriverError {
@@ -588,22 +563,22 @@ mod tests {
 
     #[test]
     fn quotes_identifiers() {
-        assert_eq!(MysqlDialect.quote_ident("a`b"), "`a``b`");
+        assert_eq!(dialect().quote_ident("a`b"), "`a``b`");
         let table = TableRef {
             database: Some("shop".into()),
             schema: None,
             name: "orders".into(),
         };
         assert_eq!(
-            MysqlDialect.select_page(&table, None, None, 100, 0),
+            dialect().select_page(&table, None, None, 100, 0),
             "SELECT * FROM `shop`.`orders` LIMIT 100"
         );
         assert_eq!(
-            MysqlDialect.select_page(&table, Some("`a` = ?"), Some("`b` DESC"), 100, 200),
+            dialect().select_page(&table, Some("`a` = ?"), Some("`b` DESC"), 100, 200),
             "SELECT * FROM `shop`.`orders` WHERE `a` = ? ORDER BY `b` DESC LIMIT 100 OFFSET 200"
         );
         assert_eq!(
-            MysqlDialect.count_rows(&table, Some("`a` IS NULL")),
+            dialect().count_rows(&table, Some("`a` IS NULL")),
             "SELECT COUNT(*) FROM `shop`.`orders` WHERE `a` IS NULL"
         );
     }
@@ -611,13 +586,25 @@ mod tests {
     #[test]
     fn literals_escape_backslashes() {
         assert_eq!(
-            MysqlDialect.literal(&Value::Text("a\\b'c".into())),
+            dialect().literal(&Value::Text("a\\b'c".into())),
             "'a\\\\b''c'"
         );
-        assert_eq!(MysqlDialect.literal(&Value::Bool(true)), "1");
+        assert_eq!(dialect().literal(&Value::Bool(true)), "1");
         assert_eq!(
-            MysqlDialect.literal(&Value::UInt(u64::MAX)),
+            dialect().literal(&Value::UInt(u64::MAX)),
             "18446744073709551615"
+        );
+    }
+
+    #[test]
+    fn explains_as_a_table_or_json() {
+        assert_eq!(
+            dialect().explain("SELECT 1", false).as_deref(),
+            Some("EXPLAIN SELECT 1")
+        );
+        assert_eq!(
+            dialect().explain("SELECT 1", true).as_deref(),
+            Some("EXPLAIN FORMAT=JSON SELECT 1")
         );
     }
 }

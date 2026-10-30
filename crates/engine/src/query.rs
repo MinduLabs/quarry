@@ -3,13 +3,13 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use quarry_driver_api::{DriverError, ExecItem, ExecOpts, Session};
+use quarry_driver_api::{Dialect, DriverError, ExecItem, ExecOpts, Session};
 use quarry_model::{BrowseQuery, ConnId, Environment, HistoryEntry, TableRef, Value};
 
 use crate::console::Logged;
 use crate::engine::{Engine, TabSession, describe, is_lost, round};
 use crate::session::transaction_after;
-use crate::{Event, LogSource, NoticeKind, TabId, browse, perf};
+use crate::{Event, LogSource, NoticeKind, Rows, TabId, browse, perf};
 
 /// Rows kept per result set of a typed query; more are drained but not sent (`truncated`).
 pub(crate) const RUN_ROW_LIMIT: u64 = 500;
@@ -163,6 +163,13 @@ impl Engine {
             let mut logged = Logged::start(source, statement);
             let events = self.events.clone();
             let mut sink = |item: ExecItem| {
+                let mut rows_event = |rows: Rows| {
+                    logged.rows();
+                    first_rows.get_or_insert_with(Instant::now);
+                    rows_sent += rows.len();
+                    batches += 1;
+                    Event::ResultRows { tab, set, rows }
+                };
                 let event = match item {
                     ExecItem::Columns(columns) => {
                         logged.columns();
@@ -173,13 +180,8 @@ impl Engine {
                             columns,
                         }
                     }
-                    ExecItem::Rows(rows) => {
-                        logged.rows();
-                        first_rows.get_or_insert_with(Instant::now);
-                        rows_sent += rows.len();
-                        batches += 1;
-                        Event::ResultRows { tab, set, rows }
-                    }
+                    ExecItem::Rows(rows) => rows_event(Rows::Values(rows)),
+                    ExecItem::Batch(batch) => rows_event(Rows::Batch(batch)),
                     ExecItem::SetDone {
                         affected,
                         rows,
@@ -389,7 +391,8 @@ impl Engine {
         limit: u64,
         offset: u64,
     ) -> Result<Query, String> {
-        let dialect = self.driver_of(conn)?.dialect();
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
         let clauses = browse::clauses(dialect, query)?;
         let sql = dialect.select_page(
             table,
@@ -414,7 +417,8 @@ impl Engine {
         sql: &str,
         json: bool,
     ) -> Result<Query, String> {
-        let dialect = self.driver_of(conn)?.dialect();
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
         let statement = single_statement(sql)?;
         let sql = dialect
             .explain(statement, json)
@@ -449,7 +453,8 @@ impl Engine {
         table: &TableRef,
         query: &BrowseQuery,
     ) -> Result<u64, String> {
-        let dialect = self.driver_of(conn)?.dialect();
+        let driver = self.driver_of(conn)?;
+        let dialect = driver.dialect();
         let clauses = browse::clauses(dialect, query)?;
         let sql = dialect.count_rows(table, clauses.filter.as_deref());
         let slot = self.tab_slot(tab);
@@ -460,11 +465,15 @@ impl Engine {
         };
         let mut first: Option<Value> = None;
         let mut sink = |item: ExecItem| {
-            if let ExecItem::Rows(rows) = item
-                && first.is_none()
-            {
-                first = rows.into_iter().next().and_then(|r| r.into_iter().next());
+            if first.is_some() {
+                return;
             }
+            let rows = match item {
+                ExecItem::Rows(rows) => rows,
+                ExecItem::Batch(batch) => batch.decode().unwrap_or_default(),
+                _ => return,
+            };
+            first = rows.into_iter().next().and_then(|r| r.into_iter().next());
         };
         let opts = ExecOpts {
             row_limit: Some(1),

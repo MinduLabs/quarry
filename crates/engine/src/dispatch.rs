@@ -11,6 +11,8 @@ fn command_kind(command: &Command) -> &'static str {
     match command {
         Command::Ping { .. } => "Ping",
         Command::LoadConnections => "LoadConnections",
+        Command::LoadDataSources => "LoadDataSources",
+        Command::InstallDriver { .. } => "InstallDriver",
         Command::SaveConnection { .. } => "SaveConnection",
         Command::DeleteConnection { .. } => "DeleteConnection",
         Command::TestConnection { .. } => "TestConnection",
@@ -80,6 +82,8 @@ impl Engine {
                 }
             }
             Command::LoadConnections => self.load_connections(),
+            Command::LoadDataSources => self.load_data_sources(),
+            Command::InstallDriver { driver } => self.install_driver(driver).await,
             Command::SaveConnection {
                 config,
                 password,
