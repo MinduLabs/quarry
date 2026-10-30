@@ -97,6 +97,13 @@ just bench            # release benchmarks
 pnpm format           # format the UI with Biome
 ```
 
+Drivers live in one place for `just dev` and the installed app: `drivers` in the data dir
+(`~/.local/share/quarry/drivers`, `~/Library/Application Support/quarry/drivers`).
+`QUARRY_DRIVER_DIR` points elsewhere. `just dev` loads only what is there and downloads the rest
+from a connection's settings, as a user does: `scripts/dev-drivers.py` serves the drivers of this
+build on `127.0.0.1:47821` (`QUARRY_DEV_DRIVER_PORT` changes it). Each run replaces the installed
+drivers with the ones just built. Delete a file there to download that driver again.
+
 Integration tests skip themselves unless `QUARRY_TEST_MYSQL`, `QUARRY_TEST_POSTGRES` or
 `QUARRY_TEST_SQLSERVER` is set, which `just test-db` does.
 

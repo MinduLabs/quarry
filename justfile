@@ -14,9 +14,21 @@ default:
     @just --list
 
 # Run the app with hot reload (needs Tauri's system deps: webkit2gtk-4.1 on Linux, Xcode CLT on macOS)
+# Drivers live where the installed app keeps them (the data directory's `drivers`). None is loaded
+# up front: download one from a connection's settings, as a user does. This build serves them,
+# and each run replaces the installed ones with the ones just built.
 dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{justfile_directory()}}"
+    port="${QUARRY_DEV_DRIVER_PORT:-47821}"
     cargo build {{drivers}} --bins
-    QUARRY_DRIVER_DIR="{{justfile_directory()}}/target/debug" pnpm tauri dev
+    python3 "$root/scripts/dev-drivers.py" refresh "$root/target/debug"
+    python3 "$root/scripts/dev-drivers.py" serve "$root/target/debug" "$port" &
+    server=$!
+    trap 'kill "$server" 2>/dev/null || true' EXIT
+    QUARRY_DRIVER_MANIFEST="http://127.0.0.1:$port/drivers.json" \
+        pnpm tauri dev
 
 # Lint and test frontend + Rust
 check:
