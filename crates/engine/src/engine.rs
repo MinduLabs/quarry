@@ -12,7 +12,7 @@ use quarry_store::{
 };
 use quarry_tunnel::Tunnel;
 
-use crate::{EngineOptions, Event, NoticeKind, TabId, perf};
+use crate::{EngineOptions, Event, NoticeKind, RequestId, TabId, perf};
 
 pub(crate) type SharedSession = Arc<tokio::sync::Mutex<Box<dyn Session>>>;
 
@@ -65,6 +65,8 @@ pub(crate) struct Engine {
     pub(crate) tabs: Mutex<HashMap<TabId, Arc<tokio::sync::Mutex<Option<TabSession>>>>>,
     /// Per-tab cancel handles, kept apart so a busy session can still be cancelled.
     pub(crate) cancels: Mutex<HashMap<TabId, (ConnId, SharedCancel)>>,
+    /// Exports and row counts that are running, by request, so `CancelExport` can stop them.
+    pub(crate) exports: Mutex<HashMap<RequestId, Arc<crate::export_job::ExportControl>>>,
     /// Development performance log; `None` when off.
     pub(crate) perf: Option<perf::PerfLog>,
 }
@@ -166,6 +168,7 @@ impl Engine {
             meta: Mutex::new(HashMap::new()),
             tabs: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
+            exports: Mutex::new(HashMap::new()),
             perf,
         }
     }

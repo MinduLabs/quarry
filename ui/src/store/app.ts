@@ -27,7 +27,20 @@ import type { TableInfo } from "@/bindings/TableInfo";
 import type { TableRef } from "@/bindings/TableRef";
 import type { Value } from "@/bindings/Value";
 import type { Workspace } from "@/bindings/Workspace";
-import { send } from "@/lib/engine";
+import {
+  type ExportDialogState,
+  type ExportFrom,
+  type ExportRun,
+  exportOptions,
+  firstFormat,
+  formatState,
+  initialExportDialog,
+  needsTargetTable,
+  parseLimit,
+  previewInput,
+} from "@/features/export/exportModel";
+import { chooseSavePath, send } from "@/lib/engine";
+import { suggestedFileName } from "@/lib/exportFile";
 import { setPerfEnabled } from "@/lib/perf";
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "@/lib/theme";
 import { quoteIdent } from "@/lib/values";
@@ -273,6 +286,60 @@ function sourceTable(set: ResultSet | undefined, database: string | null): Table
   return { database: first.source_database ?? database, schema: null, name: first.source_table };
 }
 
+/** What an export of `target` works on, or why there is nothing to export. */
+function exportOrigin(tabs: Tab[], target: TransferTarget): ExportFrom | string {
+  if (target.kind === "table") {
+    return {
+      kind: "table",
+      conn: target.conn,
+      name: target.table.name,
+      table: target.table,
+      query: target.query ?? emptyQuery(),
+    };
+  }
+  const tab = tabs.find((t) => t.id === target.tab);
+  const set = tab?.sets[tab.activeSet];
+  if (!tab || !set?.columns || set.columns.length === 0) return "There is no result to export";
+  const text = tab.runTexts[set.statement];
+  return {
+    kind: "rows",
+    tab: tab.id,
+    conn: tab.connId,
+    name: tab.browse?.table.name ?? sourceTable(set, tab.database)?.name ?? "result",
+    columns: set.columns,
+    rows: set.rows,
+    // A result the grid cut can run again for the rest, when the statement is known.
+    query: set.truncated && text && !tab.browse ? { sql: text, database: tab.database } : null,
+  };
+}
+
+/** Ask the engine for the preview of what the open export dialog would write. */
+function refreshExportPreview(): void {
+  const d = useApp.getState().exportDialog;
+  if (!d?.isPrepared || d.error) return;
+  const info = formatState(d);
+  const setPreview = (preview: ExportDialogState["preview"]) =>
+    useApp.setState((s) =>
+      s.exportDialog ? { exportDialog: { ...s.exportDialog, preview } } : {},
+    );
+  exportPreviewRequest = nextRequest++;
+  const { columns, rows } = previewInput(d);
+  if (!info?.has_preview || !info.is_available || columns.length === 0) {
+    setPreview({ text: null, error: null, loading: false });
+    return;
+  }
+  setPreview({ text: d.preview.text, error: null, loading: true });
+  send({
+    type: "ExportPreview",
+    request: exportPreviewRequest,
+    conn: d.from.conn,
+    format: d.format,
+    options: exportOptions(d),
+    columns,
+    rows: rows.slice(0, 20),
+  });
+}
+
 /** What a schema form dialog edits. */
 export type SchemaForm =
   | { kind: "column"; conn: string; table: TableRef; column: ColumnInfo | null }
@@ -296,7 +363,7 @@ export type PaletteMode = "open" | "commands";
 
 /** What an import or export works on. */
 export type TransferTarget =
-  | { kind: "table"; conn: string; table: TableRef }
+  | { kind: "table"; conn: string; table: TableRef; query?: BrowseQuery }
   | { kind: "result"; tab: number };
 
 export interface Tab {
@@ -606,9 +673,24 @@ export interface AppState {
 
   palette: PaletteMode | null;
   setPalette: (mode: PaletteMode | null) => void;
-  /** Import into, or export from, a table or a tab's result. Not built yet: the buttons and menu
-   * items are in place and call this. */
+  /** Export from a table or a tab's result (opens the export dialog). Import is not built yet:
+   * its menu items are in place and call this too. */
   transfer: (kind: "import" | "export", target: TransferTarget) => void;
+  /** The export dialog, while it is open. */
+  exportDialog: ExportDialogState | null;
+  /** Change what the open export dialog will write; the preview follows. */
+  setExportChoice: (
+    patch: Partial<
+      Pick<ExportDialogState, "format" | "options" | "scope" | "limit" | "targetTable">
+    >,
+  ) => void;
+  closeExport: () => void;
+  /** Ask where to save, then start. The dialog closes and the progress card takes over. */
+  startExport: () => Promise<void>;
+  /** The export that is writing a file now. */
+  exportRun: ExportRun | null;
+  /** Stop the running export; no file is left. */
+  cancelExport: () => void;
 
   addTableFavorite: (connId: string, database: string, table: string) => void;
   saveQueryFavorite: (tabId: number, name: string) => void;
@@ -706,6 +788,13 @@ let nextRequest = 1;
 
 /** Only the newest history request is shown, so typing fast never shows stale results. */
 let historyRequest = 0;
+
+/** The export dialog's questions to the engine. Only the newest answer of each kind is used, so
+ * a dialog opened again never shows what an earlier one asked for. */
+let exportPrepareRequest = 0;
+let exportQueryRequest = 0;
+let exportPreviewRequest = 0;
+let exportCountRequest = 0;
 
 /** Loads the first page of a table tab that has not run yet (restored with the workspace). */
 function loadIfBlank(id: number): void {
@@ -1199,7 +1288,9 @@ export const useApp = create<AppState>()((set, get) => {
           }
           patchTab(event.tab, (t) => ({
             running: true,
-            sets: [],
+            // A page change keeps the page on screen until the next one arrives, so the grid
+            // neither unmounts nor flashes a spinner (`ResultColumns` replaces it).
+            sets: t.browse && t.paged ? t.sets : [],
             activeSet: 0,
             elapsedMs: null,
             error: null,
@@ -1224,6 +1315,7 @@ export const useApp = create<AppState>()((set, get) => {
           patchSet(event.tab, event.set, () => ({
             columns: event.columns,
             statement: event.statement,
+            rows: [],
           }));
           break;
         case "ResultRows":
@@ -1248,8 +1340,10 @@ export const useApp = create<AppState>()((set, get) => {
           detectResultTable(event.tab);
           break;
         case "QueryFailed":
-          patchTab(event.tab, () => ({
+          patchTab(event.tab, (t) => ({
             running: false,
+            // The kept page belongs to another offset; an error shows alone.
+            ...(t.browse && t.paged ? { sets: [] } : {}),
             error: event.cancelled ? "Query cancelled" : event.error,
             failure: event.cancelled
               ? null
@@ -1410,6 +1504,95 @@ export const useApp = create<AppState>()((set, get) => {
           if (schemaRequests.delete(event.request) && event.error) {
             get().toast("error", event.error);
           }
+          break;
+        }
+        case "ExportPrepared": {
+          if (event.request === exportQueryRequest) {
+            // The second question of a cut result: can its query run again, and what may differ.
+            set((s) =>
+              s.exportDialog
+                ? {
+                    exportDialog: {
+                      ...s.exportDialog,
+                      warnings: event.warnings,
+                      queryError: event.error,
+                    },
+                  }
+                : {},
+            );
+            break;
+          }
+          if (event.request !== exportPrepareRequest) break;
+          set((s) => {
+            const d = s.exportDialog;
+            if (!d) return {};
+            return {
+              exportDialog: {
+                ...d,
+                isPrepared: true,
+                error: event.error,
+                formats: event.formats,
+                table: event.table,
+                sampleColumns: event.columns,
+                sampleRows: event.rows,
+                format: firstFormat(event.formats) ?? d.format,
+              },
+            };
+          });
+          refreshExportPreview();
+          break;
+        }
+        case "ExportPreview": {
+          if (event.request !== exportPreviewRequest) break;
+          set((s) =>
+            s.exportDialog
+              ? {
+                  exportDialog: {
+                    ...s.exportDialog,
+                    preview: { text: event.text, error: event.error, loading: false },
+                  },
+                }
+              : {},
+          );
+          break;
+        }
+        case "ExportRowCount": {
+          if (event.request !== exportCountRequest) break;
+          set((s) =>
+            s.exportDialog
+              ? { exportDialog: { ...s.exportDialog, count: event.count, isCounting: false } }
+              : {},
+          );
+          break;
+        }
+        case "ExportProgress":
+          set((s) =>
+            s.exportRun?.request === event.request
+              ? { exportRun: { ...s.exportRun, rows: event.rows, bytes: event.bytes } }
+              : {},
+          );
+          break;
+        case "ExportFinished": {
+          const run = get().exportRun;
+          if (run?.request !== event.request) break;
+          set({ exportRun: null });
+          const rows = event.rows === 1 ? "1 row" : `${event.rows.toLocaleString()} rows`;
+          const sheets = event.sheets > 1 ? ` on ${event.sheets} sheets` : "";
+          get().toast("success", `Exported ${rows}${sheets} to ${event.path}`);
+          if (event.cut_cells > 0) {
+            get().toast(
+              "warning",
+              `${event.cut_cells.toLocaleString()} cells were cut to 32,767 characters, the most Excel keeps in one cell`,
+            );
+          }
+          break;
+        }
+        case "ExportFailed": {
+          const run = get().exportRun;
+          if (run?.request !== event.request) break;
+          set({ exportRun: null });
+          if (event.cancelled) get().toast("info", "Export cancelled. No file was written.");
+          else get().toast("error", event.error);
           break;
         }
         case "WorkspaceSaved":
@@ -2066,8 +2249,138 @@ export const useApp = create<AppState>()((set, get) => {
 
     palette: null,
     setPalette: (palette) => set({ palette }),
-    transfer: (kind) =>
-      get().toast("info", `${kind === "import" ? "Import" : "Export"} is not available yet`),
+    transfer: (kind, target) => {
+      if (kind === "import") {
+        get().toast("info", "Import is not available yet");
+        return;
+      }
+      const from = exportOrigin(get().tabs, target);
+      if (typeof from === "string") {
+        get().toast("info", from);
+        return;
+      }
+      // An earlier dialog's count is of no use any more.
+      send({ type: "CancelExport", request: exportCountRequest });
+      exportPrepareRequest = nextRequest++;
+      exportQueryRequest = 0;
+      set({ exportDialog: initialExportDialog(from) });
+      if (from.kind === "rows") {
+        send({
+          type: "ExportPrepare",
+          request: exportPrepareRequest,
+          conn: from.conn,
+          source: { kind: "Rows", columns: from.columns },
+        });
+        if (from.query) {
+          exportQueryRequest = nextRequest++;
+          send({
+            type: "ExportPrepare",
+            request: exportQueryRequest,
+            conn: from.conn,
+            source: { kind: "Query", sql: from.query.sql, columns: from.columns },
+          });
+        }
+        return;
+      }
+      send({
+        type: "ExportPrepare",
+        request: exportPrepareRequest,
+        conn: from.conn,
+        source: { kind: "Table", table: from.table, query: from.query },
+      });
+      exportCountRequest = nextRequest++;
+      send({
+        type: "ExportCountRows",
+        request: exportCountRequest,
+        conn: from.conn,
+        table: from.table,
+        query: from.query,
+      });
+    },
+
+    exportDialog: null,
+    setExportChoice: (patch) => {
+      set((s) => (s.exportDialog ? { exportDialog: { ...s.exportDialog, ...patch } } : {}));
+      // How many rows, and from where, do not change what the first rows look like.
+      if ("format" in patch || "options" in patch || "targetTable" in patch) refreshExportPreview();
+    },
+    closeExport: () => {
+      if (!get().exportDialog) return;
+      send({ type: "CancelExport", request: exportCountRequest });
+      exportPreviewRequest = 0;
+      set({ exportDialog: null });
+    },
+    startExport: async () => {
+      const d = get().exportDialog;
+      const info = d && formatState(d);
+      if (!d || !info || !d.isPrepared || d.isChoosingFile) return;
+      const limit = parseLimit(d.limit);
+      if (limit === "invalid") return;
+      if (needsTargetTable(d) && exportOptions(d).table === null) return;
+      set({ exportDialog: { ...d, isChoosingFile: true } });
+      const path = await chooseSavePath(
+        suggestedFileName(d.from.name, info.extension),
+        info.extension,
+        info.format === "xlsx" ? "Excel" : info.extension.toUpperCase(),
+      ).catch((err: unknown) => {
+        get().toast("error", `Couldn't open the save dialog: ${String(err)}`);
+        return null;
+      });
+      const open = get().exportDialog;
+      if (!open) return;
+      if (path === null) {
+        set({ exportDialog: { ...open, isChoosingFile: false } });
+        return;
+      }
+      const request = nextRequest++;
+      const options = exportOptions(d);
+      const { from } = d;
+      if (from.kind === "table") {
+        send({
+          type: "ExportTable",
+          request,
+          conn: from.conn,
+          table: from.table,
+          query: from.query,
+          format: d.format,
+          options,
+          path,
+          limit,
+        });
+      } else if (d.scope === "query" && from.query) {
+        send({
+          type: "ExportQuery",
+          request,
+          conn: from.conn,
+          database: from.query.database,
+          sql: from.query.sql,
+          columns: from.columns,
+          format: d.format,
+          options,
+          path,
+          limit,
+        });
+      } else {
+        send({
+          type: "ExportRows",
+          request,
+          conn: from.conn,
+          format: d.format,
+          options,
+          columns: from.columns,
+          rows: limit === null ? from.rows : from.rows.slice(0, limit),
+          path,
+        });
+      }
+      send({ type: "CancelExport", request: exportCountRequest });
+      exportPreviewRequest = 0;
+      set({ exportDialog: null, exportRun: { request, name: from.name, rows: 0, bytes: 0 } });
+    },
+    exportRun: null,
+    cancelExport: () => {
+      const run = get().exportRun;
+      if (run) send({ type: "CancelExport", request: run.request });
+    },
   };
 });
 

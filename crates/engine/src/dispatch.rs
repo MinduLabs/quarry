@@ -29,6 +29,13 @@ fn command_kind(command: &Command) -> &'static str {
         Command::EndTransaction { .. } => "EndTransaction",
         Command::ApplyChanges { .. } => "ApplyChanges",
         Command::InsertSql { .. } => "InsertSql",
+        Command::ExportPrepare { .. } => "ExportPrepare",
+        Command::ExportPreview { .. } => "ExportPreview",
+        Command::ExportRows { .. } => "ExportRows",
+        Command::ExportQuery { .. } => "ExportQuery",
+        Command::ExportTable { .. } => "ExportTable",
+        Command::ExportCountRows { .. } => "ExportCountRows",
+        Command::CancelExport { .. } => "CancelExport",
         Command::AlterSchema { .. } => "AlterSchema",
         Command::Cancel { .. } => "Cancel",
         Command::CloseTab { .. } => "CloseTab",
@@ -230,6 +237,70 @@ impl Engine {
                     error,
                 });
             }
+            Command::ExportPrepare {
+                request,
+                conn,
+                source,
+            } => self.export_prepare(request, conn, source).await,
+            Command::ExportPreview {
+                request,
+                conn,
+                format,
+                options,
+                columns,
+                rows,
+            } => {
+                self.export_preview(request, conn, format, options, columns, rows)
+                    .await;
+            }
+            Command::ExportRows {
+                request,
+                conn,
+                format,
+                options,
+                columns,
+                rows,
+                path,
+            } => {
+                self.export_rows(request, conn, format, options, columns, rows, path)
+                    .await;
+            }
+            Command::ExportQuery {
+                request,
+                conn,
+                database,
+                sql,
+                columns,
+                format,
+                options,
+                path,
+                limit,
+            } => {
+                self.export_query(
+                    request, conn, database, sql, columns, format, options, path, limit,
+                )
+                .await;
+            }
+            Command::ExportTable {
+                request,
+                conn,
+                table,
+                query,
+                format,
+                options,
+                path,
+                limit,
+            } => {
+                self.export_table(request, conn, table, query, format, options, path, limit)
+                    .await;
+            }
+            Command::ExportCountRows {
+                request,
+                conn,
+                table,
+                query,
+            } => self.export_count_rows(request, conn, table, query).await,
+            Command::CancelExport { request } => self.cancel_export(request),
             Command::AlterSchema {
                 request,
                 conn,

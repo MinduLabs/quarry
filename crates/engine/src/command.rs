@@ -1,8 +1,8 @@
 use std::fmt;
 
 use quarry_model::{
-    BrowseQuery, ConnId, ConnectionConfig, Favorite, FavoriteId, RowChange, SchemaChange,
-    ServerInfoKind, TableRef, Value, Workspace,
+    BrowseQuery, ColumnMeta, ConnId, ConnectionConfig, ExportFormat, ExportOptions, Favorite,
+    FavoriteId, RowChange, SchemaChange, ServerInfoKind, TableRef, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -160,6 +160,76 @@ pub enum Command {
         columns: Vec<String>,
         rows: Vec<Vec<Value>>,
     },
+    /// What an export of `source` offers → `Event::ExportPrepared`. Reads the source table's
+    /// keys, so it may connect first.
+    ExportPrepare {
+        request: RequestId,
+        conn: ConnId,
+        source: ExportSource,
+    },
+    /// The first rows as `format` would write them → `Event::ExportPreview`. Nothing is
+    /// written.
+    ExportPreview {
+        request: RequestId,
+        conn: ConnId,
+        format: ExportFormat,
+        options: ExportOptions,
+        columns: Vec<ColumnMeta>,
+        rows: Vec<Vec<Value>>,
+    },
+    /// Write `rows`, which the client holds, to the file `path` → `Event::ExportFinished` or
+    /// `Event::ExportFailed`. Exports only read, so safe mode never asks.
+    ExportRows {
+        request: RequestId,
+        conn: ConnId,
+        format: ExportFormat,
+        options: ExportOptions,
+        columns: Vec<ColumnMeta>,
+        rows: Vec<Vec<Value>>,
+        path: String,
+    },
+    /// Run `sql` again on a connection of its own and write every row, up to `limit`, to
+    /// `path`, without holding them in memory → `Event::ExportProgress`, then
+    /// `Event::ExportFinished` or `Event::ExportFailed`. `columns` are the ones the client holds
+    /// from the first run. Only a statement that reads is accepted.
+    ExportQuery {
+        request: RequestId,
+        conn: ConnId,
+        database: Option<String>,
+        sql: String,
+        columns: Vec<ColumnMeta>,
+        format: ExportFormat,
+        options: ExportOptions,
+        path: String,
+        #[ts(type = "number | null")]
+        limit: Option<u64>,
+    },
+    /// Write a table, with its filter and sort, to `path` like `ExportQuery`: on a connection of
+    /// its own, in one read-only transaction, so the file never mixes old and new rows.
+    ExportTable {
+        request: RequestId,
+        conn: ConnId,
+        table: TableRef,
+        query: BrowseQuery,
+        format: ExportFormat,
+        options: ExportOptions,
+        path: String,
+        #[ts(type = "number | null")]
+        limit: Option<u64>,
+    },
+    /// Exact number of rows `ExportTable` would write without a limit → `Event::ExportRowCount`.
+    /// Runs on a connection of its own and never delays an export.
+    ExportCountRows {
+        request: RequestId,
+        conn: ConnId,
+        table: TableRef,
+        query: BrowseQuery,
+    },
+    /// Stop the export or row count `request`: the statement is cancelled on the server and no
+    /// file is left. Answers with `Event::ExportFailed { cancelled: true }`.
+    CancelExport {
+        request: RequestId,
+    },
     /// Change the schema. With `confirmed: false` the engine only answers `Event::SchemaReview`
     /// with the statements it would run; the client shows them and resends with
     /// `confirmed: true`, which runs them on the metadata session → `Event::SchemaChanged`.
@@ -208,6 +278,23 @@ pub enum Command {
     SaveWorkspace {
         request: RequestId,
         workspace: Workspace,
+    },
+}
+
+/// Where the rows of an export come from.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "kind")]
+#[ts(export)]
+pub enum ExportSource {
+    /// The result on the grid: the client holds the rows and sends them with the export.
+    Rows { columns: Vec<ColumnMeta> },
+    /// A table, with the filter and sort applied to it.
+    Table { table: TableRef, query: BrowseQuery },
+    /// A typed query that `ExportQuery` would run again for every row. `columns` are the ones of
+    /// its result on the grid.
+    Query {
+        sql: String,
+        columns: Vec<ColumnMeta>,
     },
 }
 

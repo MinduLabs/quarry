@@ -8,6 +8,8 @@ import { onRender } from "@/lib/perf";
 import { isMac } from "@/lib/platform";
 import { pendingWork, saveWorkspace, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
+import { ExportDialog } from "./features/export/ExportDialog";
+import { ExportProgress } from "./features/export/ExportProgress";
 import { HistoryDialog } from "./features/history/HistoryDialog";
 import { CommandPalette } from "./features/palette/CommandPalette";
 import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
@@ -187,6 +189,8 @@ export function App() {
       <SettingsDialog />
       <SchemaFormDialog />
       <SchemaReviewDialog />
+      <ExportDialog />
+      <ExportProgress />
       <CommandPalette />
       <HistoryDialog />
       <ServerInfoDialog />

@@ -21,7 +21,7 @@ import { cn } from "@/lib/cn";
 import { registerEditor } from "@/lib/editors";
 import { scriptStatements, statementAt } from "@/lib/engine";
 import { keysOf } from "@/lib/shortcuts";
-import { fillVariables, queryVariables } from "@/lib/variables";
+import { fillVariables, type QueryVariable, queryVariables } from "@/lib/variables";
 import { type Tab, useApp } from "@/store/app";
 import type { SqlSchema } from "../editor/completion";
 import { formatSql } from "../editor/format";
@@ -89,10 +89,10 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
   const editor = useRef<EditorView | null>(null);
   const [editorHeight, setEditorHeight] = useState(220);
   const [saving, setSaving] = useState(false);
-  /** A query waiting for the values of its `{{variables}}`. */
+  /** A query waiting for the values of its `{{variables}}`, `:names` and `?` marks. */
   const [asking, setAsking] = useState<{
     sql: string;
-    names: string[];
+    variables: QueryVariable[];
     then: (sql: string) => void;
   } | null>(null);
   /** The values typed last time, so running the same query again needs no retyping. */
@@ -143,11 +143,11 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
   /** The statements of a run started from the editor, until its `QueryStarted` arrives. */
   const pendingRun = useRef<{ sql: string; spans: Span[]; texts: string[] } | null>(null);
 
-  /** Run `sql` now, or ask for its `{{variables}}` first. */
+  /** Run `sql` now, or ask for its variables first. */
   const withVariables = useCallback((sql: string, then: (sql: string) => void) => {
-    const names = queryVariables(sql);
-    if (names.length === 0) return then(sql);
-    setAsking({ sql, names, then });
+    const variables = queryVariables(sql);
+    if (variables.length === 0) return then(sql);
+    setAsking({ sql, variables, then });
   }, []);
 
   const runFromEditor = useCallback(
@@ -420,7 +420,7 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
       <SaveQueryDialog tabId={tab.id} open={saving} onClose={() => setSaving(false)} />
       {asking && (
         <VariablesDialog
-          names={asking.names}
+          variables={asking.variables}
           initial={lastValues.current}
           onClose={() => setAsking(null)}
           onRun={(values) => {

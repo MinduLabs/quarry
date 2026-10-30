@@ -97,6 +97,17 @@ pub enum ExecItem {
 /// Receives results. Called synchronously, so it must be fast (e.g. push into a channel).
 pub type ExecSink<'a> = &'a mut (dyn FnMut(ExecItem) + Send);
 
+/// Receives the items of one statement as they arrive, for work that must not outrun its
+/// consumer (an export). `accept` is async: a sink that waits (a full queue) makes the driver
+/// wait, so the database is read no faster than the sink consumes.
+#[async_trait]
+pub trait RowSink: Send {
+    /// `false` stops the read: the driver returns at once without reading what is left. A
+    /// connection stopped that way still has rows in flight, so the caller cancels the statement
+    /// through [`Session::cancel_handle`] before closing it.
+    async fn accept(&mut self, item: ExecItem) -> bool;
+}
+
 /// Cancels the running query; callable from another task.
 pub trait CancelHandle: Send + Sync {
     fn cancel(&self);
@@ -206,6 +217,18 @@ pub trait Session: Send {
         _sink: ExecSink<'_>,
     ) -> Result<()> {
         Err(DriverError::Unsupported("parameterized queries"))
+    }
+    /// Like [`Self::query`] (or [`Self::execute`] when `params` is empty), but into a
+    /// [`RowSink`] that can make the read wait or stop it. `opts.row_limit` is `None` here: the
+    /// sink decides how much to take.
+    async fn stream(
+        &mut self,
+        _sql: &str,
+        _params: &[Value],
+        _opts: &ExecOpts,
+        _sink: &mut dyn RowSink,
+    ) -> Result<()> {
+        Err(DriverError::Unsupported("streaming every row"))
     }
     async fn list_databases(&mut self) -> Result<Vec<String>>;
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>>;

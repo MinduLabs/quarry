@@ -5,6 +5,7 @@ import type { ConnState } from "./ConnState";
 import type { ConnectionConfig } from "./ConnectionConfig";
 import type { DataSource } from "./DataSource";
 import type { ErrorLocation } from "./ErrorLocation";
+import type { ExportFormatState } from "./ExportFormatState";
 import type { Favorite } from "./Favorite";
 import type { HistoryEntry } from "./HistoryEntry";
 import type { LogEntry } from "./LogEntry";
@@ -15,6 +16,7 @@ import type { ServerInfoKind } from "./ServerInfoKind";
 import type { ServerInfoRow } from "./ServerInfoRow";
 import type { TableColumns } from "./TableColumns";
 import type { TableInfo } from "./TableInfo";
+import type { TableRef } from "./TableRef";
 import type { Value } from "./Value";
 import type { Workspace } from "./Workspace";
 
@@ -25,4 +27,26 @@ export type Event = { "type": "Pong", id: number, version: string,
 /**
  * The performance log is on: the client may send its own timings (`PerfMarks`).
  */
-perf: boolean, } | { "type": "Notice", kind: NoticeKind, message: string, } | { "type": "Connections", connections: Array<ConnectionConfig>, } | { "type": "DataSources", sources: Array<DataSource>, } | { "type": "TestResult", request: number, server_version: string | null, error: string | null, } | { "type": "ConnState", id: ConnId, state: ConnState, } | { "type": "Databases", id: ConnId, databases: Array<string>, } | { "type": "Objects", id: ConnId, database: string, objects: Array<SchemaObject> | null, error: string | null, } | { "type": "Columns", id: ConnId, database: string, columns: Array<TableColumns> | null, error: string | null, } | { "type": "ServerInfo", request: number, kind: ServerInfoKind, rows: Array<ServerInfoRow> | null, error: string | null, } | { "type": "TableInfo", request: number, info: TableInfo | null, error: string | null, } | { "type": "ConfirmRequired", tab: number, conn: ConnId, database: string | null, sql: string, message: string, } | { "type": "QueryStarted", tab: number, } | { "type": "StatementLog", tab: number, entry: LogEntry, } | { "type": "StatementStarted", tab: number, index: number, count: number, } | { "type": "ResultColumns", tab: number, set: number, statement: number, columns: Array<ColumnMeta>, } | { "type": "ResultRows", tab: number, set: number, rows: Array<Array<Value>>, } | { "type": "ResultDone", tab: number, set: number, statement: number, affected: number, rows: number, truncated: boolean, } | { "type": "QueryFinished", tab: number, elapsed_ms: number, } | { "type": "QueryFailed", tab: number, error: string, cancelled: boolean, statement: number | null, location: ErrorLocation | null, } | { "type": "RowCount", tab: number, count: number | null, error: string | null, } | { "type": "TransactionState", tab: number, open: boolean, error: string | null, } | { "type": "ChangesConfirmRequired", tab: number, message: string, } | { "type": "ChangesApplied", tab: number, message: string, } | { "type": "ChangesFailed", tab: number, error: string, } | { "type": "InsertSql", request: number, text: string | null, error: string | null, } | { "type": "SchemaReview", request: number, conn: ConnId, change: SchemaChange, statements: Array<string>, warning: string | null, } | { "type": "SchemaChanged", request: number, conn: ConnId, change: SchemaChange, error: string | null, } | { "type": "Favorites", favorites: Array<Favorite>, } | { "type": "History", request: number, entries: Array<HistoryEntry>, } | { "type": "HistoryAdded", entry: HistoryEntry, } | { "type": "Workspace", workspace: Workspace, } | { "type": "WorkspaceSaved", request: number, error: string | null, };
+perf: boolean, } | { "type": "Notice", kind: NoticeKind, message: string, } | { "type": "Connections", connections: Array<ConnectionConfig>, } | { "type": "DataSources", sources: Array<DataSource>, } | { "type": "TestResult", request: number, server_version: string | null, error: string | null, } | { "type": "ConnState", id: ConnId, state: ConnState, } | { "type": "Databases", id: ConnId, databases: Array<string>, } | { "type": "Objects", id: ConnId, database: string, objects: Array<SchemaObject> | null, error: string | null, } | { "type": "Columns", id: ConnId, database: string, columns: Array<TableColumns> | null, error: string | null, } | { "type": "ServerInfo", request: number, kind: ServerInfoKind, rows: Array<ServerInfoRow> | null, error: string | null, } | { "type": "TableInfo", request: number, info: TableInfo | null, error: string | null, } | { "type": "ConfirmRequired", tab: number, conn: ConnId, database: string | null, sql: string, message: string, } | { "type": "QueryStarted", tab: number, } | { "type": "StatementLog", tab: number, entry: LogEntry, } | { "type": "StatementStarted", tab: number, index: number, count: number, } | { "type": "ResultColumns", tab: number, set: number, statement: number, columns: Array<ColumnMeta>, } | { "type": "ResultRows", tab: number, set: number, rows: Array<Array<Value>>, } | { "type": "ResultDone", tab: number, set: number, statement: number, affected: number, rows: number, truncated: boolean, } | { "type": "QueryFinished", tab: number, elapsed_ms: number, } | { "type": "QueryFailed", tab: number, error: string, cancelled: boolean, statement: number | null, location: ErrorLocation | null, } | { "type": "RowCount", tab: number, count: number | null, error: string | null, } | { "type": "TransactionState", tab: number, open: boolean, error: string | null, } | { "type": "ChangesConfirmRequired", tab: number, message: string, } | { "type": "ChangesApplied", tab: number, message: string, } | { "type": "ChangesFailed", tab: number, error: string, } | { "type": "InsertSql", request: number, text: string | null, error: string | null, } | { "type": "ExportPrepared", request: number, formats: Array<ExportFormatState>, 
+/**
+ * The one table the rows come from. `None` for a result of several tables: SQL Inserts
+ * then needs a table named by the user.
+ */
+table: TableRef | null, 
+/**
+ * A table source: its columns and the first rows, for the preview. Empty for a result
+ * the client holds.
+ */
+columns: Array<ColumnMeta>, rows: Array<Array<Value>>, 
+/**
+ * A query source: what may make the second run differ from the first, or fail.
+ */
+warnings: Array<string>, error: string | null, } | { "type": "ExportPreview", request: number, text: string | null, error: string | null, } | { "type": "ExportFinished", request: number, path: string, rows: number, 
+/**
+ * Spreadsheet sheets written, 0 for other formats.
+ */
+sheets: number, 
+/**
+ * Spreadsheet cells whose text was cut to what a cell holds.
+ */
+cut_cells: number, } | { "type": "ExportProgress", request: number, rows: number, bytes: number, } | { "type": "ExportRowCount", request: number, count: number | null, error: string | null, } | { "type": "ExportFailed", request: number, error: string, cancelled: boolean, } | { "type": "SchemaReview", request: number, conn: ConnId, change: SchemaChange, statements: Array<string>, warning: string | null, } | { "type": "SchemaChanged", request: number, conn: ConnId, change: SchemaChange, error: string | null, } | { "type": "Favorites", favorites: Array<Favorite>, } | { "type": "History", request: number, entries: Array<HistoryEntry>, } | { "type": "HistoryAdded", entry: HistoryEntry, } | { "type": "Workspace", workspace: Workspace, } | { "type": "WorkspaceSaved", request: number, error: string | null, };

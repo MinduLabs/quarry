@@ -6,6 +6,7 @@ members = [
     "crates/sql",
     "crates/store",
     "crates/tunnel",
+    "crates/export",
     "crates/drivers/mysql",
     "crates/engine",
     "src-tauri",
@@ -26,6 +27,7 @@ quarry-driver-api = { path = "crates/driver-api" }
 quarry-sql = { path = "crates/sql" }
 quarry-store = { path = "crates/store" }
 quarry-tunnel = { path = "crates/tunnel" }
+quarry-export = { path = "crates/export" }
 quarry-engine = { path = "crates/engine" }
 quarry-driver-mysql = { path = "crates/drivers/mysql" }
 
@@ -46,6 +48,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# Excel files. `constant_memory` writes each sheet to a temporary file as rows arrive, so a million
+# rows do not sit in memory.
+rust_xlsxwriter = { version = "0.102", default-features = false, features = ["chrono", "constant_memory"] }
+# Tests of `quarry-export` open the Excel files it writes. Same features as `rust_xlsxwriter` uses.
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
 # SSH tunnels: ring for crypto (rustls already uses it), no compression. No `rsa` feature: the
 # `rsa` crate has an unfixed timing side channel (RUSTSEC-2023-0071). RSA keys still work through
 # ssh-agent, which signs outside Quarry.
@@ -55,6 +63,8 @@ russh = { version = "0.63", default-features = false, features = ["ring"] }
 tauri = { version = "2.12", features = [] }
 tauri-build = { version = "2.7", features = [] }
 tauri-plugin-window-state = "2"
+# The native "save as" dialog of an export. The UI may open nothing else (see the capability).
+tauri-plugin-dialog = "2"
 # The GTK 3 bindings Tauri already uses on Linux, to stop the webview's pinch-zoom gesture.
 gtk = "0.18"
 ts-rs = { version = "12", features = ["chrono-impl", "uuid-impl", "no-serde-warnings"] }

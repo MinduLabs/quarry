@@ -1,7 +1,16 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useLayoutEffect } from "react";
 import { cn } from "@/lib/cn";
+
+/**
+ * WebKit stops painting the window when a focused text field is removed along with its dialog.
+ * Dropping the focus first keeps the window drawn.
+ */
+function releaseFocus() {
+  const focused = document.activeElement;
+  if (focused instanceof HTMLElement && focused.closest("[role=dialog]")) focused.blur();
+}
 
 export function Dialog({
   open,
@@ -26,8 +35,21 @@ export function Dialog({
   /** The body takes the remaining space without padding and scrolls itself. */
   flush?: boolean;
 }) {
+  // Also covers a dialog closed by its own buttons or removed from the tree, which never reach
+  // `onOpenChange`.
+  useLayoutEffect(() => {
+    if (open) return releaseFocus;
+  }, [open]);
+
   return (
-    <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
+    <RadixDialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (next) return;
+        releaseFocus();
+        onClose();
+      }}
+    >
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="animate-fade fixed inset-0 z-40 bg-black/30" />
         <RadixDialog.Content

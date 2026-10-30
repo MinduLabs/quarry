@@ -13,6 +13,7 @@ mod ddl;
 mod edit;
 mod environment;
 mod error_location;
+mod export;
 mod favorite;
 mod history;
 mod schema;
@@ -30,6 +31,7 @@ pub use ddl::{AlterOp, ColumnDef, IndexDef, SchemaChange};
 pub use edit::{CellValue, RowChange};
 pub use environment::Environment;
 pub use error_location::ErrorLocation;
+pub use export::{ExportFormat, ExportOptions};
 pub use favorite::{Favorite, FavoriteId, FavoriteItem};
 pub use history::HistoryEntry;
 pub use schema::{

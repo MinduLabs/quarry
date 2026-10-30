@@ -138,6 +138,9 @@ fn main() {
 
     let forward = subscriber.clone();
     let result = tauri::Builder::default()
+        // Where to save an export. The capability allows the save dialog only: the UI cannot open
+        // files or read the disk through it, since the engine does all file work.
+        .plugin(tauri_plugin_dialog::init())
         // Size, position and maximized state come back on the next launch. Not `VISIBLE` (the
         // plugin would show the window before the splash is drawn, see `ui/public/show.js`) and
         // not `DECORATIONS` (Linux draws its own window controls).
