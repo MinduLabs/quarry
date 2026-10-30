@@ -1,5 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { formatDialect, mysql } from "sql-formatter";
+import { VARIABLE_PATTERN } from "@/lib/variables";
 import { useApp } from "@/store/app";
 
 /**
@@ -16,7 +17,14 @@ export function formatSql(view: EditorView): boolean {
   let formatted: string;
   try {
     // Importing one dialect keeps the other dialects out of the bundle.
-    formatted = formatDialect(source, { dialect: mysql, keywordCase: "upper", tabWidth: 2 });
+    formatted = formatDialect(source, {
+      dialect: mysql,
+      keywordCase: "upper",
+      tabWidth: 2,
+      // Without `custom`, `{{name}}` is an unknown token and the whole format fails. `?` and `:name`
+      // are the other marks the query variables dialog asks for.
+      paramTypes: { positional: true, named: [":"], custom: [{ regex: VARIABLE_PATTERN }] },
+    });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     useApp
