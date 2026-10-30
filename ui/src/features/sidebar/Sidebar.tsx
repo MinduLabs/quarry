@@ -1,11 +1,12 @@
-import { Plus, Search, Server, Settings, X } from "lucide-react";
+import { ArrowRight, Plus, Search, Server, Settings, X } from "lucide-react";
 import { memo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
 import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { keysOf } from "@/lib/shortcuts";
-import { useApp } from "@/store/app";
+import { type UpdateState, useApp } from "@/store/app";
 import { FavoritesList } from "../favorites/FavoritesList";
 import { ConnectionTree } from "./ConnectionTree";
 
@@ -88,20 +89,50 @@ export const Sidebar = memo(function Sidebar() {
         <FavoritesList query={query} />
       )}
 
-      <footer className="flex h-8 shrink-0 items-center justify-between pr-1.5 pl-3 text-xs text-faint">
+      <UpdateRow />
+      <footer className="flex h-9 shrink-0 items-center justify-between pr-1.5 pl-3 text-sm text-muted">
         <span>{version ? `Quarry ${version}` : ""}</span>
         <IconButton
           label="Settings…"
           shortcut={keysOf("settings")}
-          size="sm"
           onClick={() => useApp.getState().setSettingsOpen(true)}
         >
-          <Settings size={14} strokeWidth={1.75} />
+          {/* On the icon: the button's own color class would tie with this one. */}
+          <Settings size={16} strokeWidth={1.75} className="text-fg" />
         </IconButton>
       </footer>
     </aside>
   );
 });
+
+/** Its own component: download progress re-renders this row, not the sidebar's tree. */
+function UpdateRow() {
+  const update = useApp((s) => s.update);
+  if (!update) return null;
+  return (
+    <Tooltip content={`Quarry ${update.version}`}>
+      <Button
+        variant="ghost"
+        onClick={() => useApp.getState().openUpdate()}
+        className="mx-1.5 mt-1 h-8 bg-hover px-2 font-normal hover:bg-pressed"
+      >
+        {/* Grows, so the arrow sits at the right edge. */}
+        <span className="flex-1 text-left">{updateLabel(update)}</span>
+        {update.stage !== "downloading" && (
+          <ArrowRight size={14} strokeWidth={1.75} className="text-muted" />
+        )}
+      </Button>
+    </Tooltip>
+  );
+}
+
+function updateLabel(update: UpdateState): string {
+  if (update.stage === "ready") return "Restart to update";
+  if (update.stage === "available") return "Update available";
+  return update.share === null
+    ? "Downloading update…"
+    : `Downloading update… ${Math.floor(update.share * 100)}%`;
+}
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (

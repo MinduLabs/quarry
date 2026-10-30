@@ -10,6 +10,7 @@ use crate::{Command, Event, NoticeKind, VERSION, browse, schema};
 fn command_kind(command: &Command) -> &'static str {
     match command {
         Command::Ping { .. } => "Ping",
+        Command::CheckForUpdate => "CheckForUpdate",
         Command::LoadConnections => "LoadConnections",
         Command::LoadDataSources => "LoadDataSources",
         Command::InstallDriver { .. } => "InstallDriver",
@@ -84,6 +85,7 @@ impl Engine {
                     }
                 }
             }
+            Command::CheckForUpdate => self.check_for_update().await,
             Command::LoadConnections => self.load_connections(),
             Command::LoadDataSources => self.load_data_sources(),
             Command::InstallDriver { driver } => self.install_driver(driver).await,

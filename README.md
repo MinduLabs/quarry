@@ -6,7 +6,7 @@
 
 <p align="center">A fast, open-source database client for Linux and macOS.</p>
 
-> **Status:** early development. MySQL / MariaDB work today. What changed is in
+> **Status:** early development. MySQL, MariaDB, PostgreSQL and Microsoft SQL Server work today. What changed is in
 > [CHANGELOG.md](CHANGELOG.md).
 
 - **Light:** Tauri 2 with the system webview and a Rust core. No bundled Chromium, no JVM.
@@ -148,8 +148,14 @@ Linux build caches stay inside Docker; `docker builder prune` clears them.
 
 ### Release
 
-Bump `version` in `Cargo.toml` and `package.json`, commit, then push the tag `v<version>`. The release workflow checks
+Bump `version` in `Cargo.toml` (the only place it is written), commit, then push the tag `v<version>`. The release workflow checks
 the tag, runs CI, builds every package and publishes a GitHub Release.
+
+The macOS app and the AppImage update themselves from the release's `latest.json`. Its bundles are
+signed with a key made once with `pnpm tauri signer generate -w ~/.tauri/quarry.key`: the public key
+goes in `plugins.updater.pubkey` of `src-tauri/tauri.conf.json`, the private key and its password in
+the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A tag
+is refused without them. Keep the private key safe: without it, installed copies never update again.
 
 ## Contributing
 

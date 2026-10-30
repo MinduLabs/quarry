@@ -26,7 +26,7 @@
         "cargo --offline build --release --locked -p quarry --features custom-protocol",
         "install -Dm755 target/release/quarry /app/bin/quarry",
         "install -Dm644 packaging/linux/io.github.mindulabs.Quarry.desktop -t /app/share/applications",
-        "install -Dm644 packaging/linux/io.github.mindulabs.Quarry.metainfo.xml -t /app/share/metainfo",
+        "sh packaging/linux/metainfo.sh /app/share/metainfo/io.github.mindulabs.Quarry.metainfo.xml",
         "install -Dm644 src-tauri/icons/icon.png /app/share/icons/hicolor/512x512/apps/io.github.mindulabs.Quarry.png",
         "install -Dm644 packaging/linux/io.github.mindulabs.Quarry-symbolic.svg -t /app/share/icons/hicolor/symbolic/apps"
       ],

@@ -26,11 +26,12 @@ ts-rs.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
-# Driver downloads: TLS through ring, as everywhere else in Quarry.
+# Driver downloads and the update check: TLS through ring, as everywhere else in Quarry.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream"] }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
+semver = "1"
 futures-util.workspace = true
 
 [dev-dependencies]

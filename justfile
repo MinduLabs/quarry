@@ -1,7 +1,7 @@
 # Quarry tasks — `just --list`. Install just with `cargo install just`.
 
 app_id := "io.github.mindulabs.Quarry"
-version := `grep -m1 '^version' Cargo.toml | cut -d'"' -f2`
+version := `sh packaging/version.sh`
 uid := `id -u`
 gid := `id -g`
 # Linux builds run in docker/linux.Dockerfile. Caches stay inside Docker (`docker builder prune`).

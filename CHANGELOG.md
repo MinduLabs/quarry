@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Controls sit with what they act on: an editor bar for SQL (Run turns into Stop while running), a data bar above every grid (reload, filter, columns, add and delete rows, save), and the status bar for pages. Table tabs have no separate toolbar. The row total is counted by clicking it.
 
 ### Added
+- Update available at the bottom of the sidebar when a newer Quarry is released. The macOS app and the AppImage download it, then restart into it; other packages open the release page.
 - Quick open lists the tables and routines you opened last first, under Recent, before everything else.
 - Exporting every row of a query or a table works with MySQL, MariaDB, PostgreSQL and SQL Server, read no faster than the file is written.
 - PostgreSQL and Microsoft SQL Server connections, next to MySQL and MariaDB. Their schemas are the databases in the sidebar. Values keep their exact type (numeric, intervals, network types, arrays, date and time with offsets).

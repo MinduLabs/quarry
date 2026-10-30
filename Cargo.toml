@@ -17,7 +17,8 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+# The only place the version is written; packaging/version.sh reads it for everything else.
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 license = "AGPL-3.0-or-later"
@@ -73,6 +74,10 @@ tauri-build = { version = "2.7", features = [] }
 tauri-plugin-window-state = "2"
 # The native "save as" dialog of an export. The UI may open nothing else (see the capability).
 tauri-plugin-dialog = "2"
+# Opens the release page of a newer version. The UI may open nothing else (see the capability).
+tauri-plugin-opener = "2"
+# Installs a newer release in place (the .app on macOS, the AppImage on Linux).
+tauri-plugin-updater = "2"
 # The GTK 3 bindings Tauri already uses on Linux, to stop the webview's pinch-zoom gesture.
 gtk = "0.18"
 ts-rs = { version = "12", features = ["chrono-impl", "uuid-impl", "no-serde-warnings"] }

@@ -45,5 +45,11 @@
       "deb": { "desktopTemplate": "../packaging/linux/tauri.desktop" }
     },
     "macOS": { "minimumSystemVersion": "11.0" }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": ["https://github.com/MinduLabs/quarry/releases/latest/download/latest.json"]
+    }
   }
 }

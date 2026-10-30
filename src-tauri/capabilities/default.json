@@ -15,6 +15,12 @@
     "core:window:allow-is-maximized",
     "core:window:allow-destroy",
     "dialog:allow-save",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/MinduLabs/quarry/releases/*" }]
+    },
+    "updater:allow-check",
+    "updater:allow-download-and-install"
   ]
 }

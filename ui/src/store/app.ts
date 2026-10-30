@@ -2,6 +2,7 @@
  * App state. Engine events are applied in `handleEvent`; components call the actions.
  * Keep engine calls (`send`) in actions, not in components.
  */
+import type { Update } from "@tauri-apps/plugin-updater";
 import { create } from "zustand";
 import type { BrowsePage } from "@/bindings/BrowsePage";
 import type { BrowseQuery } from "@/bindings/BrowseQuery";
@@ -47,7 +48,16 @@ import {
   initialImportDialog,
   isMappingValid,
 } from "@/features/import/importModel";
-import { chooseImportPath, chooseSavePath, send } from "@/lib/engine";
+import {
+  canSelfUpdate,
+  chooseImportPath,
+  chooseSavePath,
+  findSelfUpdate,
+  installUpdate,
+  openReleasePage,
+  restartApp,
+  send,
+} from "@/lib/engine";
 import { suggestedFileName } from "@/lib/exportFile";
 import { setPerfEnabled } from "@/lib/perf";
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "@/lib/theme";
@@ -487,7 +497,16 @@ export interface QuitInfo {
   edits: number;
   /** Tabs with an open transaction, which quitting rolls back. */
   transactions: number;
+  /** Quitting to start the update just installed. */
+  isRestart?: boolean;
 }
+
+/** A newer Quarry, and how far installing it has got. Only the macOS app and the AppImage install
+ * it themselves; other packages stay at `available` and link to the release page. */
+export type UpdateState =
+  | { stage: "available"; version: string }
+  | { stage: "downloading"; version: string; share: number | null }
+  | { stage: "ready"; version: string };
 
 /** Returns what quitting would lose, or null when it is safe to quit without asking. */
 export function pendingWork(tabs: Tab[]): QuitInfo | null {
@@ -519,6 +538,13 @@ export type DialogState =
 export interface AppState {
   ready: boolean;
   engineVersion: string | null;
+  update: UpdateState | null;
+  /** Once at startup: through the updater where the app installs updates itself, otherwise
+   * through the engine. */
+  checkForUpdate: () => void;
+  /** Install the update, restart into it, or open its release page, by stage and package. */
+  openUpdate: () => void;
+  restartForUpdate: () => void;
   connections: ConnectionConfig[];
   /** What a new connection can point at, from the engine; usable ones have a `driver`. */
   dataSources: DataSource[];
@@ -852,6 +878,10 @@ const CLOSED_TAB_LIMIT = 20;
 let nextTabId = 1;
 let nextQuery = 1;
 let nextToast = 1;
+/** The update the app can install itself, from `checkForUpdate`. */
+let selfUpdate: Update | null = null;
+/** The release page of an update the app cannot install itself. */
+let releasePage: string | null = null;
 let nextRequest = 1;
 
 /** A driver download stays on screen at least this long, so a fast one is seen, not a flash. */
@@ -1119,6 +1149,68 @@ export const useApp = create<AppState>()((set, get) => {
   return {
     ready: false,
     engineVersion: null,
+    update: null,
+    checkForUpdate: () => {
+      canSelfUpdate()
+        .then(async (isSelf) => {
+          if (!isSelf) {
+            send({ type: "CheckForUpdate" });
+            return;
+          }
+          selfUpdate = await findSelfUpdate();
+          if (selfUpdate) set({ update: { stage: "available", version: selfUpdate.version } });
+        })
+        // Nothing to show: without the check, Quarry works the same.
+        .catch((err: unknown) => console.warn("update check failed", err));
+    },
+    openUpdate: () => {
+      const update = get().update;
+      if (!update || update.stage === "downloading") return;
+      if (update.stage === "ready") {
+        get().restartForUpdate();
+        return;
+      }
+      const { version } = update;
+      if (selfUpdate) {
+        set({ update: { stage: "downloading", version, share: null } });
+        installUpdate(selfUpdate, (share) => {
+          // Whole percents only: progress arrives per network chunk.
+          const current = get().update;
+          const percent = (s: number | null) => (s === null ? -1 : Math.floor(s * 100));
+          if (current?.stage === "downloading" && percent(current.share) === percent(share)) return;
+          set({ update: { stage: "downloading", version, share } });
+        })
+          .then(() => set({ update: { stage: "ready", version } }))
+          .catch((err: unknown) => {
+            set({ update: { stage: "available", version } });
+            get().toast(
+              "error",
+              `The update could not be installed (${String(err)}). Try again, or download it from the release page.`,
+            );
+          });
+        return;
+      }
+      if (releasePage) {
+        openReleasePage(releasePage).catch((err: unknown) =>
+          get().toast("error", `The release page could not be opened: ${String(err)}`),
+        );
+      }
+    },
+    restartForUpdate: () => {
+      const work = pendingWork(get().tabs);
+      if (work) {
+        set({ quit: { ...work, isRestart: true } });
+        return;
+      }
+      void saveWorkspace()
+        .then(restartApp)
+        .catch((err: unknown) =>
+          get().toast(
+            "error",
+            `Quarry could not restart (${String(err)}). Quit and open it again.`,
+          ),
+        );
+    },
     connections: [],
     dataSources: [],
     driverInstalls: {},
@@ -1251,6 +1343,10 @@ export const useApp = create<AppState>()((set, get) => {
         case "Pong":
           set({ engineVersion: event.version });
           setPerfEnabled(event.perf);
+          break;
+        case "UpdateAvailable":
+          releasePage = event.url;
+          set({ update: { stage: "available", version: event.version } });
           break;
         case "Notice":
           get().toast(

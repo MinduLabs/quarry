@@ -18,6 +18,7 @@ pub(crate) fn options(dir: &Path) -> EngineOptions {
         perf_log: None,
         driver_dir: None,
         driver_manifest: None,
+        update_url: None,
         in_process_drivers: Default::default(),
     }
 }

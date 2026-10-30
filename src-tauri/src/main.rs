@@ -13,6 +13,7 @@
 
 #[cfg(target_os = "linux")]
 mod desktop;
+mod restart;
 
 use std::sync::{Arc, Mutex};
 
@@ -141,6 +142,12 @@ fn main() {
         // Where to save an export. The capability allows the save dialog only: the UI cannot open
         // files or read the disk through it, since the engine does all file work.
         .plugin(tauri_plugin_dialog::init())
+        // The release page of a newer version; the capability allows no other URL.
+        .plugin(tauri_plugin_opener::init())
+        // Self-update of the .app and the AppImage: download, check the signature against the
+        // `pubkey` in tauri.conf.json and replace the bundle; `restart_app` then starts it. The UI
+        // decides when.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Size, position and maximized state come back on the next launch. Not `VISIBLE` (the
         // plugin would show the window before the splash is drawn, see `ui/public/show.js`) and
         // not `DECORATIONS` (Linux draws its own window controls).
@@ -159,7 +166,8 @@ fn main() {
             engine_subscribe,
             statement_at,
             script_statements,
-            completion_context
+            completion_context,
+            restart::restart_app
         ])
         // The window opens hidden and the page shows it once the splash is drawn
         // (`ui/public/show.js`), so it never shows an empty white window. A page that failed to

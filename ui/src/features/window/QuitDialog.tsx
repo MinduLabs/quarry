@@ -1,12 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { restartApp } from "@/lib/engine";
 import { saveWorkspace, useApp } from "@/store/app";
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
 /**
  * Shown only when quitting would stop a running query, drop grid edits or roll back a transaction.
- * Tabs and SQL are saved.
+ * Tabs and SQL are saved. The same question comes before restarting into an update.
  */
 export function QuitDialog() {
   const quit = useApp((s) => s.quit);
@@ -22,11 +23,15 @@ export function QuitDialog() {
   return (
     <ConfirmDialog
       open={Boolean(quit)}
-      title="Quit Quarry?"
+      title={quit?.isRestart ? "Restart Quarry?" : "Quit Quarry?"}
       description={lines.join(" ")}
-      confirmLabel="Quit"
+      confirmLabel={quit?.isRestart ? "Restart" : "Quit"}
       width={420}
-      onConfirm={() => void saveWorkspace().then(() => getCurrentWindow().destroy())}
+      onConfirm={() =>
+        void saveWorkspace().then(() =>
+          quit?.isRestart ? restartApp() : getCurrentWindow().destroy(),
+        )
+      }
       onCancel={dismiss}
     />
   );

@@ -44,6 +44,7 @@ export function App() {
     subscribe(useApp.getState().handleEvent)
       .then(() => {
         send({ type: "Ping", id: 1 });
+        useApp.getState().checkForUpdate();
         send({ type: "LoadConnections" });
         send({ type: "LoadDataSources" });
       })

@@ -48,6 +48,9 @@ pub(crate) struct Engine {
     /// Where `load_drivers` looks for driver binaries, and `install_driver` puts them.
     pub(crate) driver_dir: Option<PathBuf>,
     pub(crate) driver_manifest: Option<String>,
+    pub(crate) update_url: Option<String>,
+    /// A newer release, asked for once per run.
+    pub(crate) update: tokio::sync::OnceCell<Option<crate::update::Release>>,
     pub(crate) config: Option<ConfigStore>,
     pub(crate) favorite_store: Option<FavoritesStore>,
     pub(crate) favorites: Mutex<Vec<Favorite>>,
@@ -162,6 +165,8 @@ impl Engine {
             registry: RwLock::new(registry),
             driver_dir,
             driver_manifest: options.driver_manifest,
+            update_url: options.update_url,
+            update: tokio::sync::OnceCell::new(),
             config,
             favorite_store,
             favorites: Mutex::new(Vec::new()),
