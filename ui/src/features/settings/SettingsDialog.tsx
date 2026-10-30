@@ -1,8 +1,8 @@
-import { Keyboard, Monitor, Moon, Palette, Search, Sun } from "lucide-react";
+import { Keyboard, Monitor, Moon, Palette, Sun } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
-import { Input } from "@/components/ui/Input";
 import { Kbd } from "@/components/ui/Kbd";
+import { SearchInput } from "@/components/ui/SearchInput";
 import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { cn } from "@/lib/cn";
 import { isMac } from "@/lib/platform";
@@ -86,30 +86,13 @@ export function SettingsDialog() {
         aria-label="Settings sections"
         className="flex w-48 shrink-0 flex-col gap-0.5 border-line border-r p-2"
       >
-        <div className="relative mb-2">
-          <Search
-            size={13}
-            strokeWidth={1.75}
-            className="pointer-events-none absolute top-2 left-2.5 text-faint"
-          />
-          <Input
-            type="search"
-            autoFocus
-            aria-label="Search settings"
-            value={query}
-            placeholder="Search"
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              // Escape clears the search first; a second Escape closes the dialog.
-              if (e.key === "Escape" && query) {
-                e.preventDefault();
-                e.stopPropagation();
-                setQuery("");
-              }
-            }}
-            className="pl-7 [&::-webkit-search-cancel-button]:hidden"
-          />
-        </div>
+        <SearchInput
+          autoFocus
+          label="Search settings"
+          value={query}
+          onChange={setQuery}
+          className="mb-2"
+        />
         {SECTIONS.map((item) => (
           <button
             key={item.value}

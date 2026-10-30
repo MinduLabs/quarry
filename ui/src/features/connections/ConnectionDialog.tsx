@@ -97,7 +97,7 @@ export function ConnectionDialog() {
       title={existing ? "Edit connection" : "New connection"}
       // Editing has a single step, so it has no step list and needs less width.
       width={existing ? 560 : 760}
-      height={520}
+      height={620}
       flush
     >
       {!existing && (

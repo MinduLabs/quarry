@@ -1,15 +1,15 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Database, Server } from "lucide-react";
+import { Database, Layers, Server } from "lucide-react";
 import { memo, useMemo, useRef } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { ForeignKey } from "@/bindings/ForeignKey";
 import type { IndexInfo } from "@/bindings/IndexInfo";
 import type { SchemaObject } from "@/bindings/SchemaObject";
-import { EnvBadge } from "@/components/ui/Badge";
 import { ContextMenuArea, type MenuItem } from "@/components/ui/Menu";
 import { iconKindOf, ObjectIcon, type ObjectIconKind } from "@/components/ui/ObjectIcon";
 import { Spinner } from "@/components/ui/Spinner";
 import { TreeRow } from "@/components/ui/TreeRow";
+import { cn } from "@/lib/cn";
 import {
   type ConnNode,
   copyText,
@@ -503,7 +503,6 @@ function ConnectionLine({
         trailing={
           <span className="flex items-center gap-1.5">
             {connected && node && <SchemaCount config={config} node={node} />}
-            <EnvBadge environment={config.environment} />
             {status === "connecting" && <Spinner size={12} />}
             {status === "connected" && <span className="size-1.5 rounded-full bg-env-local" />}
             {status === "failed" && <span className="size-1.5 rounded-full bg-danger" />}
@@ -514,7 +513,8 @@ function ConnectionLine({
   );
 }
 
-/** "3/20": the schemas shown of all the connection has. A click opens the list to tick them. */
+/** "3/20": the schemas shown of all the connection has, as a badge that reads as a button. A click
+ * opens the list to tick them; none shown is tinted, since the tree under it is then empty. */
 function SchemaCount({ config, node }: { config: ConnectionConfig; node: ConnNode }) {
   const saved = useApp((s) => s.schemaFilter[config.id]);
   const shown = shownSchemas(config.database, node.databases, saved).size;
@@ -527,8 +527,15 @@ function SchemaCount({ config, node }: { config: ConnectionConfig; node: ConnNod
         event.stopPropagation();
         useApp.getState().setSchemaPicker(config.id);
       }}
-      className="rounded-sm px-1 text-muted text-xs tabular-nums transition-colors-fast hover:bg-hover hover:text-fg"
+      className={cn(
+        "inline-flex h-5 cursor-pointer items-center gap-1 rounded-full border px-1.5 text-xs tabular-nums",
+        "transition-colors-fast hover:border-accent hover:text-fg",
+        shown === 0
+          ? "border-accent/50 bg-accent-soft text-accent-text"
+          : "border-line-strong bg-surface text-muted",
+      )}
     >
+      <Layers size={11} strokeWidth={2} />
       {shown}/{node.databases.length}
     </button>
   );

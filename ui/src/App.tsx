@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Profiler, useEffect, useState } from "react";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { Toaster } from "@/components/ui/Toaster";
 import { TooltipProvider } from "@/components/ui/Tooltip";
 import { cn } from "@/lib/cn";
@@ -113,7 +114,8 @@ export function App() {
         if (!tabs.find((t) => t.id === activeTabId)?.pinned) closeTab(activeTabId);
       } else if (key === "b") useApp.getState().toggleSidebar();
       else if (key === ",") useApp.getState().setSettingsOpen(true);
-      else if (key === "p") useApp.getState().setPalette(e.shiftKey ? "commands" : "open");
+      else if (key === "k" && !e.shiftKey) useApp.getState().setPalette("open");
+      else if (key === "p" && e.shiftKey) useApp.getState().setPalette("commands");
       else if (key === (isMac ? "y" : "h") && !e.shiftKey) useApp.getState().setHistoryOpen(true);
       else return;
       e.preventDefault();
@@ -121,18 +123,6 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-
-  const startResize = (event: React.PointerEvent) => {
-    event.preventDefault();
-    const move = (e: PointerEvent) =>
-      setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, e.clientX)));
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
 
   return (
     <TooltipProvider>
@@ -152,14 +142,14 @@ export function App() {
               <Sidebar />
             </Profiler>
           </div>
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            onPointerDown={startResize}
-            className="relative w-px shrink-0 cursor-col-resize bg-line"
-          >
-            <div className="absolute inset-y-0 -left-1 w-2 transition-colors-fast hover:bg-accent-soft" />
-          </div>
+          <ResizeHandle
+            orientation="vertical"
+            onStart={() => {
+              const start = sidebarWidth;
+              return (delta) =>
+                setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, start + delta)));
+            }}
+          />
         </div>
         <SidebarToggle />
         <main

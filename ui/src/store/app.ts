@@ -706,6 +706,10 @@ export interface AppState {
   openServerInfo: (conn: string, kind: ServerInfoKind) => void;
   closeServerInfo: () => void;
 
+  /** Objects opened lately, newest first: quick open lists them before the rest. Remembered
+   * between launches. */
+  recents: RecentObject[];
+
   /** Schemas ticked in each connection's "choose schemas" list; a connection never chosen for
    * has no entry (see `shownSchemas`). Remembered between launches. */
   schemaFilter: Record<string, string[]>;
@@ -745,6 +749,44 @@ function loadSidebarOpen(): boolean {
     return localStorage.getItem(SIDEBAR_KEY) !== "0";
   } catch {
     return true;
+  }
+}
+
+/** A table, view or routine the user opened. */
+export interface RecentObject {
+  connId: string;
+  database: string;
+  name: string;
+  kind: ObjectKind;
+}
+
+const RECENTS_KEY = "quarry.recentObjects";
+const RECENT_LIMIT = 8;
+const OBJECT_KINDS: readonly ObjectKind[] = [
+  "table",
+  "view",
+  "materialized_view",
+  "function",
+  "procedure",
+  "trigger",
+  "event",
+  "sequence",
+];
+
+function loadRecents(): RecentObject[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]");
+    if (!Array.isArray(saved)) return [];
+    return saved.flatMap((entry: unknown) => {
+      if (typeof entry !== "object" || entry === null) return [];
+      const { connId, database, name, kind } = entry as Record<string, unknown>;
+      const known = OBJECT_KINDS.find((k) => k === kind);
+      if (typeof connId !== "string" || typeof database !== "string" || typeof name !== "string")
+        return [];
+      return known ? [{ connId, database, name, kind: known }] : [];
+    });
+  } catch {
+    return [];
   }
 }
 
@@ -1143,6 +1185,7 @@ export const useApp = create<AppState>()((set, get) => {
       send({ type: "LoadServerInfo", request, conn, kind });
     },
     closeServerInfo: () => set({ serverInfo: null }),
+    recents: loadRecents(),
     schemaFilter: loadSchemaFilter(),
     setShownSchemas: (conn, names) =>
       set((s) => {
@@ -1701,6 +1744,20 @@ export const useApp = create<AppState>()((set, get) => {
       if (load) send({ type: "LoadObjects", id: connId, database });
     },
     openObject: (connId, database, name, kind) => {
+      set((s) => {
+        const recents = [
+          { connId, database, name, kind },
+          ...s.recents.filter(
+            (r) => !(r.connId === connId && r.database === database && r.name === name),
+          ),
+        ].slice(0, RECENT_LIMIT);
+        try {
+          localStorage.setItem(RECENTS_KEY, JSON.stringify(recents));
+        } catch {
+          // Not remembered; the list still holds for this run.
+        }
+        return { recents };
+      });
       const existing = get().tabs.find(
         (t) => t.connId === connId && t.database === database && t.title === name,
       );

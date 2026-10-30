@@ -17,7 +17,7 @@ export const SHORTCUTS = {
   refresh: { label: "Refresh results", group: "General", keys: ["Mod", "R"] },
   toggleSidebar: { label: "Show or hide the sidebar", group: "General", keys: ["Mod", "B"] },
   settings: { label: "Settings", group: "General", keys: ["Mod", ","] },
-  quickOpen: { label: "Open a table or connection", group: "General", keys: ["Mod", "P"] },
+  quickOpen: { label: "Open a table or connection", group: "General", keys: ["Mod", "K"] },
   commands: { label: "Show all commands", group: "General", keys: ["Mod", "Shift", "P"] },
 
   run: { label: "Run statement", group: "Editor", keys: ["Mod", "Enter"] },

@@ -13,9 +13,11 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SchemaObject } from "@/bindings/SchemaObject";
 import type { TableColumns } from "@/bindings/TableColumns";
+import { EnvBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { DropdownMenuButton, type MenuItem } from "@/components/ui/Menu";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { SegmentedTabs } from "@/components/ui/SegmentedTabs";
 import { cn } from "@/lib/cn";
 import { registerEditor } from "@/lib/editors";
@@ -203,26 +205,13 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
     });
   }, [tab.failure, tab.error]);
 
-  const startResize = (event: React.PointerEvent) => {
-    event.preventDefault();
-    const startY = event.clientY;
-    const start = editorHeight;
-    const move = (e: PointerEvent) =>
-      setEditorHeight(Math.max(80, Math.min(window.innerHeight - 220, start + e.clientY - startY)));
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-
   const viewSwitch = isTable && (
     <SegmentedTabs
       label="View"
       value={structure ? "structure" : "data"}
       onChange={(view) => setView(tab.id, view)}
-      className="w-40 shrink-0"
+      size="sm"
+      className="w-36 shrink-0"
       tabs={[
         { value: "data", label: "Data" },
         { value: "structure", label: "Structure" },
@@ -230,9 +219,12 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
     />
   );
 
-  /** The schema the tab runs against. The environment shows as the line along the top. */
-  const scope = tab.database && (
-    <span className="ml-1 min-w-0 truncate pr-1 text-muted text-sm">{tab.database}</span>
+  /** What the tab runs against: the environment (staging, production) and the schema. */
+  const scope = (
+    <span className="ml-1 flex min-w-0 items-center gap-1.5 pr-1">
+      {config && <EnvBadge environment={config.environment} />}
+      {tab.database && <span className="min-w-0 truncate text-muted text-sm">{tab.database}</span>}
+    </span>
   );
   /** The session's open transaction: shown only while there is one. */
   const transaction = capabilities?.transactions && tab.txOpen && (
@@ -402,14 +394,16 @@ export const QueryView = memo(function QueryView({ tab }: { tab: Tab }) {
           </div>
           {tab.inlineResults && (
             <>
-              <div
-                role="separator"
-                aria-orientation="horizontal"
-                onPointerDown={startResize}
-                className="group relative h-px shrink-0 cursor-row-resize bg-line"
-              >
-                <div className="absolute inset-x-0 -top-1 h-2 transition-colors-fast group-hover:bg-accent-soft" />
-              </div>
+              <ResizeHandle
+                orientation="horizontal"
+                onStart={() => {
+                  const start = editorHeight;
+                  return (delta) =>
+                    setEditorHeight(
+                      Math.max(80, Math.min(window.innerHeight - 220, start + delta)),
+                    );
+                }}
+              />
               <div className="min-h-0 flex-1">
                 <ResultsPane tab={tab} />
               </div>

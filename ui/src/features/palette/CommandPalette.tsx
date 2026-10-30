@@ -1,6 +1,6 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
 import { Database, Search, Server, Star, TerminalSquare } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { EnvBadge } from "@/components/ui/Badge";
 import { Kbd } from "@/components/ui/Kbd";
 import { iconKindOf, ObjectIcon } from "@/components/ui/ObjectIcon";
@@ -18,6 +18,8 @@ interface Item {
   label: string;
   /** Second line of context: connection and database, or the command's group. */
   detail?: string;
+  /** The heading the item sits under while nothing is typed ("Recent", "All"). */
+  section?: string;
   icon: ReactNode;
   trailing?: ReactNode;
   shortcut?: ShortcutId;
@@ -25,7 +27,7 @@ interface Item {
 }
 
 /**
- * Quick open (`Mod+P`): tables, views, routines and databases of the open connections, saved
+ * Quick open (`Mod+K`): tables, views, routines and databases of the open connections, saved
  * connections and favorites. Typing `>` first (or `Mod+Shift+P`) lists commands instead.
  */
 export function CommandPalette() {
@@ -56,11 +58,19 @@ function Palette({ mode }: { mode: PaletteMode }) {
   const isCommands = text.startsWith(">");
   const query = (isCommands ? text.slice(1) : text).trim();
   const objects = useObjectItems();
+  const recents = useRecentItems();
   const commands = useCommandItems();
-  const matches = useMemo(
-    () => search(isCommands ? commands : objects, query).slice(0, SHOWN),
-    [isCommands, commands, objects, query],
-  );
+  const matches = useMemo(() => {
+    if (isCommands) return search(commands, query).slice(0, SHOWN);
+    if (query || recents.length === 0) return search(objects, query).slice(0, SHOWN);
+    // Nothing typed: what was opened last comes first, then everything else once.
+    const ids = new Set(recents.map((r) => r.id.slice(1)));
+    const rest = objects.filter((o) => !ids.has(o.id.slice(1)));
+    return [
+      ...recents.map((item) => ({ ...item, section: "Recent" })),
+      ...rest.map((item) => ({ ...item, section: "All" })),
+    ].slice(0, SHOWN);
+  }, [isCommands, commands, objects, recents, query]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: back to the top on every new search
   useEffect(() => setIndex(0), [text]);
@@ -111,42 +121,69 @@ function Palette({ mode }: { mode: PaletteMode }) {
           </p>
         )}
         {matches.map((item, i) => (
-          <div
-            key={item.id}
-            role="option"
-            tabIndex={-1}
-            data-index={i}
-            aria-selected={i === index}
-            onMouseMove={() => setIndex(i)}
-            onClick={() => choose(item)}
-            onKeyDown={() => {}}
-            className={cn(
-              "flex h-8 cursor-default items-center gap-2.5 rounded-md px-2 text-base",
-              i === index ? "bg-accent text-accent-fg" : "text-fg",
+          <Fragment key={item.id}>
+            {item.section && item.section !== matches[i - 1]?.section && (
+              <div className="px-2 pt-2 pb-1 font-medium text-faint text-xs">{item.section}</div>
             )}
-          >
-            <span className={cn("shrink-0", i === index ? "text-accent-fg" : "text-muted")}>
-              {item.icon}
-            </span>
-            <span className="truncate">{item.label}</span>
-            {item.detail && (
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-sm",
-                  i === index ? "text-accent-fg/80" : "text-faint",
-                )}
-              >
-                {item.detail}
+            <div
+              role="option"
+              tabIndex={-1}
+              data-index={i}
+              aria-selected={i === index}
+              onMouseMove={() => setIndex(i)}
+              onClick={() => choose(item)}
+              onKeyDown={() => {}}
+              className={cn(
+                "flex h-8 cursor-default items-center gap-2.5 rounded-md px-2 text-base",
+                i === index ? "bg-accent text-accent-fg" : "text-fg",
+              )}
+            >
+              <span className={cn("shrink-0", i === index ? "text-accent-fg" : "text-muted")}>
+                {item.icon}
               </span>
-            )}
-            {!item.detail && <span className="flex-1" />}
-            {item.trailing}
-            {item.shortcut && <Kbd keys={keysOf(item.shortcut)} />}
-          </div>
+              <span className="truncate">{item.label}</span>
+              {item.detail && (
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-sm",
+                    i === index ? "text-accent-fg/80" : "text-faint",
+                  )}
+                >
+                  {item.detail}
+                </span>
+              )}
+              {!item.detail && <span className="flex-1" />}
+              {item.trailing}
+              {item.shortcut && <Kbd keys={keysOf(item.shortcut)} />}
+            </div>
+          </Fragment>
         ))}
       </div>
     </>
   );
+}
+
+/** The objects opened lately whose connection still exists, newest first. Their id matches the
+ * object's own item after the first letter, so the full list can leave them out. */
+function useRecentItems(): Item[] {
+  const recents = useApp((s) => s.recents);
+  const connections = useApp((s) => s.connections);
+  return useMemo(() => {
+    const { openObject } = useApp.getState();
+    return recents.flatMap((recent) => {
+      const config = connections.find((c) => c.id === recent.connId);
+      if (!config) return [];
+      return [
+        {
+          id: `r:${recent.connId}:${recent.database}:${recent.kind}:${recent.name}`,
+          label: recent.name,
+          detail: `${config.name} · ${recent.database}`,
+          icon: <ObjectIcon kind={iconKindOf(recent.kind)} />,
+          run: () => openObject(recent.connId, recent.database, recent.name, recent.kind),
+        },
+      ];
+    });
+  }, [recents, connections]);
 }
 
 /** Everything quick open can reach. Only what is loaded: open databases' objects. */

@@ -93,9 +93,13 @@ textarea,
   user-select: text;
 }
 
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+/* In the base layer, so a component's own focus style (`outline-none` plus a ring) wins: an
+   unlayered rule would beat every utility. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
 }
 
 ::selection {

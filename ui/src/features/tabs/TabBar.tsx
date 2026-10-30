@@ -163,7 +163,8 @@ export function TabBar({
           const active = tab.id === activeId;
           const environment = connections.find((c) => c.id === tab.connId)?.environment;
           const env = environment === "local" ? undefined : environment;
-          // The environment shows as a badge in the toolbar; tabs stay neutral and name it on hover.
+          // The environment shows as a badge in the tab's toolbar; tabs stay neutral and name it on
+          // hover.
           return (
             <ContextMenuArea key={tab.id} items={menu(tab.id)}>
               <div
@@ -185,12 +186,13 @@ export function TabBar({
                   if (e.button === 0) startDrag(tab.id, group, e.clientX);
                 }}
                 className={cn(
-                  "animate-pop group flex h-7 items-center gap-1.5 rounded-md text-base transition-colors-fast",
+                  "animate-pop group flex h-7 shrink-0 items-center gap-1.5 rounded-lg text-base transition-colors-fast",
                   tab.pinned ? "max-w-32 min-w-0 pr-3 pl-2.5" : "max-w-55 min-w-24 pr-1 pl-3",
-                  "shrink-0",
+                  // The active tab is a filled shape with no outline, like a browser's: a hairline
+                  // ring drew a lighter edge into the rounded corners.
                   active
                     ? cn(
-                        "bg-app shadow-[0_0_0_1px_var(--line)]",
+                        "bg-pressed",
                         // In a split, the focused group's tab is the one the keyboard acts on.
                         isFocused ? "text-fg" : "text-muted",
                       )
