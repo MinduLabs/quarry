@@ -51,8 +51,10 @@
         "windowSize": { "width": 660, "height": 400 },
         "appPosition": { "x": 180, "y": 190 },
         "applicationFolderPosition": { "x": 480, "y": 190 }
-     },
+      }
+    }
   },
+  "plugins": {
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGOUFCNjA5NTNGMUU4MzUKUldRMTZQRlRDYmFhenhBaEdQMXNKcXg1Sk9vemplcEZPTTEvUEtYaU91NEVCTUYwKzhpVUQwaUsK",
