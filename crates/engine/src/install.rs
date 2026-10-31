@@ -250,11 +250,8 @@ mod tests {
     use super::target;
     use crate::{Command, DriverInstallState, EngineEvents, EngineHandle, EngineOptions, Event};
 
-    /// Serves `files` by path over HTTP on `port`, one request per connection.
-    async fn serve_on(port: u16, files: HashMap<String, Vec<u8>>) {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
-            .await
-            .unwrap();
+    /// Serves `files` by path over HTTP on `listener`, one request per connection.
+    fn serve_on(listener: tokio::net::TcpListener, files: HashMap<String, Vec<u8>>) {
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
                 let files = files.clone();
@@ -358,12 +355,15 @@ mod tests {
         EngineHandle,
         Vec<DriverInstallState>,
     ) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        // Kept bound from here on: releasing the port and binding it again lets a parallel test
+        // take it in between.
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
-        drop(listener);
         let base = format!("http://127.0.0.1:{port}");
         let files = files(&base);
-        serve_on(port, files).await;
+        serve_on(listener, files);
         let drivers = std::env::temp_dir().join(format!("quarry-drivers-{}", uuid::Uuid::new_v4()));
         let (engine, events) = engine(&drivers, format!("{base}/drivers.json"));
         engine
