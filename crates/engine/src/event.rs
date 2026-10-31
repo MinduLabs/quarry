@@ -120,6 +120,11 @@ pub enum Event {
         /// The performance log is on: the client may send its own timings (`PerfMarks`).
         perf: bool,
     },
+    /// A newer Quarry is released; `url` is its page on GitHub.
+    UpdateAvailable {
+        version: String,
+        url: String,
+    },
     /// General message, shown as a toast.
     Notice {
         kind: NoticeKind,

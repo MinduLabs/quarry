@@ -13,7 +13,7 @@ body:
     id: version
     attributes:
       label: Quarry version
-      placeholder: "0.0.1 (About dialog)"
+      placeholder: "As shown at the bottom of the sidebar"
     validations:
       required: true
   - type: input

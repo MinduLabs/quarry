@@ -138,10 +138,12 @@ jobs:
       - run: desktop-file-validate packaging/linux/io.github.mindulabs.Quarry.desktop
       # appstreamcli 0.15 on Ubuntu 22.04 predates AppStream 1.0 and flags its
       # <url type="vcs-browser"> as invalid. Fail on every error and every other warning.
+      # The metainfo as the Flatpak installs it, with the release metainfo.sh adds.
       - name: Validate metainfo
         run: |
+          sh packaging/linux/metainfo.sh "$RUNNER_TEMP/io.github.mindulabs.Quarry.metainfo.xml"
           appstreamcli validate --no-net --format yaml \
-            packaging/linux/io.github.mindulabs.Quarry.metainfo.xml > appstream.yml || true
+            "$RUNNER_TEMP/io.github.mindulabs.Quarry.metainfo.xml" > appstream.yml || true
           grep -q '^Validator:' appstream.yml
           cat appstream.yml
           awk '

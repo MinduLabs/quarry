@@ -51,25 +51,6 @@ fn target() -> Option<&'static str> {
     }
 }
 
-fn http_client() -> Result<reqwest::Client, String> {
-    let roots = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    };
-    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|err| err.to_string())?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
-    reqwest::Client::builder()
-        .tls_backend_preconfigured(tls)
-        .connect_timeout(Duration::from_secs(15))
-        .user_agent(concat!("Quarry/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|err| err.to_string())
-}
-
 impl Engine {
     pub(crate) async fn install_driver(&self, driver: DriverId) {
         let state = match self.install(&driver).await {
@@ -97,7 +78,7 @@ impl Engine {
                 std::env::consts::ARCH
             )
         })?;
-        let client = http_client()?;
+        let client = crate::http::client()?;
 
         let manifest_url = self
             .driver_manifest

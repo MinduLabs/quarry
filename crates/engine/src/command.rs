@@ -35,6 +35,9 @@ pub enum Command {
     Ping {
         id: u32,
     },
+    /// Whether a newer Quarry is released → `Event::UpdateAvailable`, only when one is. GitHub
+    /// is asked once per run; asking again repeats that answer.
+    CheckForUpdate,
     /// Read saved connections → `Event::Connections`.
     LoadConnections,
     /// What the user can connect to, and which of it this build can open → `Event::DataSources`.

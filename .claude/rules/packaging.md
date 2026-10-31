@@ -30,7 +30,8 @@ this: [ARCHITECTURE.md › Packaging](../../docs/ARCHITECTURE.md#packaging).
 
 - App ID `io.github.mindulabs.Quarry` appears in the Tauri `identifier`, desktop entry, metainfo,
   Flatpak manifest and `justfile`. Change it everywhere or nowhere.
-- The version lives in `Cargo.toml` `[workspace.package]` and `package.json`. Keep them equal.
+- The version is written only in `Cargo.toml` `[workspace.package]`. Everything else reads it
+  through `packaging/version.sh`; the metainfo gets its release from `packaging/linux/metainfo.sh`.
 - `packaging/flatpak/cargo-sources.json` is generated from `Cargo.lock`. Never hand-edit it.
 - Tauri capabilities are least privilege: add a permission only for an API the UI really calls. The
   CSP allows no remote origins.
@@ -39,6 +40,8 @@ this: [ARCHITECTURE.md › Packaging](../../docs/ARCHITECTURE.md#packaging).
 
 - Actions are pinned by commit SHA with the release in a comment. Update both together.
 - Every job has `timeout-minutes`.
-- A new third-party action needs a reason. No secrets or signing material in workflows.
+- A new third-party action needs a reason. No secrets or signing material in workflows, except the
+  updater key, read from the `TAURI_SIGNING_PRIVATE_KEY` and `_PASSWORD` repository secrets by
+  `packaging/release-build.sh`.
 - A PR that changes `release.yml` builds packages without publishing. Only a `v*` tag publishes.
 - Read the failing job's log before re-running it.

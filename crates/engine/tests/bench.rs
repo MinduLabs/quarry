@@ -67,6 +67,7 @@ async fn query_latency() {
         perf_log: None,
         driver_dir: None,
         driver_manifest: None,
+        update_url: None,
         in_process_drivers: Default::default(),
     })
     .unwrap();

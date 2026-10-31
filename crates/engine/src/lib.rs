@@ -19,6 +19,7 @@ mod export;
 mod export_job;
 mod favorites;
 mod history;
+mod http;
 mod import;
 mod install;
 mod metadata;
@@ -26,6 +27,7 @@ mod perf;
 mod query;
 mod schema;
 mod session;
+mod update;
 mod workspace;
 
 #[cfg(test)]
@@ -78,6 +80,8 @@ pub struct EngineOptions {
     /// The list of downloadable drivers; `None` = the `QUARRY_DRIVER_MANIFEST` environment
     /// variable, or this version's release.
     pub driver_manifest: Option<String>,
+    /// Where the latest release is described; `None` = GitHub. Tests only.
+    pub update_url: Option<String>,
     /// Drivers run inside the engine instead of from a binary. Tests only: Quarry itself runs
     /// every driver from its binary.
     pub in_process_drivers: InProcessDrivers,

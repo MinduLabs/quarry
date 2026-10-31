@@ -9,7 +9,7 @@
     <name>Quarry contributors</name>
   </developer>
   <description>
-    <p>Quarry is a fast, open-source database client. Browse schemas and run SQL safely against MySQL and MariaDB; PostgreSQL and SQLite are coming.</p>
+    <p>Quarry is a fast, open-source database client for MySQL, MariaDB, PostgreSQL and Microsoft SQL Server. Browse schemas, run SQL, edit rows, and import and export data, with every write on a production connection asking first. Each database driver is downloaded the first time you need it.</p>
     <p>Quarry is in early development.</p>
   </description>
   <launchable type="desktop-id">io.github.mindulabs.Quarry.desktop</launchable>
@@ -28,11 +28,6 @@
     <control>keyboard</control>
     <control>pointing</control>
   </supports>
-  <releases>
-    <release version="0.0.1" date="2026-10-16">
-      <description>
-        <p>First development build: application skeleton.</p>
-      </description>
-    </release>
-  </releases>
+  <!-- metainfo.sh adds this version's release from Cargo.toml at build time. -->
+  <releases/>
 </component>

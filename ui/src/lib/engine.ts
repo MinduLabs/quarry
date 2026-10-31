@@ -6,8 +6,11 @@
  *
  * Command/Event types are generated from Rust (`just bindings`); never edit ui/src/bindings.
  */
+import { BundleType, getBundleType } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import type { Command } from "@/bindings/Command";
 import type { CompletionContext } from "@/bindings/CompletionContext";
 import type { Event } from "@/bindings/Event";
@@ -67,4 +70,41 @@ export async function chooseImportPath(): Promise<string | null> {
     filters: [{ name: "CSV or TSV", extensions: ["csv", "tsv", "txt"] }],
   });
   return typeof path === "string" ? path : null;
+}
+
+/** Open a release page in the default browser. The capability allows no other URL. */
+export async function openReleasePage(url: string): Promise<void> {
+  await openUrl(url);
+}
+
+/** Only the macOS app and the AppImage can replace themselves. A .deb or a Flatpak is updated by
+ * its package manager, or by hand from the release page. */
+export async function canSelfUpdate(): Promise<boolean> {
+  const type = await getBundleType();
+  return type === BundleType.App || type === BundleType.AppImage;
+}
+
+/** A newer release from the release's `latest.json`, or null. */
+export async function findSelfUpdate(): Promise<Update | null> {
+  return check();
+}
+
+/** Download `update`, check its signature and replace the installed app. `onProgress` gets the
+ * share done (0 to 1), or null while the size is unknown. */
+export async function installUpdate(
+  update: Update,
+  onProgress: (share: number | null) => void,
+): Promise<void> {
+  let total: number | null = null;
+  let received = 0;
+  await update.downloadAndInstall((event) => {
+    if (event.event === "Started") total = event.data.contentLength ?? null;
+    if (event.event === "Progress") received += event.data.chunkLength;
+    onProgress(total ? Math.min(received / total, 1) : null);
+  });
+}
+
+/** Quit and start the app again, which runs the version just installed. */
+export async function restartApp(): Promise<void> {
+  await invoke("restart_app");
 }

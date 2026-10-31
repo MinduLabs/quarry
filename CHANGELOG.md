@@ -5,11 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-31
+
+The first public release: a fast, open-source database client for MySQL, MariaDB, PostgreSQL and
+Microsoft SQL Server on Linux and macOS. How to install it:
+[README › Install](https://github.com/MinduLabs/quarry#install).
+
+- Database drivers are not in the package. Each is downloaded from this release the first time a
+  connection needs it, then checked before it runs. The `quarry-driver-*` files and `drivers.json`
+  attached to the release are those downloads: there is no need to fetch them by hand.
+- The macOS build is not notarized yet. The first time, right-click the app and choose **Open**, or
+  run `xattr -cr /Applications/Quarry.app`.
+- From this release on, the macOS app and the AppImage install new releases themselves and restart
+  into them. The `.deb` and the Flatpak show when a new release is out and link to it.
+
 ### Changed
 - Quick open is Ctrl+K (⌘K), as in most apps; Ctrl+Shift+P still lists every command.
 - Controls sit with what they act on: an editor bar for SQL (Run turns into Stop while running), a data bar above every grid (reload, filter, columns, add and delete rows, save), and the status bar for pages. Table tabs have no separate toolbar. The row total is counted by clicking it.
 
 ### Added
+- Import CSV and TSV files into a table, from the table's menu in the sidebar or the command palette: map the file's columns, see the first rows, then insert them in one transaction. A refused row keeps nothing and is named; a duplicate key stops the import, skips the row or overwrites it (overwriting asks first). Production asks before any import.
+- Update available at the bottom of the sidebar when a newer Quarry is released. The macOS app and the AppImage download it, then restart into it; other packages open the release page.
 - Quick open lists the tables and routines you opened last first, under Recent, before everything else.
 - Exporting every row of a query or a table works with MySQL, MariaDB, PostgreSQL and SQL Server, read no faster than the file is written.
 - PostgreSQL and Microsoft SQL Server connections, next to MySQL and MariaDB. Their schemas are the databases in the sidebar. Values keep their exact type (numeric, intervals, network types, arrays, date and time with offsets).
@@ -93,3 +109,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - A database with thousands of tables no longer slows the app: the sidebar tree renders only the rows in view (opening a 5,000-table database went from 1.3 s to about 60 ms in a development build, and typing in the editor while it is open from 1 s to about 10 ms per key).
 - Typing in the editor no longer re-renders the results of every open tab, and dragging a selection no longer re-renders the toolbar and editor. Searching the history no longer slows down a query streaming in another tab.
 - A database refresh that fails keeps the tables already shown in the sidebar.
+
+[Unreleased]: https://github.com/MinduLabs/quarry/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/MinduLabs/quarry/releases/tag/v0.1.0
