@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Database, Layers, Server } from "lucide-react";
+import { Database, Download, Layers, Server } from "lucide-react";
 import { memo, useMemo, useRef } from "react";
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { ForeignKey } from "@/bindings/ForeignKey";
@@ -15,6 +15,7 @@ import {
   copyText,
   type DbNode,
   homeDatabase,
+  missingDriver,
   shownSchemas,
   type TreeTableInfo,
   treeKey,
@@ -448,6 +449,7 @@ function ConnectionLine({
   const s = useApp.getState();
   const status = node?.status.kind ?? "idle";
   const connected = status === "connected";
+  const isDriverMissing = useApp((st) => Boolean(missingDriver(st.dataSources, config.driver)));
   const menu: MenuItem[] = [
     ...(connected
       ? [
@@ -474,7 +476,12 @@ function ConnectionLine({
             : []),
           { label: "Disconnect", onSelect: () => s.disconnect(conn) },
         ]
-      : [{ label: "Connect", onSelect: () => s.toggleConnection(conn) }]),
+      : [
+          {
+            label: isDriverMissing ? "Download driver and connect…" : "Connect",
+            onSelect: () => s.toggleConnection(conn),
+          },
+        ]),
     {
       label: isFavorite ? "Remove from favorites" : "Add to favorites",
       onSelect: () => s.toggleConnectionFavorite(conn),
@@ -506,7 +513,14 @@ function ConnectionLine({
             {connected && node && <SchemaCount config={config} node={node} />}
             {status === "connecting" && <Spinner size={12} />}
             {status === "connected" && <span className="size-1.5 rounded-full bg-env-local" />}
-            {status === "failed" && <span className="size-1.5 rounded-full bg-danger" />}
+            {status === "failed" && !isDriverMissing && (
+              <span className="size-1.5 rounded-full bg-danger" />
+            )}
+            {isDriverMissing && (
+              <span title="Driver not downloaded" className="flex text-warning">
+                <Download size={12} strokeWidth={2} />
+              </span>
+            )}
           </span>
         }
       />
@@ -566,6 +580,10 @@ function DatabaseLine({
         ]
       : []),
     { label: "Refresh", onSelect: () => s.reloadObjects(conn, db.name) },
+    {
+      label: "Compare schema with…",
+      onSelect: () => s.openSchemaCompare({ conn, database: db.name }),
+    },
     { label: "Copy name", onSelect: () => copyText(db.name) },
     ...(schema
       ? [

@@ -21,7 +21,9 @@ import type { LogEntry } from "@/bindings/LogEntry";
 import type { ObjectKind } from "@/bindings/ObjectKind";
 import type { RowChange } from "@/bindings/RowChange";
 import type { SchemaChange } from "@/bindings/SchemaChange";
+import type { SchemaDiff } from "@/bindings/SchemaDiff";
 import type { SchemaObject } from "@/bindings/SchemaObject";
+import type { SchemaSide } from "@/bindings/SchemaSide";
 import type { ServerInfoKind } from "@/bindings/ServerInfoKind";
 import type { ServerInfoRow } from "@/bindings/ServerInfoRow";
 import type { TableColumns } from "@/bindings/TableColumns";
@@ -395,6 +397,24 @@ export interface SchemaReview {
   error: string | null;
 }
 
+/** The schema compare dialog: two databases, their differences, and applying them. */
+export interface SchemaCompare {
+  source: SchemaSide | null;
+  target: SchemaSide | null;
+  /** The comparison running now. */
+  request: number | null;
+  diff: SchemaDiff | null;
+  error: string | null;
+  /** The script for the target, shown before it runs. */
+  review: {
+    request: number;
+    statements: string[];
+    warning: string | null;
+    running: boolean;
+    error: string | null;
+  } | null;
+}
+
 export type PaletteMode = "open" | "commands";
 
 /** What an import or export works on. */
@@ -551,7 +571,15 @@ export type DialogState =
   | { mode: "new" }
   | { mode: "edit"; id: string }
   | { mode: "delete"; id: string }
+  /** Connecting needs a driver that is not on this computer yet. */
+  | { mode: "driver"; id: string }
   | null;
+
+/** The data source a connection's driver comes from, when that driver still has to be downloaded.
+ * A driver missing from the catalog is left to the engine, which says so on connect. */
+export function missingDriver(sources: DataSource[], driver: string): DataSource | undefined {
+  return sources.find((s) => s.driver === driver && !s.is_installed);
+}
 
 export interface AppState {
   ready: boolean;
@@ -715,6 +743,17 @@ export interface AppState {
   alterSchema: (conn: string, change: SchemaChange) => void;
   /** Run the reviewed change, or close the review (back to its form, if one made it). */
   answerSchemaReview: (run: boolean) => void;
+  /** `null` while the schema compare dialog is closed. */
+  schemaCompare: SchemaCompare | null;
+  /** Open schema compare, with `source` picked when it is given. */
+  openSchemaCompare: (source?: SchemaSide) => void;
+  closeSchemaCompare: () => void;
+  setCompareSide: (which: "source" | "target", side: SchemaSide) => void;
+  runSchemaCompare: () => void;
+  /** Ask the engine for the target's script; it is shown before anything runs. */
+  reviewSchemaDiff: () => void;
+  /** Run the reviewed script, or close the review. */
+  answerSchemaDiff: (run: boolean) => void;
   /** Load a database's objects again, keeping the shown ones until the new list arrives. */
   reloadObjects: (connId: string, database: string) => void;
   /** Open a table's Structure view. */
@@ -902,6 +941,8 @@ let selfUpdate: Update | null = null;
 let releasePage: string | null = null;
 let nextRequest = 1;
 
+const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
 /** A driver download stays on screen at least this long, so a fast one is seen, not a flash. */
 const INSTALL_SHOWN_MS = 1000;
 /** And its "installed" line at least this long. */
@@ -959,6 +1000,8 @@ function refreshImportPreview(): void {
 /** `InsertSql` requests waiting for their text: request id → rows copied. */
 const insertRequests = new Map<number, number>();
 
+/** Schema compare scripts waiting for their review. */
+const schemaDiffRequests = new Set<number>();
 /** Schema changes waiting for their first `SchemaReview` or `SchemaChanged`. */
 const schemaRequests = new Set<number>();
 
@@ -1403,6 +1446,15 @@ export const useApp = create<AppState>()((set, get) => {
           const driver = event.driver;
           set((s) => ({ driverInstalls: { ...s.driverInstalls, [driver]: event.state } }));
           if (event.state.kind !== "Installed") break;
+          // The user asked to connect and was sent here first: carry on now.
+          const dialog = get().dialog;
+          if (
+            dialog?.mode === "driver" &&
+            get().connections.find((c) => c.id === dialog.id)?.driver === driver
+          ) {
+            set({ dialog: null });
+            send({ type: "Connect", id: dialog.id });
+          }
           const elapsed = performance.now() - (installStarted.get(driver) ?? 0);
           installStarted.delete(driver);
           setTimeout(
@@ -1733,6 +1785,58 @@ export const useApp = create<AppState>()((set, get) => {
           copyText(event.text, `Copied ${rows === 1 ? "1 row" : `${rows} rows`} as INSERT`);
           break;
         }
+        case "SchemaCompared": {
+          const compare = get().schemaCompare;
+          if (compare?.request !== event.request) break;
+          set({
+            schemaCompare: { ...compare, request: null, diff: event.diff, error: event.error },
+          });
+          break;
+        }
+        case "SchemaDiffReview": {
+          const compare = get().schemaCompare;
+          if (!schemaDiffRequests.delete(event.request) || !compare) break;
+          set({
+            schemaCompare: {
+              ...compare,
+              review: {
+                request: event.request,
+                statements: event.statements,
+                warning: event.warning,
+                running: false,
+                error: null,
+              },
+            },
+          });
+          break;
+        }
+        case "SchemaDiffApplied": {
+          const compare = get().schemaCompare;
+          // Refused before review (a read-only connection): say why in the dialog.
+          if (schemaDiffRequests.delete(event.request)) {
+            if (compare) set({ schemaCompare: { ...compare, error: event.error } });
+            break;
+          }
+          const review = compare?.review;
+          if (!compare?.diff || review?.request !== event.request) break;
+          if (event.error) {
+            const ran = event.applied > 0 ? ` after ${plural(event.applied, "statement")}` : "";
+            set({
+              schemaCompare: {
+                ...compare,
+                review: { ...review, running: false, error: `Stopped${ran}: ${event.error}` },
+              },
+            });
+            break;
+          }
+          const { target } = compare.diff;
+          set({ schemaCompare: { ...compare, review: null } });
+          get().toast("success", `Ran ${plural(event.applied, "statement")} on ${target.database}`);
+          get().reloadObjects(target.conn, target.database);
+          // Compare again, so the dialog shows what is left (keys Quarry cannot script).
+          get().runSchemaCompare();
+          break;
+        }
         case "SchemaReview": {
           if (!schemaRequests.delete(event.request)) break;
           // The review opens over the form, so going back keeps what was typed.
@@ -1960,6 +2064,8 @@ export const useApp = create<AppState>()((set, get) => {
       set({ active: { connId: id, database: config?.database ?? null } });
       if (node.status.kind === "connected") {
         patchNode(id, (n) => ({ expanded: !n.expanded }));
+      } else if (config && missingDriver(get().dataSources, config.driver)) {
+        set({ dialog: { mode: "driver", id } });
       } else if (node.status.kind !== "connecting") {
         send({ type: "Connect", id });
       }
@@ -2563,6 +2669,84 @@ export const useApp = create<AppState>()((set, get) => {
         request: review.request,
         conn: review.conn,
         change: review.change,
+        confirmed: true,
+      });
+    },
+    schemaCompare: null,
+    openSchemaCompare: (source) => {
+      const s = get();
+      const connected = s.connections.filter((c) => s.nodes[c.id]?.status.kind === "connected");
+      const sideOf = (conn: string, skip?: string): SchemaSide | null => {
+        const names = (s.nodes[conn]?.databases ?? []).map((d) => d.name);
+        const database = names.find((n) => n !== skip) ?? names[0];
+        return database === undefined ? null : { conn, database };
+      };
+      // The database the user works in, else the connection's default one.
+      const active = s.active && connected.some((c) => c.id === s.active?.connId) ? s.active : null;
+      const home =
+        active ??
+        (connected[0] ? { connId: connected[0].id, database: connected[0].database } : null);
+      const first =
+        source ??
+        (home?.database
+          ? { conn: home.connId, database: home.database }
+          : home
+            ? sideOf(home.connId)
+            : null);
+      set({
+        schemaCompare: {
+          source: first,
+          // Another database of the same connection is the usual target.
+          target: first ? sideOf(first.conn, first.database) : null,
+          request: null,
+          diff: null,
+          error: null,
+          review: null,
+        },
+      });
+    },
+    closeSchemaCompare: () => set({ schemaCompare: null }),
+    setCompareSide: (which, side) =>
+      set((s) =>
+        s.schemaCompare
+          ? { schemaCompare: { ...s.schemaCompare, [which]: side, diff: null, error: null } }
+          : s,
+      ),
+    runSchemaCompare: () => {
+      const compare = get().schemaCompare;
+      if (!compare?.source || !compare.target || compare.request !== null) return;
+      const request = nextRequest++;
+      set({ schemaCompare: { ...compare, request, diff: null, error: null } });
+      send({ type: "CompareSchemas", request, source: compare.source, target: compare.target });
+    },
+    reviewSchemaDiff: () => {
+      const compare = get().schemaCompare;
+      const changes = compare?.diff?.tables.flatMap((t) => t.changes) ?? [];
+      if (!compare?.diff || changes.length === 0) return;
+      const request = nextRequest++;
+      schemaDiffRequests.add(request);
+      send({
+        type: "ApplySchemaDiff",
+        request,
+        conn: compare.diff.target.conn,
+        changes,
+        confirmed: false,
+      });
+    },
+    answerSchemaDiff: (run) => {
+      const compare = get().schemaCompare;
+      const review = compare?.review;
+      if (!compare?.diff || !review || review.running) return;
+      if (!run) {
+        set({ schemaCompare: { ...compare, review: null } });
+        return;
+      }
+      set({ schemaCompare: { ...compare, review: { ...review, running: true, error: null } } });
+      send({
+        type: "ApplySchemaDiff",
+        request: review.request,
+        conn: compare.diff.target.conn,
+        changes: compare.diff.tables.flatMap((t) => t.changes),
         confirmed: true,
       });
     },

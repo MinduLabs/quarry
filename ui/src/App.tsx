@@ -9,6 +9,7 @@ import { onRender } from "@/lib/perf";
 import { isMac } from "@/lib/platform";
 import { pendingWork, saveWorkspace, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
+import { DriverDialog } from "./features/connections/DriverDialog";
 import { ExportDialog } from "./features/export/ExportDialog";
 import { ExportProgress } from "./features/export/ExportProgress";
 import { HistoryDialog } from "./features/history/HistoryDialog";
@@ -19,6 +20,7 @@ import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
 import { ConfirmDeleteRowsDialog } from "./features/query/ConfirmDeleteRowsDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { ResultsPanel } from "./features/query/ResultsPanel";
+import { SchemaCompareDialog } from "./features/schema/SchemaCompareDialog";
 import { SchemaFormDialog } from "./features/schema/SchemaFormDialog";
 import { SchemaReviewDialog } from "./features/schema/SchemaReviewDialog";
 import { ServerInfoDialog } from "./features/server/ServerInfoDialog";
@@ -176,12 +178,14 @@ export function App() {
       </div>
       <ConnectionDialog />
       <DeleteConnectionDialog />
+      <DriverDialog />
       <ConfirmRunDialog />
       <ConfirmChangesDialog />
       <ConfirmDeleteRowsDialog />
       <SettingsDialog />
       <SchemaFormDialog />
       <SchemaReviewDialog />
+      <SchemaCompareDialog />
       <ExportDialog />
       <ExportProgress />
       <ImportDialog />

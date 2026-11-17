@@ -29,7 +29,8 @@
   Query results are editable when they come from one table.
 - **Schema:** a sidebar tree of tables, views, routines, triggers and events; a Structure view of
   columns, indexes, foreign keys and DDL; add, change and drop columns, indexes, tables and
-  databases. Every change shows its SQL before it runs.
+  databases. Compare two databases and apply the script that makes one match the other. Every
+  change shows its SQL before it runs.
 - **Export:** a query result to SQL (INSERT, UPDATE, WHERE clause), Excel or CSV; a whole table
   of any size to CSV, TSV, JSON, NDJSON, SQL INSERT or Excel, with progress and cancel.
 - **Import:** CSV and TSV into a table, with column mapping and a preview. Rows go in one
