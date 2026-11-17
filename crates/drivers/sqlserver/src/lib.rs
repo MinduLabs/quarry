@@ -489,6 +489,10 @@ impl Session for SqlServerSession {
         introspect::schemas(&mut self.client).await
     }
 
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        introspect::current_schema(&mut self.client).await
+    }
+
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>> {
         introspect::objects(&mut self.client, database).await
     }

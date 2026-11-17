@@ -4,7 +4,7 @@ import { Checkbox } from "@/components/ui/Checkbox";
 import { Dialog } from "@/components/ui/Dialog";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { cn } from "@/lib/cn";
-import { shownSchemas, useApp } from "@/store/app";
+import { homeDatabase, shownSchemas, useApp } from "@/store/app";
 
 /**
  * Every schema of a connection with a tick box; the tree lists only the ticked ones. Ticks are a
@@ -13,7 +13,8 @@ import { shownSchemas, useApp } from "@/store/app";
 export function SchemaPickerDialog() {
   const conn = useApp((s) => s.schemaPicker);
   const config = useApp((s) => s.connections.find((c) => c.id === conn));
-  const databases = useApp((s) => (conn ? s.nodes[conn]?.databases : undefined));
+  const node = useApp((s) => (conn ? s.nodes[conn] : undefined));
+  const databases = node?.databases;
   const saved = useApp((s) => (conn ? s.schemaFilter[conn] : undefined));
   const { setShownSchemas, setSchemaPicker } = useApp.getState();
   const [filter, setFilter] = useState("");
@@ -23,7 +24,8 @@ export function SchemaPickerDialog() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: a draft starts when the dialog opens
   useEffect(() => {
     if (!conn) return;
-    setDraft(new Set(shownSchemas(config?.database ?? null, databases ?? [], saved)));
+    const home = config ? homeDatabase(config, node) : null;
+    setDraft(new Set(shownSchemas(home, databases ?? [], saved)));
     setFilter("");
   }, [conn]);
 

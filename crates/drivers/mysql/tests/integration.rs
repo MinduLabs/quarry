@@ -32,6 +32,11 @@ async fn connects_and_lists_schema() {
     assert!(session.server_version().starts_with('8'));
     let dbs = session.list_databases().await.unwrap();
     assert!(dbs.contains(&"shop".to_owned()) && dbs.contains(&"inventory".to_owned()));
+    // The database the connection opened, when it names one.
+    assert_eq!(
+        session.current_database().await.unwrap(),
+        cfg.config.database.clone()
+    );
     let objects = session.list_objects("shop").await.unwrap();
     assert!(
         objects

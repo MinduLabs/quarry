@@ -70,6 +70,12 @@ pub async fn schemas(client: &mut Conn) -> Result<Vec<String>> {
     .collect()
 }
 
+/// The user's default schema (usually `dbo`).
+pub async fn current_schema(client: &mut Conn) -> Result<Option<String>> {
+    let found = rows(client, "SELECT SCHEMA_NAME()", &[]).await?;
+    found.first().map(|row| text(row, 0)).transpose()
+}
+
 pub async fn objects(client: &mut Conn, schema: &str) -> Result<Vec<SchemaObject>> {
     let found = rows(
         client,

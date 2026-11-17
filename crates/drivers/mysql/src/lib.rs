@@ -236,6 +236,15 @@ impl Session for MysqlSession {
         self.conn.query("SHOW DATABASES").await.map_err(map_err)
     }
 
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        let current: Option<Option<String>> = self
+            .conn
+            .query_first("SELECT DATABASE()")
+            .await
+            .map_err(map_err)?;
+        Ok(current.flatten())
+    }
+
     async fn server_info(&mut self, kind: ServerInfoKind) -> Result<Vec<ServerInfoRow>> {
         let sql = match kind {
             ServerInfoKind::Variables => "SHOW GLOBAL VARIABLES",

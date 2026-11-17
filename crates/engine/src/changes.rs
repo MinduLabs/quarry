@@ -196,9 +196,11 @@ impl Engine {
             .await;
         let (error, databases) = (ran.error, ran.databases);
         if let Some(databases) = databases {
+            // A new or dropped database does not move where the session is.
             self.emit(Event::Databases {
                 id: conn,
                 databases,
+                current: None,
             });
         }
         self.emit(done(change, error));

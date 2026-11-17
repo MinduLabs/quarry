@@ -316,6 +316,8 @@ impl Engine {
             Ok(dbs) => dbs,
             Err(err) => return self.emit(failed(describe(&err))),
         };
+        // A driver built before `current_database` existed answers with an error: no current.
+        let current = session.current_database().await.ok().flatten();
         let server_version = session.server_version();
         let capabilities = self
             .driver(&resolved.config.driver)
@@ -329,7 +331,11 @@ impl Engine {
                 capabilities,
             },
         });
-        self.emit(Event::Databases { id, databases });
+        self.emit(Event::Databases {
+            id,
+            databases,
+            current,
+        });
     }
 
     pub(crate) async fn disconnect(&self, id: ConnId) {

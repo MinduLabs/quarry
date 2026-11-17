@@ -156,6 +156,9 @@ pub enum Event {
     Databases {
         id: ConnId,
         databases: Vec<String>,
+        /// The entry the session starts in (the current schema, where the list holds schemas):
+        /// the tree shows it first. `None` when unknown, also from drivers built before it.
+        current: Option<String>,
     },
     /// Either `objects` or `error` is set.
     Objects {
