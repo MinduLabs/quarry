@@ -4,6 +4,7 @@
 //! [`EngineHandle`] and receives [`Event`]s from [`EngineEvents`]. Every command runs in its
 //! own task, so a long query never blocks other commands.
 
+mod aws_iam;
 mod browse;
 mod changes;
 mod command;
@@ -70,7 +71,9 @@ pub struct EngineOptions {
     pub data_dir: Option<PathBuf>,
     /// `known_hosts` for SSH tunnels; `None` = `~/.ssh/known_hosts`.
     pub known_hosts: Option<PathBuf>,
-    /// Do not touch the system keyring (tests, environments without one).
+    /// Do not touch the system keyring (tests, environments without one). Also set by the
+    /// `QUARRY_NO_KEYRING` environment variable (`1`), so a development sandbox (`./qd`) keeps
+    /// its test passwords in memory only.
     pub disable_keyring: bool,
     /// Performance log (`perf.jsonl`); `None` = the `QUARRY_PERF` environment variable decides.
     pub perf_log: Option<PathBuf>,

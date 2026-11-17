@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Sign in to Amazon RDS and Aurora (MySQL, MariaDB, PostgreSQL) with AWS IAM instead of a password: choose AWS IAM in the connection's settings. Quarry signs a token with your AWS profile (SSO and roles included) for every session.
+
 ### Fixed
 - A saved connection whose driver is not downloaded is marked in the sidebar, and connecting to it offers to download the driver, then connects.
 

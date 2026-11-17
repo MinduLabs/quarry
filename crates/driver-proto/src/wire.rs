@@ -56,7 +56,8 @@ pub enum ToDriver {
 #[derive(Serialize, Deserialize)]
 pub enum Call {
     Connect {
-        config: ConnectionConfig,
+        /// Boxed so every other call stays small; serialized the same as unboxed.
+        config: Box<ConnectionConfig>,
         password: Option<String>,
     },
     SchemaChange {
@@ -378,7 +379,7 @@ mod tests {
     #[test]
     fn debug_hides_the_password() {
         let call = Call::Connect {
-            config: ConnectionConfig {
+            config: Box::new(ConnectionConfig {
                 id: ConnId::new(),
                 name: "x".into(),
                 driver: DriverId("mysql".into()),
@@ -393,7 +394,8 @@ mod tests {
                 read_only: false,
                 color: None,
                 group: None,
-            },
+                auth: Default::default(),
+            }),
             password: Some("hunter2".into()),
         };
         let text = format!("{call:?}");

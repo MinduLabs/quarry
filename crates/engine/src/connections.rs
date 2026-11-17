@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use quarry_driver_api::{ResolvedConfig, Session, SharedCancel};
-use quarry_model::{ConnId, ConnectionConfig};
+use quarry_model::{ConnId, ConnectionConfig, DbAuth, SslMode};
 use quarry_store::SecretKind;
 use quarry_tunnel::{Tunnel, TunnelSpec};
 
@@ -154,9 +154,16 @@ impl Engine {
         ssh_secret: Option<Password>,
         tunnel: TunnelUse,
     ) -> Result<(ResolvedConfig, Option<Arc<Tunnel>>), String> {
-        let password = match password {
-            Some(Password(p)) => Some(p),
-            None => self.stored_secret(config.id, SecretKind::Database).await,
+        let password = match &config.auth {
+            // Signed for the RDS host itself, before a tunnel takes its place below.
+            DbAuth::AwsIam { profile, region } => Some(
+                self.aws_iam_token(&config, profile.as_deref(), region.as_deref())
+                    .await?,
+            ),
+            DbAuth::Password => match password {
+                Some(Password(p)) => Some(p),
+                None => self.stored_secret(config.id, SecretKind::Database).await,
+            },
         };
         let Some(ssh) = config.ssh.clone() else {
             return Ok((ResolvedConfig { config, password }, None));
@@ -214,6 +221,37 @@ impl Engine {
                 None
             }
         }
+    }
+
+    /// A fresh AWS IAM token for `config`, after checking the connection can use one.
+    async fn aws_iam_token(
+        &self,
+        config: &ConnectionConfig,
+        profile: Option<&str>,
+        region: Option<&str>,
+    ) -> Result<String, String> {
+        // A driver that is not installed yet is reported by `open_session`.
+        if let Some(driver) = self.driver(&config.driver)
+            && !driver.capabilities().aws_iam
+        {
+            return Err(format!(
+                "The {} driver cannot sign in with AWS IAM. Choose Password in the connection's settings, or update its driver.",
+                config.driver.0
+            ));
+        }
+        if matches!(config.ssl, SslMode::Disable | SslMode::Prefer) {
+            return Err(
+                "AWS IAM sign-in sends its token only over TLS. Set SSL to Required or stricter in the connection's settings."
+                    .to_owned(),
+            );
+        }
+        let missing = |what: &str| format!("Set the {what} to sign in with AWS IAM.");
+        let target = crate::aws_iam::Target {
+            host: config.host.as_deref().ok_or_else(|| missing("host"))?,
+            port: config.port.ok_or_else(|| missing("port"))?,
+            user: config.user.as_deref().ok_or_else(|| missing("user"))?,
+        };
+        crate::aws_iam::token(&target, profile, region).await
     }
 
     pub(crate) async fn open_session(

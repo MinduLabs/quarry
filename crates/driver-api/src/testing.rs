@@ -26,6 +26,7 @@ pub fn config(env: &str, driver: &str, user: &str, password: &str) -> Option<Res
             read_only: false,
             color: None,
             group: None,
+            auth: Default::default(),
         },
         password: Some(password.into()),
     })

@@ -194,6 +194,7 @@ fn config(password: &str) -> ResolvedConfig {
             read_only: false,
             color: None,
             group: None,
+            auth: Default::default(),
         },
         password: Some(password.into()),
     }

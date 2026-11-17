@@ -13,4 +13,9 @@ schema_edit: boolean,
 /**
  * Server variables and status can be listed through `Session::server_info`.
  */
-server_info: boolean, cancel: boolean, ssh: boolean, ssl: boolean, object_kinds: Array<ObjectKind>, };
+server_info: boolean, cancel: boolean, ssh: boolean, ssl: boolean, 
+/**
+ * Signs in to Amazon RDS with an AWS IAM token (`DbAuth::AwsIam`). Absent from drivers
+ * built before it existed.
+ */
+aws_iam: boolean, object_kinds: Array<ObjectKind>, };

@@ -64,6 +64,29 @@ pub struct SshConfig {
     pub key_path: Option<String>,
 }
 
+/// How the database user signs in. A password lives in the keyring; AWS IAM needs none.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum DbAuth {
+    #[default]
+    Password,
+    /// A short-lived token signed with the user's AWS credentials, made fresh for every session.
+    /// Amazon RDS and Aurora (MySQL, MariaDB, PostgreSQL).
+    AwsIam {
+        /// Profile in `~/.aws/config`; `None` uses the default credential chain.
+        profile: Option<String>,
+        /// `None` reads it from the RDS host name, then from the profile.
+        region: Option<String>,
+    },
+}
+
+impl DbAuth {
+    pub fn is_password(&self) -> bool {
+        matches!(self, Self::Password)
+    }
+}
+
 /// Connection settings as stored on disk. **Never contains secrets** — passwords live in the keyring.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -83,4 +106,8 @@ pub struct ConnectionConfig {
     pub read_only: bool,
     pub color: Option<String>,
     pub group: Option<String>,
+    /// Absent in files written before AWS IAM sign-in existed, and not written for a password,
+    /// so those files stay as they were.
+    #[serde(default, skip_serializing_if = "DbAuth::is_password")]
+    pub auth: DbAuth,
 }
