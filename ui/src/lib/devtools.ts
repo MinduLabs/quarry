@@ -126,8 +126,11 @@ function stateOf(el: Element): string {
 
 /** What the user can act on now: the open menu or dialog, else the whole window. */
 function scopes(): Element[] {
-  const menus = [...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(isVisible);
-  // An open menu or select takes every click until it closes.
+  // A popup (a select's list, a context menu) floats outside any dialog and takes every click
+  // until it closes. A list inside a dialog (the command palette's) is part of the dialog.
+  const menus = [...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(
+    (el) => isVisible(el) && !el.closest('[role="dialog"]'),
+  );
   if (menus.length > 0) return menus;
   const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
   return [dialogs.at(-1) ?? document.body];
