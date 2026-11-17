@@ -153,7 +153,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quarry_model::{ConnId, DriverId, Environment, SslMode};
+    use quarry_model::{ConnId, DbAuth, DriverId, Environment, SslMode};
 
     fn sample(name: &str) -> ConnectionConfig {
         ConnectionConfig {
@@ -171,6 +171,7 @@ mod tests {
             read_only: true,
             color: None,
             group: None,
+            auth: Default::default(),
         }
     }
 
@@ -189,6 +190,48 @@ mod tests {
         let text = fs::read_to_string(dir.join(CONNECTIONS_FILE)).unwrap();
         assert!(text.contains("version = 1") && !text.contains("password"));
         assert_eq!(store.load_connections().unwrap(), list);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn aws_iam_sign_in_roundtrips_without_a_secret() {
+        let dir = temp_dir();
+        let store = ConfigStore::new(&dir);
+        let mut rds = sample("rds");
+        rds.ssl = SslMode::VerifyFull;
+        rds.auth = DbAuth::AwsIam {
+            profile: Some("prod".into()),
+            region: None,
+        };
+        store.save_connections(std::slice::from_ref(&rds)).unwrap();
+        let text = fs::read_to_string(dir.join(CONNECTIONS_FILE)).unwrap();
+        assert!(text.contains("kind = \"aws_iam\""), "{text}");
+        assert_eq!(store.load_connections().unwrap(), vec![rds]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Files from before AWS IAM sign-in have no `auth`: those connections use a password.
+    #[test]
+    fn loads_connections_saved_before_sign_in_methods() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let old = r#"version = 1
+
+[[connection]]
+id = "6f1c2c8e-8d5e-4f7a-9a43-0b6f2f1d2c11"
+name = "local"
+driver = "mysql"
+host = "127.0.0.1"
+port = 3306
+user = "root"
+ssl = "prefer"
+environment = "local"
+read_only = false
+"#;
+        fs::write(dir.join(CONNECTIONS_FILE), old).unwrap();
+        let loaded = ConfigStore::new(&dir).load_connections().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].auth, DbAuth::Password);
         fs::remove_dir_all(dir).unwrap();
     }
 

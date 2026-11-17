@@ -88,6 +88,7 @@ async fn query_latency() {
                 read_only: false,
                 color: None,
                 group: None,
+                auth: Default::default(),
             },
             password: Some(Password("quarry".into())),
             ssh_secret: None,

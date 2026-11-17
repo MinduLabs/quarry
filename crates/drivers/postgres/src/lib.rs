@@ -85,6 +85,7 @@ impl Driver for PostgresDriver {
             cancel: true,
             ssh: true,
             ssl: true,
+            aws_iam: true,
             object_kinds: vec![
                 ObjectKind::Database,
                 ObjectKind::Table,

@@ -4,6 +4,7 @@
 //! [`EngineHandle`] and receives [`Event`]s from [`EngineEvents`]. Every command runs in its
 //! own task, so a long query never blocks other commands.
 
+mod aws_iam;
 mod browse;
 mod changes;
 mod command;

@@ -17,6 +17,7 @@
 ## Features
 
 - **Databases:** MySQL, MariaDB, PostgreSQL and Microsoft SQL Server, over SSL or an SSH tunnel.
+  Amazon RDS and Aurora connections can sign in with AWS IAM instead of a password.
   Each driver is downloaded the first time you need it and checked before it runs. Passwords stay
   in the system keyring.
 - **SQL editor:** completion that reads the statement you are in (tables, columns, aliases, the
