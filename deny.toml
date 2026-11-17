@@ -18,6 +18,9 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant via oo7 0.6 → zbus 5; no stable oo7 on zbus 6 yet" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names via oo7 0.6 → zbus 5; no stable oo7 on zbus 6 yet" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via oo7 0.6 → zbus 5; no stable oo7 on zbus 6 yet" },
+    # Unmaintained, not a vulnerability. Pulled in by aws-smithy-http (AWS IAM sign-in to RDS); the
+    # latest release that builds on our Rust still uses it. Drop it when aws-smithy-http does.
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils via aws-smithy-http (RDS IAM sign-in); no release without it for our Rust" },
 ]
 
 [licenses]
