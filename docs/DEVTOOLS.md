@@ -46,7 +46,13 @@ It is a development tool. Release builds do not contain it.
 | `ev [-a]` | The Command/Event traffic since the last `ev`, one line each. `-a`: all that is kept. |
 | `logs [-a]` | Warnings and errors from the app since the last `logs`. `-a`: every line. |
 | `perf [reset]` | Timings since the last `perf`: count, p50, p95 and max for each name. |
+| `open <table>` | Open a table of the active connection's database, wherever the tree is. `database.table` or `connection/database.table` picks another. |
 | `sql <query>` | Run a query in a new tab of the active connection. Prints the time and the first rows. |
+| `text [word] [-a]` | The readable text of the open dialog (or the window), for what `ui` leaves out: lists, results, explanations. With `word`, only the lines that contain it (exit code 1 when none). 60 lines unless `-a`. |
+| `seed` | Save and connect the test databases that are up. `up` does it too. |
+| `bench <query> [n]` | Run a query `n` times (default 20) after one warm-up run: p50, p95 and max. |
+| `mem` | Resident memory of the app, its drivers and the dev servers. |
+| `run <file\|->` | Run `qd` commands from a file (or standard input), one per line, and stop at the first failure. |
 | `exec <js>` | Evaluate JavaScript in the window and print the result. |
 
 ### Screen lines
@@ -77,6 +83,36 @@ toast error "Old saved MySQL: Access denied …"
 change. Something slower, like a driver download or a long query, needs `wait <text>`. `sql` waits
 for its query itself.
 
+## Test databases
+
+With the test databases up (`docker compose -f tests/docker-compose.yml up -d --wait`), `up` saves
+a connection to each one that answers ("MySQL test", "PostgreSQL test", "SQL Server test", database
+`shop`), downloads its driver and connects it. `seed` does the same at any time. The connections
+have fixed ids, so seeding again updates them.
+
+After a Rust change, `tauri dev` restarts the app and the engine forgets the passwords it held. Run
+`./qd up`: it waits for the app and seeds again.
+
+## Scripts
+
+`run` takes one command per line, without `./qd`. Quote words with spaces. `#` starts a comment.
+It prints each command and its output, and stops at the first one that fails, with its line.
+
+```
+# check-compare.qd
+click "MySQL test" --right
+click "New query"
+sql "SELECT COUNT(*) FROM orders"
+key ctrl+shift+p
+type Search ">compare"
+key enter
+text differ
+```
+
+```bash
+./qd run check-compare.qd
+```
+
 ## The sandbox
 
 `up` runs `pnpm tauri dev` with everything in `target/qd`:
@@ -94,9 +130,8 @@ Drivers are built with `just drivers` and served by `scripts/drivers.py`, as in 
 app downloads one the first time a connection needs it. `up -f` empties the sandbox, so it starts
 with no connections and no drivers.
 
-Passwords still go to the system keyring. "Save password" is on by default, also when editing:
-turn it off (`qd click "Save password"`) before saving a sandbox connection. Deleting the connection
-removes its password from the keyring. `ev` and `state` print `***` in place of any password.
+The sandbox app never touches the system keyring (`QUARRY_NO_KEYRING=1`): passwords stay in its
+memory, whatever "Save password" says. `ev` and `state` print `***` in place of any password.
 
 ## Measuring
 
@@ -104,6 +139,8 @@ removes its password from the keyring. `ev` and `state` print `***` in place of 
 ./qd perf reset
 ./qd click e9                 # open a table, run a query, scroll …
 ./qd perf
+./qd bench "SELECT * FROM orders WHERE total > 100" 50
+./qd mem
 ```
 
 ```

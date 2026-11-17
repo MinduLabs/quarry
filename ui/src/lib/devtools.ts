@@ -5,6 +5,7 @@
  * traffic. Imported only under `vite dev`; release builds never contain it.
  */
 import type { Command } from "@/bindings/Command";
+import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { Event } from "@/bindings/Event";
 import { setDevTap } from "@/lib/engine";
 import { displayValue } from "@/lib/values";
@@ -195,7 +196,9 @@ function snapshotLines(): string[] {
   return lines;
 }
 
-let lastSnapshot: string[] = [];
+/** The last snapshot of each surface (the page, a dialog), so coming back to one shows only what
+ * changed on it. */
+const lastByScope = new Map<string, string[]>();
 let lastScope = "";
 
 /** Which surface is in front (the page, a dialog, a menu): a new one is shown whole. */
@@ -212,22 +215,24 @@ function scopeKey(): string {
 /** The snapshot, or with `diff` only the lines that changed since the last one. */
 function ui(diff: boolean): string {
   const lines = snapshotLines();
-  const previous = lastSnapshot;
   const scope = scopeKey();
+  const previous = lastByScope.get(scope);
   const isNewScope = scope !== lastScope;
-  lastSnapshot = lines;
+  lastByScope.set(scope, lines);
   lastScope = scope;
-  if (!diff || previous.length === 0) return lines.join("\n");
-  if (isNewScope) return lines.join("\n");
+  if (!diff || !previous) return lines.join("\n");
   const before = new Set(previous);
   const after = new Set(lines);
   const changes = [
     ...previous.filter((l) => l && !after.has(l)).map((l) => `- ${l}`),
     ...lines.filter((l) => l && !before.has(l)).map((l) => `+ ${l}`),
   ];
-  if (changes.length === 0) return "(no change)";
+  // Back on a surface seen before (a dialog closed): say which, then what changed on it.
+  const header = isNewScope ? [`→ ${scope.replace(":", " ")}`] : [];
+  if (changes.length === 0) return [...header, "(no change)"].join("\n");
   // When most of the screen changed, the new screen is shorter than the list of changes.
-  return changes.length > lines.length ? lines.join("\n") : changes.join("\n");
+  const body = changes.length > lines.length ? lines : changes;
+  return [...header, ...body].join("\n");
 }
 
 function find(text: string): string {
@@ -546,7 +551,142 @@ function sqlResult(id: number): string | null {
   return lines.join("\n");
 }
 
+// ---------- Sandbox and measuring ----------
+
+/** Run `action` once, as soon as `isReady` holds for the store. */
+function once(isReady: () => boolean, action: () => void): void {
+  if (isReady()) {
+    action();
+    return;
+  }
+  const stop = useApp.subscribe(() => {
+    if (!isReady()) return;
+    stop();
+    action();
+  });
+}
+
+/**
+ * Save a test connection (its password kept in memory only), download its driver when needed,
+ * then connect. Commands run concurrently in the engine, so each step waits for the store to show
+ * the one before it.
+ */
+function seed(config: ConnectionConfig, password: string): string {
+  const s = useApp.getState();
+  // Saving a connection closes its sessions: one that is connected is left as it is.
+  if (s.nodes[config.id]?.status.kind === "connected") return "ok";
+  const before = s.connections;
+  s.saveConnection(config, password, null, false);
+  // The engine's answer to this save is a new list. Connecting before it would race the save,
+  // which closes the connection's sessions when it lands.
+  const isSaved = () => {
+    const now = useApp.getState().connections;
+    return now !== before && now.some((c) => c.id === config.id);
+  };
+  const isInstalled = () =>
+    useApp.getState().dataSources.some((d) => d.driver === config.driver && d.is_installed);
+  once(isSaved, () => {
+    if (!isInstalled()) useApp.getState().installDriver(config.driver);
+    once(isInstalled, () => {
+      const status = useApp.getState().nodes[config.id]?.status.kind;
+      if (status !== "connected" && status !== "connecting") {
+        useApp.getState().toggleConnection(config.id);
+      }
+    });
+  });
+  return "ok";
+}
+
+/** `connected`, `connecting`, `idle`, `downloading the driver`, or `failed: <why>`. */
+function connState(id: string): string {
+  const s = useApp.getState();
+  const config = s.connections.find((c) => c.id === id);
+  const install = config ? s.driverInstalls[config.driver] : undefined;
+  if (install?.kind === "Failed") return `failed: ${clean(install.error)}`;
+  if (install && install.kind !== "Installed") return "downloading the driver";
+  const status = s.nodes[id]?.status;
+  if (status?.kind === "failed") return `failed: ${clean(status.error)}`;
+  return status?.kind ?? "idle";
+}
+
+const TEXT_LINES = 60;
+
+/** The readable text of what is in front (a dialog, else the window), or its lines with `word`. */
+function text(word: string, all: boolean): string | null {
+  const [scope] = scopes();
+  const raw = scope instanceof HTMLElement ? scope.innerText : "";
+  const lines: string[] = [];
+  for (const line of raw.split("\n").map((l) => l.trim())) {
+    if (line && line !== lines.at(-1)) lines.push(line);
+  }
+  if (word) {
+    const needle = word.toLowerCase();
+    const found = lines.filter((l) => l.toLowerCase().includes(needle));
+    return found.length ? found.join("\n") : null;
+  }
+  if (all || lines.length <= TEXT_LINES) return lines.join("\n");
+  return `${lines.slice(0, TEXT_LINES).join("\n")}\n… ${lines.length - TEXT_LINES} more lines (-a)`;
+}
+
+function tabRun(id: number): {
+  running: boolean;
+  elapsed: number;
+  error: string | null;
+  rows: number;
+} {
+  const tab = useApp.getState().tabs.find((t) => t.id === id);
+  if (!tab) return { running: false, elapsed: 0, error: "the tab is gone", rows: 0 };
+  // The engine's own timing of the statement, to the microsecond; the tab's is whole ms.
+  const last = tab.log.at(-1);
+  return {
+    running: tab.running,
+    elapsed: last ? last.execute_ms + (last.fetch_ms ?? 0) : (tab.elapsedMs ?? 0),
+    error: tab.error,
+    rows: tab.sets[0]?.rows.length ?? 0,
+  };
+}
+
+/** Run a query tab's SQL again. */
+function rerun(id: number): string {
+  const tab = useApp.getState().tabs.find((t) => t.id === id);
+  if (!tab) return "the tab is gone";
+  if (tab.running) return "the tab is still running";
+  useApp.getState().run(id, tab.sql);
+  return "ok";
+}
+
+/** Open a table of the active connection's database, wherever the tree is scrolled or folded.
+ * `connection/database.table` and `database.table` pick another one. */
+function open(target: string): string {
+  const s = useApp.getState();
+  const [connName, rest] = target.includes("/") ? target.split("/", 2) : [null, target];
+  const conn = connName
+    ? s.connections.find((c) => c.name.toLowerCase() === connName.toLowerCase())
+    : s.connections.find((c) => c.id === s.active?.connId);
+  if (!conn)
+    return connName ? `no connection "${connName}"` : "no active connection; connect first";
+  if (s.nodes[conn.id]?.status.kind !== "connected") return `"${conn.name}" is not connected`;
+  const dot = (rest ?? "").lastIndexOf(".");
+  const database =
+    dot >= 0
+      ? (rest ?? "").slice(0, dot)
+      : ((s.active?.connId === conn.id ? s.active.database : null) ?? conn.database);
+  const name = dot >= 0 ? (rest ?? "").slice(dot + 1) : (rest ?? "");
+  const listed = s.nodes[conn.id]?.databases.map((d) => d.name) ?? [];
+  if (!database || !listed.includes(database)) {
+    return `say which database (or schema): qd open "${conn.name}/<one of ${listed.join(", ")}>.${name}"`;
+  }
+  s.openObject(conn.id, database, name, "table");
+  return "ok";
+}
+
 const bridge = {
+  open,
+  seed,
+  connState,
+  text,
+  tabRun,
+  rerun,
   ui,
   find,
   click,
