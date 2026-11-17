@@ -110,7 +110,11 @@ async function connect() {
       pending.delete(d.id);
     }
   };
-  await Promise.race([targetReady, sleep(1500)]);
+  // The timer must not outlive the race: a pending one keeps Node alive, which made every
+  // command wait 1.5 s before it could exit.
+  let timer;
+  await Promise.race([targetReady, new Promise((r) => (timer = setTimeout(r, 1500)))]);
+  clearTimeout(timer);
   const call = (method, params = {}) =>
     new Promise((r) => {
       const inner = ++id;
