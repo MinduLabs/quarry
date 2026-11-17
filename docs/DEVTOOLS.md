@@ -35,7 +35,7 @@ It is a development tool. Release builds do not contain it.
 | `down` | Stop the app, Vite and the driver server. |
 | `ps` | Connections and their status, tabs, the open dialog, driver downloads, toasts. |
 | `ui [-a]` | What changed on screen since the last `ui`, as `+`/`-` lines. `-a` prints everything. |
-| `find <text>` | Only the screen lines that contain the text. |
+| `find <text>` | Only the screen lines that contain the text. Exit code 1 when none does. |
 | `click <ref\|name>` | Click. `--right` opens a context menu, `--double` double-clicks. |
 | `type <ref\|name> <text>` | Set an input's text (`--append` adds to it). Also types into the SQL editor. |
 | `pick <ref\|name> <option>` | Open a select or menu and choose an option by its name. |

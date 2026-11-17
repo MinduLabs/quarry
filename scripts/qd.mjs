@@ -418,7 +418,12 @@ switch (command) {
     await withApp(async (app) => console.log(await app.qd("ui", !flags.has("-a"))));
     break;
   case "find":
-    await withApp(async (app) => console.log(await app.qd("find", need(a1, "find <text>"))));
+    await withApp(async (app) => {
+      const found = await app.qd("find", need(a1, "find <text>"));
+      // Like grep: nothing found is exit code 1, so a script can branch on it.
+      if (found.startsWith("nothing matches")) fail(found);
+      console.log(found);
+    });
     break;
   case "click":
     await act("click", need(a1, "click <ref|name>"), flags.has("--right") ? "right" : flags.has("--double") ? "double" : "left");
