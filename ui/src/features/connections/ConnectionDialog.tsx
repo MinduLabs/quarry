@@ -83,7 +83,7 @@ export function ConnectionDialog() {
     return toConfig(form, driver, source?.default_port ?? null, existing);
   };
 
-  const password = form.password ? form.password : null;
+  const password = form.auth === "password" && form.password ? form.password : null;
   const sshSecret = form.ssh && form.sshAuth !== "agent" && form.sshSecret ? form.sshSecret : null;
   const save = () => {
     const config = build();

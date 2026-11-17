@@ -33,7 +33,7 @@ export function ConnectionStep({
       {error && <ErrorNotice key={error.key} message={error.message} />}
       <GeneralFields {...fields} />
       <DriverField source={source} driver={driver} />
-      <ServerFields {...fields} />
+      <ServerFields {...fields} supportsAwsIam={source?.supports_aws_iam ?? false} />
       <div className="flex flex-col gap-3 border-line border-t pt-4">
         <SshFields {...fields} />
         <OptionFields {...fields} />

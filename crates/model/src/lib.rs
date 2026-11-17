@@ -28,7 +28,7 @@ pub use browse::{BrowseQuery, ColumnFilter, FilterOp, SortKey};
 pub use capabilities::{Capabilities, ObjectKind};
 pub use column::ColumnMeta;
 pub use completion::{CompletionContext, CompletionNames, StatementTable};
-pub use connection::{ConnId, ConnectionConfig, DriverId, SshAuth, SshConfig, SslMode};
+pub use connection::{ConnId, ConnectionConfig, DbAuth, DriverId, SshAuth, SshConfig, SslMode};
 pub use data_source::{DataSource, DataSourceSection};
 pub use ddl::{AlterOp, ColumnDef, IndexDef, SchemaChange};
 pub use dialect::{
