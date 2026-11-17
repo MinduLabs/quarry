@@ -4723,7 +4723,6 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-http-client",
  "aws-smithy-runtime-api",
- "aws-smithy-types",
  "chrono",
  "futures-util",
  "quarry-driver-api",

@@ -7,13 +7,13 @@ use std::time::{Duration, SystemTime};
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::provider::error::CredentialsError;
 use aws_sigv4::http_request::{
     self, SignableBody, SignableRequest, SignatureLocation, SigningSettings,
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_http_client::tls::{self, rustls_provider::CryptoMode};
 use aws_smithy_runtime_api::client::identity::Identity;
-use aws_smithy_types::error::display::DisplayErrorContext;
 
 /// RDS accepts a token for at most 15 minutes. Every session signs a new one, so a long-open
 /// connection never needs it again.
@@ -53,12 +53,34 @@ pub(crate) async fn token(
         })?;
     let provider = sdk
         .credentials_provider()
-        .ok_or_else(|| no_credentials(profile, "no credential source is configured"))?;
+        .ok_or_else(|| no_credentials(profile, NOT_FOUND))?;
     let credentials = provider
         .provide_credentials()
         .await
-        .map_err(|err| no_credentials(profile, &DisplayErrorContext(&err).to_string()))?;
+        .map_err(|err| no_credentials(profile, &cause(&err)))?;
     sign(target, &region, credentials, SystemTime::now())
+}
+
+const NOT_FOUND: &str = "none was found in the environment, ~/.aws or an SSO session";
+
+/// Why credentials failed, in words: the provider's messages, without its debug output.
+fn cause(err: &CredentialsError) -> String {
+    match err {
+        CredentialsError::CredentialsNotLoaded(_) => NOT_FOUND.to_owned(),
+        CredentialsError::ProviderTimedOut(_) => "the credential provider timed out".to_owned(),
+        _ => {
+            let mut parts: Vec<String> = Vec::new();
+            let mut next: Option<&dyn std::error::Error> = Some(err);
+            while let Some(e) = next {
+                let text = e.to_string();
+                if !parts.contains(&text) {
+                    parts.push(text);
+                }
+                next = e.source();
+            }
+            parts.join(": ")
+        }
+    }
 }
 
 fn no_credentials(profile: Option<&str>, cause: &str) -> String {
@@ -138,6 +160,16 @@ mod tests {
         assert_eq!(
             sign(&target, "us-east-1", credentials, time).unwrap(),
             "prod-instance.us-east-1.rds.amazonaws.com:3306/?Action=connect&DBUser=peccy&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=akid%2F20240826%2Fus-east-1%2Frds-db%2Faws4_request&X-Amz-Date=20240826T220000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=dd0cba843009474347af724090233265628ace491ea17ce3eb3da098b983ad89"
+        );
+    }
+
+    #[test]
+    fn missing_credentials_read_as_words() {
+        let err = CredentialsError::not_loaded("no providers in chain provided credentials");
+        let text = no_credentials(Some("prod"), &cause(&err));
+        assert_eq!(
+            text,
+            "AWS credentials for profile “prod” could not be loaded: none was found in the environment, ~/.aws or an SSO session. Sign in with `aws sso login --profile prod`, or check ~/.aws/config and ~/.aws/credentials."
         );
     }
 
