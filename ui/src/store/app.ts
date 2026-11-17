@@ -533,7 +533,15 @@ export type DialogState =
   | { mode: "new" }
   | { mode: "edit"; id: string }
   | { mode: "delete"; id: string }
+  /** Connecting needs a driver that is not on this computer yet. */
+  | { mode: "driver"; id: string }
   | null;
+
+/** The data source a connection's driver comes from, when that driver still has to be downloaded.
+ * A driver missing from the catalog is left to the engine, which says so on connect. */
+export function missingDriver(sources: DataSource[], driver: string): DataSource | undefined {
+  return sources.find((s) => s.driver === driver && !s.is_installed);
+}
 
 export interface AppState {
   ready: boolean;
@@ -1375,6 +1383,15 @@ export const useApp = create<AppState>()((set, get) => {
           const driver = event.driver;
           set((s) => ({ driverInstalls: { ...s.driverInstalls, [driver]: event.state } }));
           if (event.state.kind !== "Installed") break;
+          // The user asked to connect and was sent here first: carry on now.
+          const dialog = get().dialog;
+          if (
+            dialog?.mode === "driver" &&
+            get().connections.find((c) => c.id === dialog.id)?.driver === driver
+          ) {
+            set({ dialog: null });
+            send({ type: "Connect", id: dialog.id });
+          }
           const elapsed = performance.now() - (installStarted.get(driver) ?? 0);
           installStarted.delete(driver);
           setTimeout(
@@ -1920,6 +1937,8 @@ export const useApp = create<AppState>()((set, get) => {
       set({ active: { connId: id, database: config?.database ?? null } });
       if (node.status.kind === "connected") {
         patchNode(id, (n) => ({ expanded: !n.expanded }));
+      } else if (config && missingDriver(get().dataSources, config.driver)) {
+        set({ dialog: { mode: "driver", id } });
       } else if (node.status.kind !== "connecting") {
         send({ type: "Connect", id });
       }
