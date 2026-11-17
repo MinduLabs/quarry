@@ -155,6 +155,10 @@ function snapshotLines(): string[] {
     if (scope !== document.body) {
       const title = scope.querySelector("h2")?.textContent ?? "";
       lines.push(`${roleOf(scope)}${title ? ` "${clean(title)}"` : ""}`);
+      // A dialog's description often holds its warning ("This can delete data").
+      const describedBy = scope.getAttribute("aria-describedby");
+      const description = describedBy && document.getElementById(describedBy)?.textContent;
+      if (description?.trim()) lines.push(`text "${clean(description)}"`);
     }
     const nodes = scope.querySelectorAll(`${INTERACTIVE}, ${LANDMARK_TEXT}, [role="grid"]`);
     for (const el of nodes) {
