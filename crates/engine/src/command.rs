@@ -2,8 +2,8 @@ use std::fmt;
 
 use quarry_model::{
     BrowseQuery, ColumnMeta, ConnId, ConnectionConfig, DriverId, ExportFormat, ExportOptions,
-    Favorite, FavoriteId, ImportOptions, RowChange, SchemaChange, ServerInfoKind, TableRef, Value,
-    Workspace,
+    Favorite, FavoriteId, ImportOptions, RowChange, SchemaChange, SchemaSide, ServerInfoKind,
+    TableRef, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -272,6 +272,22 @@ pub enum Command {
         request: RequestId,
         conn: ConnId,
         change: SchemaChange,
+        confirmed: bool,
+    },
+    /// Compare the tables of two databases of the same kind → `Event::SchemaCompared`, with the
+    /// script that makes `target` match `source`. Reads only.
+    CompareSchemas {
+        request: RequestId,
+        source: SchemaSide,
+        target: SchemaSide,
+    },
+    /// Run the changes of a comparison on `conn`. With `confirmed: false` the engine answers
+    /// `Event::SchemaDiffReview` with the statements; resent with `confirmed: true`, it runs them
+    /// in order, stops at the first failure → `Event::SchemaDiffApplied`.
+    ApplySchemaDiff {
+        request: RequestId,
+        conn: ConnId,
+        changes: Vec<SchemaChange>,
         confirmed: bool,
     },
     Cancel {

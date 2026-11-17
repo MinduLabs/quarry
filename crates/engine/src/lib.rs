@@ -27,6 +27,7 @@ mod metadata;
 mod perf;
 mod query;
 mod schema;
+mod schema_compare;
 mod session;
 mod update;
 mod workspace;

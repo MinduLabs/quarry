@@ -579,6 +579,10 @@ function DatabaseLine({
         ]
       : []),
     { label: "Refresh", onSelect: () => s.reloadObjects(conn, db.name) },
+    {
+      label: "Compare schema with…",
+      onSelect: () => s.openSchemaCompare({ conn, database: db.name }),
+    },
     { label: "Copy name", onSelect: () => copyText(db.name) },
     ...(schema
       ? [

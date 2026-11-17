@@ -21,7 +21,18 @@ pub fn checked(written: Option<Result<Vec<String>, String>>) -> Result<Vec<Strin
 
 /// What the review of a schema change warns about, or `None`.
 pub fn warning(environment: Environment, change: &SchemaChange) -> Option<String> {
-    let destructive = change.is_destructive();
+    warning_for(environment, change.is_destructive())
+}
+
+/// The warning for several changes at once: destructive when any of them is.
+pub fn warning_for_all(environment: Environment, changes: &[SchemaChange]) -> Option<String> {
+    warning_for(
+        environment,
+        changes.iter().any(SchemaChange::is_destructive),
+    )
+}
+
+fn warning_for(environment: Environment, destructive: bool) -> Option<String> {
     match (environment, destructive) {
         (Environment::Production, true) => Some(
             "This changes a production database and can delete data. It can't be undone."
