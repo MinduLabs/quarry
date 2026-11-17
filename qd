@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Drive the Quarry dev app from a terminal or an AI agent. Guide: docs/DEVTOOLS.md.
+exec node --no-warnings --experimental-websocket "$(dirname "$0")/scripts/qd.mjs" "$@"
