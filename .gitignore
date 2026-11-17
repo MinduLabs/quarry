@@ -13,3 +13,6 @@
 /packaging/flatpak/local.json
 # Development performance logs (QUARRY_PERF); local only
 *perf*.jsonl
+# Per-developer agent notes (/compound); local only
+/.claude/knowledge/
+/.claude/metrics/
