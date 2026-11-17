@@ -268,7 +268,18 @@ function resolve(target: string): Element | string {
 }
 
 function point(el: Element): { clientX: number; clientY: number } {
-  el.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const before = el.getBoundingClientRect();
+  const isOnScreen =
+    before.top >= 0 &&
+    before.left >= 0 &&
+    before.bottom <= innerHeight &&
+    before.right <= innerWidth;
+  if (!isOnScreen) {
+    el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // The window itself never scrolls in the app; only the element's own lists may.
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }
   const rect = el.getBoundingClientRect();
   return { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
 }
