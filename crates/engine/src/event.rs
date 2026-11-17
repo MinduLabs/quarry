@@ -1,7 +1,7 @@
 use quarry_driver_api::RowBatch;
 use quarry_model::{
     Capabilities, ColumnMeta, ConnId, ConnectionConfig, DataSource, DriverId, ErrorLocation,
-    ExportFormat, Favorite, HistoryEntry, SchemaChange, SchemaObject, ServerInfoKind,
+    ExportFormat, Favorite, HistoryEntry, SchemaChange, SchemaDiff, SchemaObject, ServerInfoKind,
     ServerInfoRow, TableColumns, TableInfo, TableRef, Value, Workspace,
 };
 use serde::{Deserialize, Serialize};
@@ -395,6 +395,28 @@ pub enum Event {
         request: RequestId,
         conn: ConnId,
         change: SchemaChange,
+        error: Option<String>,
+    },
+
+    /// The result of `CompareSchemas`: `diff` or `error`.
+    SchemaCompared {
+        request: RequestId,
+        diff: Option<SchemaDiff>,
+        error: Option<String>,
+    },
+    /// The statements `ApplySchemaDiff` would run. Nothing ran yet. `warning` says what is risky.
+    SchemaDiffReview {
+        request: RequestId,
+        conn: ConnId,
+        statements: Vec<String>,
+        warning: Option<String>,
+    },
+    /// `ApplySchemaDiff` ran `applied` statements; `error` is why it stopped, if it did.
+    SchemaDiffApplied {
+        request: RequestId,
+        conn: ConnId,
+        #[ts(type = "number")]
+        applied: u64,
         error: Option<String>,
     },
 

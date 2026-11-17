@@ -19,6 +19,7 @@ mod favorite;
 mod history;
 mod import;
 mod schema;
+mod schema_diff;
 mod server_info;
 mod value;
 mod workspace;
@@ -44,6 +45,7 @@ pub use import::{ImportOptions, OnDuplicate};
 pub use schema::{
     ColumnInfo, ForeignKey, IndexInfo, SchemaObject, TableColumns, TableInfo, TableRef,
 };
+pub use schema_diff::{SchemaDiff, SchemaSide, TableDiff, TableDiffKind};
 pub use server_info::{ServerInfoKind, ServerInfoRow};
 pub use value::Value;
 pub use workspace::{BrowsePage, SavedTab, Workspace};

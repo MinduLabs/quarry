@@ -186,13 +186,48 @@ impl Engine {
             });
         }
 
+        // A new or dropped database changes the tree's first level.
+        let lists_databases = matches!(
+            change,
+            SchemaChange::CreateDatabase { .. } | SchemaChange::DropDatabase { .. }
+        );
+        let ran = self
+            .run_ddl(conn, change.database(), statements, lists_databases)
+            .await;
+        let (error, databases) = (ran.error, ran.databases);
+        if let Some(databases) = databases {
+            self.emit(Event::Databases {
+                id: conn,
+                databases,
+            });
+        }
+        self.emit(done(change, error));
+    }
+
+    /// Run DDL `statements` in order on the metadata session, recording each in the history, and
+    /// stop at the first failure. A statement is never run twice: when the connection drops, the
+    /// session is replaced and the error says to check what was applied.
+    pub(crate) async fn run_ddl(
+        &self,
+        conn: ConnId,
+        database: Option<&str>,
+        statements: Vec<String>,
+        lists_databases: bool,
+    ) -> DdlRun {
         let meta = match self.meta_session(conn).await {
             Ok(meta) => meta,
-            Err(error) => return self.emit(done(change, Some(error))),
+            Err(error) => {
+                return DdlRun {
+                    applied: 0,
+                    error: Some(error),
+                    databases: None,
+                };
+            }
         };
         let mut session = meta.lock().await;
         let mut error = None;
         let mut lost = false;
+        let mut applied = 0;
         for sql in statements {
             let ran_at = chrono::Utc::now();
             let started = std::time::Instant::now();
@@ -204,7 +239,7 @@ impl Engine {
             self.record(HistoryEntry {
                 sql,
                 conn,
-                database: change.database().map(str::to_owned),
+                database: database.map(str::to_owned),
                 ran_at,
                 elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 error: failed
@@ -216,29 +251,32 @@ impl Engine {
                 error = failed;
                 break;
             }
+            applied += 1;
         }
-        // A new or dropped database changes the tree's first level.
-        let databases = match &change {
-            SchemaChange::CreateDatabase { .. } | SchemaChange::DropDatabase { .. } => {
-                session.list_databases().await.ok()
-            }
-            _ => None,
+        let databases = if lists_databases && error.is_none() {
+            session.list_databases().await.ok()
+        } else {
+            None
         };
         drop(session);
-        // A schema change is not run twice on its own: the statement may have landed before the
-        // connection dropped. The session is replaced so the user's next try works.
         if lost {
             let _ = self.reopen_meta(conn, &meta).await;
             error = error.map(|e| {
                 format!("{e}\nCheck whether the change was applied before you try again.")
             });
         }
-        if let Some(databases) = databases {
-            self.emit(Event::Databases {
-                id: conn,
-                databases,
-            });
+        DdlRun {
+            applied,
+            error,
+            databases,
         }
-        self.emit(done(change, error));
     }
+}
+
+/// What `run_ddl` did.
+pub(crate) struct DdlRun {
+    pub applied: u64,
+    pub error: Option<String>,
+    /// The database list after a database was created or dropped.
+    pub databases: Option<Vec<String>>,
 }

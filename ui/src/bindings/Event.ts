@@ -13,6 +13,7 @@ import type { HistoryEntry } from "./HistoryEntry";
 import type { LogEntry } from "./LogEntry";
 import type { NoticeKind } from "./NoticeKind";
 import type { SchemaChange } from "./SchemaChange";
+import type { SchemaDiff } from "./SchemaDiff";
 import type { SchemaObject } from "./SchemaObject";
 import type { ServerInfoKind } from "./ServerInfoKind";
 import type { ServerInfoRow } from "./ServerInfoRow";
@@ -59,4 +60,4 @@ rows: number,
 /**
  * Rows left out because their key was already in the table.
  */
-skipped: number, } | { "type": "ImportFailed", request: number, error: string, cancelled: boolean, } | { "type": "SchemaReview", request: number, conn: ConnId, change: SchemaChange, statements: Array<string>, warning: string | null, } | { "type": "SchemaChanged", request: number, conn: ConnId, change: SchemaChange, error: string | null, } | { "type": "Favorites", favorites: Array<Favorite>, } | { "type": "History", request: number, entries: Array<HistoryEntry>, } | { "type": "HistoryAdded", entry: HistoryEntry, } | { "type": "Workspace", workspace: Workspace, } | { "type": "WorkspaceSaved", request: number, error: string | null, };
+skipped: number, } | { "type": "ImportFailed", request: number, error: string, cancelled: boolean, } | { "type": "SchemaReview", request: number, conn: ConnId, change: SchemaChange, statements: Array<string>, warning: string | null, } | { "type": "SchemaChanged", request: number, conn: ConnId, change: SchemaChange, error: string | null, } | { "type": "SchemaCompared", request: number, diff: SchemaDiff | null, error: string | null, } | { "type": "SchemaDiffReview", request: number, conn: ConnId, statements: Array<string>, warning: string | null, } | { "type": "SchemaDiffApplied", request: number, conn: ConnId, applied: number, error: string | null, } | { "type": "Favorites", favorites: Array<Favorite>, } | { "type": "History", request: number, entries: Array<HistoryEntry>, } | { "type": "HistoryAdded", entry: HistoryEntry, } | { "type": "Workspace", workspace: Workspace, } | { "type": "WorkspaceSaved", request: number, error: string | null, };

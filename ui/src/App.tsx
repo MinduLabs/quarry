@@ -19,6 +19,7 @@ import { ConfirmChangesDialog } from "./features/query/ConfirmChangesDialog";
 import { ConfirmDeleteRowsDialog } from "./features/query/ConfirmDeleteRowsDialog";
 import { ConfirmRunDialog } from "./features/query/ConfirmRunDialog";
 import { ResultsPanel } from "./features/query/ResultsPanel";
+import { SchemaCompareDialog } from "./features/schema/SchemaCompareDialog";
 import { SchemaFormDialog } from "./features/schema/SchemaFormDialog";
 import { SchemaReviewDialog } from "./features/schema/SchemaReviewDialog";
 import { ServerInfoDialog } from "./features/server/ServerInfoDialog";
@@ -182,6 +183,7 @@ export function App() {
       <SettingsDialog />
       <SchemaFormDialog />
       <SchemaReviewDialog />
+      <SchemaCompareDialog />
       <ExportDialog />
       <ExportProgress />
       <ImportDialog />

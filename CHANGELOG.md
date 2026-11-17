@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Compare schemas: pick two databases of the same kind and see which tables, columns and indexes differ, with the script that makes the target match the source. Apply it after reviewing its SQL. From the command palette or a database's menu in the sidebar. Primary and foreign key differences are shown but not scripted yet.
+
 ## [0.1.0] - 2026-10-31
 
 The first public release: a fast, open-source database client for MySQL, MariaDB, PostgreSQL and

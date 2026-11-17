@@ -284,6 +284,12 @@ function useCommandItems(): Item[] {
         run: s.toggleSidebar,
       },
       {
+        id: "compareSchemas",
+        label: "Compare schemas…",
+        icon,
+        run: () => s.openSchemaCompare(),
+      },
+      {
         id: "history",
         label: "Query history…",
         icon,

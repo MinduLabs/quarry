@@ -793,3 +793,47 @@ fn export_commands_parse_as_the_ui_sends_them() {
         Command::ExportPreview { .. }
     ));
 }
+
+#[tokio::test]
+async fn schema_compare_and_apply_refuse_without_a_connection() {
+    use quarry_model::{SchemaChange, SchemaSide, TableRef};
+    let (engine, events) = test_engine();
+    let side = SchemaSide {
+        conn: ConnId::new(),
+        database: "shop".into(),
+    };
+    engine
+        .send(Command::CompareSchemas {
+            request: 41,
+            source: side.clone(),
+            target: side.clone(),
+        })
+        .unwrap();
+    let Event::SchemaCompared { diff, error, .. } = events.recv().await.unwrap() else {
+        panic!("expected SchemaCompared")
+    };
+    assert_eq!(diff, None);
+    assert_eq!(error.as_deref(), Some("Connection not found"));
+
+    let drop = SchemaChange::DropTable {
+        table: TableRef {
+            database: Some("shop".into()),
+            schema: None,
+            name: "orders".into(),
+        },
+        view: false,
+    };
+    engine
+        .send(Command::ApplySchemaDiff {
+            request: 42,
+            conn: side.conn,
+            changes: vec![drop],
+            confirmed: true,
+        })
+        .unwrap();
+    let Event::SchemaDiffApplied { applied, error, .. } = events.recv().await.unwrap() else {
+        panic!("expected SchemaDiffApplied")
+    };
+    assert_eq!(applied, 0);
+    assert_eq!(error.as_deref(), Some("Connection not found"));
+}

@@ -1981,3 +1981,70 @@ async fn import_skips_or_overwrites_a_key_that_exists() {
     run_events(&engine, &events, 9, id, "DROP TABLE import_dups").await;
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn compare_schemas_finds_what_differs() {
+    use quarry_model::{SchemaSide, TableDiffKind};
+    let Some(config) = config() else { return };
+    let id = config.id;
+    let dir = temp_dir();
+    let (engine, events) = EngineHandle::spawn_with(options(&dir)).unwrap();
+    engine
+        .send(Command::SaveConnection {
+            config,
+            password: Some(Password("quarry".into())),
+            ssh_secret: None,
+            remember_password: false,
+        })
+        .unwrap();
+    // Commands run concurrently: connect once the connection and its password are saved.
+    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    engine.send(Command::Connect { id }).unwrap();
+    next_matching(&events, |e| matches!(e, Event::Databases { .. })).await;
+    let side = |database: &str| SchemaSide {
+        conn: id,
+        database: database.into(),
+    };
+    let compare = |request: RequestId, source: &str, target: &str| Command::CompareSchemas {
+        request,
+        source: side(source),
+        target: side(target),
+    };
+
+    engine.send(compare(31, "shop", "shop")).unwrap();
+    let Event::SchemaCompared { diff, error, .. } = next_matching(&events, |e| {
+        matches!(e, Event::SchemaCompared { request: 31, .. })
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    assert_eq!(error, None);
+    let diff = diff.unwrap();
+    assert!(diff.tables.is_empty(), "{:?}", diff.tables);
+    assert!(diff.same >= 4);
+    assert!(diff.statements.is_empty());
+
+    // `inventory` has none of the shop's tables: each one is created there.
+    engine.send(compare(32, "shop", "inventory")).unwrap();
+    let Event::SchemaCompared { diff, error, .. } = next_matching(&events, |e| {
+        matches!(e, Event::SchemaCompared { request: 32, .. })
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    assert_eq!(error, None);
+    let diff = diff.unwrap();
+    let orders = diff.tables.iter().find(|t| t.name == "orders").unwrap();
+    assert_eq!(orders.kind, TableDiffKind::Missing);
+    assert!(
+        diff.statements
+            .iter()
+            .any(|s| s.starts_with("CREATE TABLE `inventory`.`orders`")),
+        "{:?}",
+        diff.statements
+    );
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

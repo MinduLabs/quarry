@@ -42,6 +42,8 @@ fn command_kind(command: &Command) -> &'static str {
         Command::ImportRun { .. } => "ImportRun",
         Command::CancelImport { .. } => "CancelImport",
         Command::AlterSchema { .. } => "AlterSchema",
+        Command::CompareSchemas { .. } => "CompareSchemas",
+        Command::ApplySchemaDiff { .. } => "ApplySchemaDiff",
         Command::Cancel { .. } => "Cancel",
         Command::CloseTab { .. } => "CloseTab",
         Command::LoadFavorites => "LoadFavorites",
@@ -332,6 +334,20 @@ impl Engine {
                 change,
                 confirmed,
             } => self.alter_schema(request, conn, change, confirmed).await,
+            Command::CompareSchemas {
+                request,
+                source,
+                target,
+            } => self.compare_schemas(request, source, target).await,
+            Command::ApplySchemaDiff {
+                request,
+                conn,
+                changes,
+                confirmed,
+            } => {
+                self.apply_schema_diff(request, conn, changes, confirmed)
+                    .await
+            }
             Command::Cancel { tab } => self.cancel(tab),
             Command::CloseTab { tab } => self.close_tab(tab).await,
             Command::LoadFavorites => self.load_favorites(),
