@@ -179,8 +179,9 @@ function snapshotLines(): string[] {
         continue;
       }
       if ((el.matches(LANDMARK_TEXT) || el.tagName === "P") && !el.matches(INTERACTIVE)) {
-        const text = nameOf(el);
-        if (text) lines.push(`text "${text}"`);
+        const line = `text "${nameOf(el)}"`;
+        // The dialog's description is already under its title.
+        if (nameOf(el) && !lines.includes(line)) lines.push(line);
         continue;
       }
       const state = stateOf(el);
