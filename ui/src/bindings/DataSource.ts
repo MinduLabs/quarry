@@ -17,4 +17,8 @@ driver: DriverId | null, default_port: number | null,
 /**
  * The driver's binary is on this machine; until then it is downloaded with `InstallDriver`.
  */
-is_installed: boolean, };
+is_installed: boolean, 
+/**
+ * The installed driver signs in to Amazon RDS with AWS IAM. `false` until it is installed.
+ */
+supports_aws_iam: boolean, };

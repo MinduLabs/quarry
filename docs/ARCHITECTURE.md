@@ -93,6 +93,10 @@ Schema       AlterSchema{change, confirmed:false} â†’ SchemaReview{statements} â
 - **Sessions.** Each query tab owns one database session, so a long query in one tab does not block
   another. Each connection also has a metadata session for introspection and DDL. A connection over
   SSH has one tunnel shared by all of them.
+- **AWS IAM sign-in.** A connection with `DbAuth::AwsIam` has no password. Each session the engine
+  opens gets a fresh token (valid 15 minutes) signed with the user's AWS credentials, for the RDS
+  host itself even over SSH. Only over TLS, and only with a driver whose capabilities say
+  `aws_iam`.
 - **Bounded rows.** Rows are sent in batches and capped per result set (`RUN_ROW_LIMIT`);
   `truncated: true` beyond. The driver drains the rest from the socket without buffering it.
 - **Cancel** goes around the session through the driver's cancel handle, so it works while a query

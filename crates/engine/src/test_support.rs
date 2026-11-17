@@ -51,6 +51,7 @@ pub(crate) fn db_config(
         read_only: false,
         color: None,
         group: None,
+        auth: Default::default(),
     })
 }
 

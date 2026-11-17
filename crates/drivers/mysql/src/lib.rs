@@ -16,9 +16,9 @@ use quarry_driver_api::{
     ResolvedConfig, Result, RowSink, Session, SharedCancel, SpecDialect,
 };
 use quarry_model::{
-    Capabilities, DialectSpec, DriverId, ErrorLocation, ExplainSyntax, IdentQuote, LiteralStyle,
-    ObjectKind, PagingStyle, PlaceholderStyle, SchemaChange, SchemaObject, ServerInfoKind,
-    ServerInfoRow, SslMode, TableColumns, TableInfo, TableRef, Value,
+    Capabilities, DbAuth, DialectSpec, DriverId, ErrorLocation, ExplainSyntax, IdentQuote,
+    LiteralStyle, ObjectKind, PagingStyle, PlaceholderStyle, SchemaChange, SchemaObject,
+    ServerInfoKind, ServerInfoRow, SslMode, TableColumns, TableInfo, TableRef, Value,
 };
 
 pub const DRIVER_ID: &str = "mysql";
@@ -65,6 +65,7 @@ impl Driver for MysqlDriver {
             cancel: true,
             ssh: true,
             ssl: true,
+            aws_iam: true,
             object_kinds: vec![
                 ObjectKind::Database,
                 ObjectKind::Table,
@@ -138,6 +139,9 @@ fn build_opts(config: &ResolvedConfig) -> Opts {
         // value still counts as one row (the edit check needs exactly one).
         .client_found_rows(true)
         .ssl_opts(ssl)
+        // RDS checks an IAM token through `AWSAuthenticationPlugin`, which asks for the password
+        // in clear text. The engine allows AWS IAM only over TLS.
+        .enable_cleartext_plugin(matches!(c.auth, DbAuth::AwsIam { .. }))
         .init(vec!["SET NAMES utf8mb4"])
         .into()
 }

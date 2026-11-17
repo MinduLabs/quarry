@@ -26,4 +26,6 @@ pub struct DataSource {
     pub default_port: Option<u16>,
     /// The driver's binary is on this machine; until then it is downloaded with `InstallDriver`.
     pub is_installed: bool,
+    /// The installed driver signs in to Amazon RDS with AWS IAM. `false` until it is installed.
+    pub supports_aws_iam: bool,
 }

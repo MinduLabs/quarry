@@ -1,5 +1,6 @@
 import type { ConnectionConfig } from "@/bindings/ConnectionConfig";
 import type { DataSource } from "@/bindings/DataSource";
+import type { DbAuth } from "@/bindings/DbAuth";
 import type { Environment } from "@/bindings/Environment";
 import type { SshAuth } from "@/bindings/SshAuth";
 import type { SslMode } from "@/bindings/SslMode";
@@ -11,7 +12,12 @@ export interface ConnectionForm {
   host: string;
   port: string;
   user: string;
+  /** How the user signs in: a password, or a token signed with AWS credentials. */
+  auth: DbAuth["kind"];
   password: string;
+  /** AWS profile and region for `aws_iam`; empty uses the defaults. */
+  awsProfile: string;
+  awsRegion: string;
   remember: boolean;
   database: string;
   ssl: SslMode;
@@ -50,7 +56,10 @@ export function toForm(
     host: config?.host ?? "127.0.0.1",
     port: String(config?.port ?? source?.default_port ?? FALLBACK_PORT),
     user: config?.user ?? "root",
+    auth: config?.auth?.kind ?? "password",
     password: "",
+    awsProfile: config?.auth?.kind === "aws_iam" ? (config.auth.profile ?? "") : "",
+    awsRegion: config?.auth?.kind === "aws_iam" ? (config.auth.region ?? "") : "",
     remember: true,
     database: config?.database ?? "",
     ssl: config?.ssl ?? "prefer",
@@ -66,7 +75,11 @@ export function toForm(
 }
 
 export function hasMissingFields(form: ConnectionForm): boolean {
-  return !form.host.trim() || (form.ssh && (!form.sshHost.trim() || !form.sshUser.trim()));
+  return (
+    !form.host.trim() ||
+    (form.auth === "aws_iam" && !form.user.trim()) ||
+    (form.ssh && (!form.sshHost.trim() || !form.sshUser.trim()))
+  );
 }
 
 /** The config to save or test; call `hasMissingFields` first. */
@@ -102,5 +115,13 @@ export function toConfig(
     read_only: form.readOnly,
     color: existing?.color ?? null,
     group: existing?.group ?? null,
+    auth:
+      form.auth === "aws_iam"
+        ? {
+            kind: "aws_iam",
+            profile: form.awsProfile.trim() || null,
+            region: form.awsRegion.trim() || null,
+          }
+        : { kind: "password" },
   };
 }

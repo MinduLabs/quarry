@@ -80,6 +80,8 @@ impl Driver for SqlServerDriver {
             cancel: true,
             ssh: true,
             ssl: true,
+            // Amazon RDS for SQL Server has no IAM database sign-in.
+            aws_iam: false,
             object_kinds: vec![
                 ObjectKind::Database,
                 ObjectKind::Table,
