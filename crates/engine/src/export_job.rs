@@ -670,6 +670,7 @@ mod tests {
                 cancel: true,
                 ssh: false,
                 ssl: false,
+                aws_iam: false,
                 object_kinds: Vec::new(),
             }
         }
@@ -827,6 +828,7 @@ mod tests {
             read_only: false,
             color: None,
             group: None,
+            auth: Default::default(),
         };
         let conn = config.id;
         lock(&engine.connections).push(config);

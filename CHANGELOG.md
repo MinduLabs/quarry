@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Sign in to Amazon RDS and Aurora (MySQL, MariaDB, PostgreSQL) with AWS IAM instead of a password: choose AWS IAM in the connection's settings. Quarry signs a token with your AWS profile (SSO and roles included) for every session.
+
 ### Fixed
 - PostgreSQL: a new query no longer runs in a schema named after the connection's database, where it found no table. It uses the server's default schema until you pick one in the sidebar.
 - PostgreSQL and SQL Server: the sidebar starts at the server's current schema (`public`, `dbo`) instead of showing none.

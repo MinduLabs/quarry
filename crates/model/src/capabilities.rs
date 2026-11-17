@@ -38,5 +38,9 @@ pub struct Capabilities {
     pub cancel: bool,
     pub ssh: bool,
     pub ssl: bool,
+    /// Signs in to Amazon RDS with an AWS IAM token (`DbAuth::AwsIam`). Absent from drivers
+    /// built before it existed.
+    #[serde(default)]
+    pub aws_iam: bool,
     pub object_kinds: Vec<ObjectKind>,
 }

@@ -15,7 +15,16 @@ import type { Command } from "@/bindings/Command";
 import type { CompletionContext } from "@/bindings/CompletionContext";
 import type { Event } from "@/bindings/Event";
 
+/** Development only: `lib/devtools` watches the traffic for `./qd ev`. Null in release builds. */
+type DevTap = (direction: "out" | "in", message: Command | Event) => void;
+let devTap: DevTap | null = null;
+
+export function setDevTap(tap: DevTap | null): void {
+  devTap = tap;
+}
+
 export function send(command: Command): void {
+  devTap?.("out", command);
   invoke("engine_send", { command }).catch((err: unknown) => {
     console.error("engine_send failed", err);
   });
@@ -23,7 +32,10 @@ export function send(command: Command): void {
 
 export async function subscribe(handler: (event: Event) => void): Promise<void> {
   const channel = new Channel<Event>();
-  channel.onmessage = handler;
+  channel.onmessage = (event) => {
+    devTap?.("in", event);
+    handler(event);
+  };
   await invoke("engine_subscribe", { onEvent: channel });
 }
 

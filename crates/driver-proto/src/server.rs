@@ -134,6 +134,7 @@ async fn answer(
 ) -> Result<Reply, DriverError> {
     let call = match call {
         Call::Connect { config, password } => {
+            let config = *config;
             let opened = driver.connect(&ResolvedConfig { config, password }).await?;
             let server_version = opened.server_version();
             *cancel.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened.cancel_handle());

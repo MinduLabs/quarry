@@ -17,6 +17,7 @@
 ## Features
 
 - **Databases:** MySQL, MariaDB, PostgreSQL and Microsoft SQL Server, over SSL or an SSH tunnel.
+  Amazon RDS and Aurora connections can sign in with AWS IAM instead of a password.
   Each driver is downloaded the first time you need it and checked before it runs. Passwords stay
   in the system keyring.
 - **SQL editor:** completion that reads the statement you are in (tables, columns, aliases, the
@@ -126,7 +127,11 @@ just bindings         # regenerate ui/src/bindings after changing Command, Event
 just test-db          # start the test databases, then the driver and engine integration tests
 just bench            # release benchmarks
 pnpm format           # format the UI with Biome
+./qd help             # drive the dev app from a terminal or an AI agent (Linux)
 ```
+
+`./qd` starts the dev app in a sandbox and reads, clicks and measures it in a few lines of text:
+[docs/DEVTOOLS.md](docs/DEVTOOLS.md).
 
 Drivers live in one place for `just dev` and the installed app: `drivers` in the data dir
 (`~/.local/share/quarry/drivers`, `~/Library/Application Support/quarry/drivers`).

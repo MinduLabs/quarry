@@ -148,7 +148,7 @@ impl Driver for ProcessDriver {
         let reply = remote
             .call(
                 Call::Connect {
-                    config: config.config.clone(),
+                    config: Box::new(config.config.clone()),
                     password: config.password.clone(),
                 },
                 None,
@@ -527,7 +527,7 @@ where
     let reply = remote
         .call(
             Call::Connect {
-                config: config.config.clone(),
+                config: Box::new(config.config.clone()),
                 password: config.password.clone(),
             },
             None,

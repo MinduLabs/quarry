@@ -113,12 +113,15 @@ async fn data_sources_mark_what_this_build_can_open() {
         let source = find(id);
         assert_eq!(source.driver.as_ref().map(|d| d.0.as_str()), Some(id));
         assert!(source.is_installed);
+        assert!(source.supports_aws_iam, "{id}");
     }
     // Quarry has a driver for these, not yet downloaded here.
     for (id, driver) in [("postgresql", "postgres"), ("sqlserver", "sqlserver")] {
         let source = find(id);
         assert_eq!(source.driver.as_ref().map(|d| d.0.as_str()), Some(driver));
         assert!(!source.is_installed, "{id}");
+        // Unknown until its driver is here to say.
+        assert!(!source.supports_aws_iam, "{id}");
     }
     // Coming soon.
     for id in ["aws", "google-cloud", "demo-sqlite", "demo-mysql"] {
@@ -147,6 +150,7 @@ async fn production_edits_ask_first_and_read_only_refuses() {
         read_only: false,
         color: None,
         group: None,
+        auth: Default::default(),
     };
     let change = || ApplyChangesFixture {
         key: vec![CellValue {
@@ -320,6 +324,7 @@ async fn saved_unreachable_connection(engine: &EngineHandle, events: &EngineEven
         read_only: false,
         color: None,
         group: None,
+        auth: Default::default(),
     };
     let id = config.id;
     engine
@@ -792,4 +797,48 @@ fn export_commands_parse_as_the_ui_sends_them() {
         )),
         Command::ExportPreview { .. }
     ));
+}
+
+#[tokio::test]
+async fn aws_iam_refuses_a_connection_without_tls() {
+    use quarry_model::{DbAuth, DriverId, SslMode};
+    let (engine, events) = test_engine();
+    let config = ConnectionConfig {
+        id: ConnId::new(),
+        name: "rds".into(),
+        driver: DriverId("mysql".into()),
+        host: Some("db.abc.eu-west-1.rds.amazonaws.com".into()),
+        port: Some(3306),
+        database: None,
+        user: Some("app".into()),
+        path: None,
+        ssl: SslMode::Prefer,
+        ssh: None,
+        environment: Environment::Local,
+        read_only: false,
+        color: None,
+        group: None,
+        auth: DbAuth::AwsIam {
+            profile: None,
+            region: None,
+        },
+    };
+    engine
+        .send(Command::TestConnection {
+            request: 7,
+            config,
+            password: None,
+            ssh_secret: None,
+        })
+        .unwrap();
+    loop {
+        if let Event::TestResult {
+            request: 7, error, ..
+        } = events.recv().await.unwrap()
+        {
+            let error = error.expect("refused");
+            assert!(error.contains("only over TLS"), "{error}");
+            break;
+        }
+    }
 }

@@ -112,6 +112,10 @@ impl Engine {
                     name: entry.name.to_owned(),
                     section: entry.section,
                     is_installed: driver.as_ref().is_some_and(|id| self.driver(id).is_some()),
+                    supports_aws_iam: driver
+                        .as_ref()
+                        .and_then(|id| self.driver(id))
+                        .is_some_and(|d| d.capabilities().aws_iam),
                     driver,
                     default_port: entry.default_port,
                 }
