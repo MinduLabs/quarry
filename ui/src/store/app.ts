@@ -248,6 +248,18 @@ const INEXACT_TYPE = /float|double|real|json|geometry|point|linestring|polygon/i
  * come from one table. Rows are matched by the primary key, else by a unique key on NOT NULL
  * columns, else by all comparable columns. `null` when the result can't be edited.
  */
+/** `target.database` when the connection's tree lists it, else `null`, so the server's default
+ * applies. PostgreSQL's tree lists schemas, not the database the connection opens. While the
+ * list is not loaded yet, the name is kept. */
+function listedDatabase(
+  s: Pick<AppState, "nodes">,
+  target: { connId: string; database: string | null },
+): string | null {
+  const listed = s.nodes[target.connId]?.databases ?? [];
+  if (target.database === null || listed.length === 0) return target.database;
+  return listed.some((d) => d.name === target.database) ? target.database : null;
+}
+
 export function editTarget(tab: Tab, readOnly: boolean): EditTarget | null {
   const set = tab.sets[tab.activeSet];
   if (readOnly || !set?.columns) return null;
@@ -1466,6 +1478,14 @@ export const useApp = create<AppState>()((set, get) => {
           if (fresh && preferred && event.databases.includes(preferred)) {
             send({ type: "LoadObjects", id: event.id, database: preferred });
           }
+          // The connection's Default database is not always one of the tree's: PostgreSQL
+          // lists schemas. A tab given a name the server does not have there finds no table.
+          const active = get().active;
+          if (active?.connId === event.id && active.database !== null) {
+            if (!event.databases.includes(active.database)) {
+              set({ active: { connId: event.id, database: null } });
+            }
+          }
           break;
         }
         case "Objects":
@@ -1990,14 +2010,15 @@ export const useApp = create<AppState>()((set, get) => {
     newQuery: (target) => {
       const s = get();
       const connected = s.connections.find((c) => s.nodes[c.id]?.status.kind === "connected");
-      const t =
+      const wanted =
         target ??
         s.active ??
         (connected ? { connId: connected.id, database: connected.database } : null);
-      if (!t) {
+      if (!wanted) {
         get().toast("info", "Connect to a database first");
         return;
       }
+      const t = { connId: wanted.connId, database: listedDatabase(s, wanted) };
       openTab(t.connId, t.database, `Query ${nextQuery++}`, "");
     },
     selectTab: (id) => {

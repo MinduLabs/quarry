@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+- PostgreSQL: a new query no longer runs in a schema named after the connection's database, where it found no table. It uses the server's default schema until you pick one in the sidebar.
+
 ## [0.1.0] - 2026-10-31
 
 The first public release: a fast, open-source database client for MySQL, MariaDB, PostgreSQL and
