@@ -428,6 +428,11 @@ pub trait Session: Send {
         Err(DriverError::Unsupported("streaming every row"))
     }
     async fn list_databases(&mut self) -> Result<Vec<String>>;
+    /// The entry of `list_databases` the session starts in (the current schema, where the list
+    /// holds schemas), which the tree shows first. `None` when there is none or it is unknown.
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        Ok(None)
+    }
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>>;
     /// Column names of every table and view in `database`, for completion.
     async fn list_columns(&mut self, _database: &str) -> Result<Vec<TableColumns>> {

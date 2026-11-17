@@ -82,6 +82,7 @@ pub enum Call {
         opts: ExecOpts,
     },
     ListDatabases,
+    CurrentDatabase,
     ListObjects {
         database: String,
     },
@@ -127,6 +128,7 @@ impl std::fmt::Debug for Call {
             Self::Query { .. } => "Query",
             Self::Stream { .. } => "Stream",
             Self::ListDatabases => "ListDatabases",
+            Self::CurrentDatabase => "CurrentDatabase",
             Self::ListObjects { .. } => "ListObjects",
             Self::ListColumns { .. } => "ListColumns",
             Self::TableInfo { .. } => "TableInfo",

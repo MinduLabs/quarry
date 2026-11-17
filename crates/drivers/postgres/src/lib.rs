@@ -374,6 +374,10 @@ impl Session for PostgresSession {
         introspect::schemas(&self.client).await
     }
 
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        introspect::current_schema(&self.client).await
+    }
+
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>> {
         introspect::objects(&self.client, database).await
     }

@@ -48,6 +48,15 @@ pub async fn schemas(client: &Client) -> Result<Vec<String>> {
         .collect()
 }
 
+/// The first schema of the `search_path` that exists (usually `public`).
+pub async fn current_schema(client: &Client) -> Result<Option<String>> {
+    let found = rows(client, "SELECT current_schema()", &[]).await?;
+    match found.first() {
+        Some(row) => get(row, 0),
+        None => Ok(None),
+    }
+}
+
 pub async fn objects(client: &Client, schema: &str) -> Result<Vec<SchemaObject>> {
     let relations = rows(
         client,

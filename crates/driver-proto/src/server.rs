@@ -188,6 +188,8 @@ async fn answer(
             Reply::Done
         }
         Call::ListDatabases => Reply::Names(open.list_databases().await?),
+        // At most one name: `Names` carries it without a new reply a driver must know.
+        Call::CurrentDatabase => Reply::Names(open.current_database().await?.into_iter().collect()),
         Call::ListObjects { database } => Reply::Objects(open.list_objects(&database).await?),
         Call::ListColumns { database } => Reply::Columns(open.list_columns(&database).await?),
         Call::TableInfo { table } => Reply::Table(open.table_info(&table).await?),

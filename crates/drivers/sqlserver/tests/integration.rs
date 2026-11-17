@@ -35,6 +35,7 @@ async fn connects_and_lists_schemas_and_objects() {
     assert!(schemas.contains(&"dbo".to_owned()));
     assert!(schemas.contains(&"playground".to_owned()));
     assert!(!schemas.iter().any(|n| n == "sys" || n.starts_with("db_")));
+    assert_eq!(s.current_database().await.unwrap().as_deref(), Some("dbo"));
 
     let objects = s.list_objects("dbo").await.unwrap();
     let kind = |name: &str| objects.iter().find(|o| o.name == name).map(|o| o.kind);

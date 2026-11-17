@@ -14,6 +14,7 @@ import {
   type ConnNode,
   copyText,
   type DbNode,
+  homeDatabase,
   shownSchemas,
   type TreeTableInfo,
   treeKey,
@@ -164,7 +165,7 @@ function linesOf(
     // Only the ticked schemas are listed; the rest are behind the count next to the connection.
     const shown =
       connected && node
-        ? shownSchemas(config.database, node.databases, schemaFilter[config.id])
+        ? shownSchemas(homeDatabase(config, node), node.databases, schemaFilter[config.id])
         : null;
     if (connected && node && (nameMatches ? node.expanded : true)) {
       for (const db of node.databases) {
@@ -517,7 +518,7 @@ function ConnectionLine({
  * opens the list to tick them; none shown is tinted, since the tree under it is then empty. */
 function SchemaCount({ config, node }: { config: ConnectionConfig; node: ConnNode }) {
   const saved = useApp((s) => s.schemaFilter[config.id]);
-  const shown = shownSchemas(config.database, node.databases, saved).size;
+  const shown = shownSchemas(homeDatabase(config, node), node.databases, saved).size;
   return (
     <button
       type="button"

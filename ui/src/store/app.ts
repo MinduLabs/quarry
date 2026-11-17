@@ -86,6 +86,9 @@ export interface ConnNode {
   status: ConnStatus;
   expanded: boolean;
   databases: DbNode[];
+  /** The entry of `databases` the server put the session in (PostgreSQL's current schema), when
+   * the driver says. */
+  current: string | null;
 }
 
 export interface ResultSet {
@@ -243,23 +246,26 @@ export interface EditTarget {
 /** Column types whose values do not compare exactly, so they cannot match a row. */
 const INEXACT_TYPE = /float|double|real|json|geometry|point|linestring|polygon/i;
 
+/** `target.database` when the connection's tree lists it, else the server's current schema when
+ * listed, else `null` so the server's default applies. PostgreSQL's tree lists schemas, not the
+ * database the connection opens. While the list is not loaded yet, the name is kept. */
+function listedDatabase(
+  s: Pick<AppState, "nodes">,
+  target: { connId: string; database: string | null },
+): string | null {
+  const node = s.nodes[target.connId];
+  const listed = node?.databases ?? [];
+  if (target.database === null || listed.length === 0) return target.database;
+  const isListed = (name: string | null) => listed.some((d) => d.name === name);
+  if (isListed(target.database)) return target.database;
+  return node?.current && isListed(node.current) ? node.current : null;
+}
+
 /**
  * Where edits of the shown result go: a page of a table, or a query result whose columns all
  * come from one table. Rows are matched by the primary key, else by a unique key on NOT NULL
  * columns, else by all comparable columns. `null` when the result can't be edited.
  */
-/** `target.database` when the connection's tree lists it, else `null`, so the server's default
- * applies. PostgreSQL's tree lists schemas, not the database the connection opens. While the
- * list is not loaded yet, the name is kept. */
-function listedDatabase(
-  s: Pick<AppState, "nodes">,
-  target: { connId: string; database: string | null },
-): string | null {
-  const listed = s.nodes[target.connId]?.databases ?? [];
-  if (target.database === null || listed.length === 0) return target.database;
-  return listed.some((d) => d.name === target.database) ? target.database : null;
-}
-
 export function editTarget(tab: Tab, readOnly: boolean): EditTarget | null {
   const set = tab.sets[tab.activeSet];
   if (readOnly || !set?.columns) return null;
@@ -1004,7 +1010,17 @@ export function saveWorkspace(): Promise<void> {
   });
 }
 
-const emptyNode = (): ConnNode => ({ status: { kind: "idle" }, expanded: false, databases: [] });
+const emptyNode = (): ConnNode => ({
+  status: { kind: "idle" },
+  expanded: false,
+  databases: [],
+  current: null,
+});
+
+/** Where a connection's tree starts: the server's current schema, else the Default database. */
+export function homeDatabase(config: ConnectionConfig, node: ConnNode | undefined): string | null {
+  return node?.current ?? config.database;
+}
 
 export const useApp = create<AppState>()((set, get) => {
   /** Update one tab by id. */
@@ -1456,13 +1472,15 @@ export const useApp = create<AppState>()((set, get) => {
         }
         case "Databases": {
           const config = get().connections.find((c) => c.id === event.id);
-          const preferred = config?.database ?? null;
+          const current = event.current ?? get().nodes[event.id]?.current ?? null;
+          const preferred = current ?? config?.database ?? null;
           // A refreshed list (after creating or dropping a database) keeps what is open.
           const known = new Map(
             (get().nodes[event.id]?.databases ?? []).map((db) => [db.name, db] as const),
           );
           const fresh = known.size === 0;
           patchNode(event.id, () => ({
+            current,
             databases: event.databases.map(
               (name) =>
                 known.get(name) ?? {
@@ -1480,10 +1498,12 @@ export const useApp = create<AppState>()((set, get) => {
           }
           // The connection's Default database is not always one of the tree's: PostgreSQL
           // lists schemas. A tab given a name the server does not have there finds no table.
+          // The server's current schema stands in for it.
           const active = get().active;
           if (active?.connId === event.id && active.database !== null) {
             if (!event.databases.includes(active.database)) {
-              set({ active: { connId: event.id, database: null } });
+              const home = preferred && event.databases.includes(preferred) ? preferred : null;
+              set({ active: { connId: event.id, database: home } });
             }
           }
           break;

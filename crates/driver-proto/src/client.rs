@@ -402,6 +402,13 @@ impl Session for ProcessSession {
         }
     }
 
+    async fn current_database(&mut self) -> Result<Option<String>> {
+        match self.remote.call(Call::CurrentDatabase, None).await? {
+            Reply::Names(names) => Ok(names.into_iter().next()),
+            other => Err(unexpected(&other)),
+        }
+    }
+
     async fn list_objects(&mut self, database: &str) -> Result<Vec<SchemaObject>> {
         let call = Call::ListObjects {
             database: database.to_owned(),

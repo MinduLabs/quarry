@@ -29,6 +29,11 @@ async fn connects_and_lists_schemas_and_objects() {
     assert!(schemas.contains(&"public".to_owned()));
     assert!(schemas.contains(&"playground".to_owned()));
     assert!(!schemas.iter().any(|n| n == "pg_catalog"));
+    // The tree starts at the current schema, not at the database the connection opens.
+    assert_eq!(
+        s.current_database().await.unwrap().as_deref(),
+        Some("public")
+    );
 
     let objects = s.list_objects("public").await.unwrap();
     let kind = |name: &str| objects.iter().find(|o| o.name == name).map(|o| o.kind);
