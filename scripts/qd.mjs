@@ -160,9 +160,12 @@ async function settle(app) {
 
 async function up(fresh) {
   const state = readState();
-  if (isAlive(state.pid) && (await pageSocket().catch(() => null))) {
-    console.log("already up");
-    return ps();
+  if (isAlive(state.pid)) {
+    if (fresh) fail("The app is running; ./qd down first, then ./qd up -f.");
+    // Running but not answering yet: `tauri dev` is rebuilding after a change. Wait for it
+    // instead of starting a second app on the same ports.
+    console.log("already running; waiting for it to answer …");
+    return waitReady(state.pid);
   }
   if (fresh) rmSync(SANDBOX, { recursive: true, force: true });
   for (const dir of ["config", "data", "aws", "shots"]) mkdirSync(join(SANDBOX, dir), { recursive: true });
@@ -200,9 +203,14 @@ async function up(fresh) {
   closeSync(log);
   writeState({ pid: child.pid, evCursor: 0, logOffset: statSync(LOG_FILE).size, perfOffset: 0 });
   console.log("starting the app (the first build takes a few minutes) …");
+  return waitReady(child.pid);
+}
+
+/** Wait until the app `pid` serves its window with the qd bridge, then print `ps`. */
+async function waitReady(pid) {
   const start = Date.now();
   while (Date.now() - start < UP_TIMEOUT_MS) {
-    if (!isAlive(child.pid)) {
+    if (!isAlive(pid)) {
       const tail = readFileSync(LOG_FILE, "utf8").split("\n").slice(-20).join("\n");
       fail(`the app stopped:\n${stripAnsi(tail)}`);
     }

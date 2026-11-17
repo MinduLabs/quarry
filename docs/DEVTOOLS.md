@@ -31,7 +31,7 @@ It is a development tool. Release builds do not contain it.
 
 | Command | What it does |
 | --- | --- |
-| `up [-f]` | Start the dev app in the sandbox and wait until it is ready. `-f` starts from an empty sandbox. |
+| `up [-f]` | Start the dev app in the sandbox and wait until it is ready. `-f` starts from an empty sandbox. When the app runs already (or is rebuilding after a Rust change), `up` waits for it. |
 | `down` | Stop the app, Vite and the driver server. |
 | `ps` | Connections and their status, tabs, the open dialog, driver downloads, toasts. |
 | `ui [-a]` | What changed on screen since the last `ui`, as `+`/`-` lines. `-a` prints everything. |
