@@ -9,6 +9,7 @@ import { onRender } from "@/lib/perf";
 import { isMac } from "@/lib/platform";
 import { pendingWork, saveWorkspace, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
+import { DriverDialog } from "./features/connections/DriverDialog";
 import { ExportDialog } from "./features/export/ExportDialog";
 import { ExportProgress } from "./features/export/ExportProgress";
 import { HistoryDialog } from "./features/history/HistoryDialog";
@@ -176,6 +177,7 @@ export function App() {
       </div>
       <ConnectionDialog />
       <DeleteConnectionDialog />
+      <DriverDialog />
       <ConfirmRunDialog />
       <ConfirmChangesDialog />
       <ConfirmDeleteRowsDialog />

@@ -24,11 +24,7 @@ export function DriverField({
   const id = source?.driver ?? null;
   const install = useApp((s) => (id ? s.driverInstalls[id] : undefined));
   const { installDriver } = useApp.getState();
-  // "Installed" stays a moment after the engine is done, so a fast download is still seen.
-  const isBusy =
-    install?.kind === "Downloading" ||
-    install?.kind === "Verifying" ||
-    install?.kind === "Installed";
+  const isBusy = isInstalling(install);
   const hasFailed = install?.kind === "Failed";
 
   return (
@@ -60,8 +56,18 @@ export function DriverField({
   );
 }
 
+/** A download is running. "Installed" stays a moment after the engine is done, so a fast
+ * download is still seen. */
+export function isInstalling(install: DriverInstallState | undefined): boolean {
+  return (
+    install?.kind === "Downloading" ||
+    install?.kind === "Verifying" ||
+    install?.kind === "Installed"
+  );
+}
+
 /** The bytes so far against the size, then the check that runs before the driver is used. */
-function InstallProgress({ state }: { state: DriverInstallState }) {
+export function InstallProgress({ state }: { state: DriverInstallState }) {
   if (state.kind === "Installed") {
     return (
       <div role="status" aria-live="polite" className="flex flex-col gap-1.5">

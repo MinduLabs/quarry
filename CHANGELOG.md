@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+- A saved connection whose driver is not downloaded is marked in the sidebar, and connecting to it offers to download the driver, then connects.
+
 ## [0.1.0] - 2026-10-31
 
 The first public release: a fast, open-source database client for MySQL, MariaDB, PostgreSQL and
