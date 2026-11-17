@@ -163,7 +163,10 @@ function snapshotLines(): string[] {
       const description = describedBy && document.getElementById(describedBy)?.textContent;
       if (description?.trim()) lines.push(`text "${clean(description)}"`);
     }
-    const nodes = scope.querySelectorAll(`${INTERACTIVE}, ${LANDMARK_TEXT}, [role="grid"]`);
+    // Inside a dialog its sentences matter too ("Connect to a database first."); the page's
+    // would be too many.
+    const prose = scope === document.body ? "" : ", p";
+    const nodes = scope.querySelectorAll(`${INTERACTIVE}, ${LANDMARK_TEXT}, [role="grid"]${prose}`);
     for (const el of nodes) {
       if (seen.has(el) || !isVisible(el)) continue;
       // A control inside another control (a chevron in a tree row) is reached through its parent.
@@ -175,7 +178,7 @@ function snapshotLines(): string[] {
         lines.push(...gridLines(el));
         continue;
       }
-      if (el.matches(LANDMARK_TEXT) && !el.matches(INTERACTIVE)) {
+      if ((el.matches(LANDMARK_TEXT) || el.tagName === "P") && !el.matches(INTERACTIVE)) {
         const text = nameOf(el);
         if (text) lines.push(`text "${text}"`);
         continue;
