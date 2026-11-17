@@ -172,7 +172,8 @@ impl Engine {
             favorites: Mutex::new(Vec::new()),
             workspace,
             history,
-            secrets: (!options.disable_keyring).then_some(SecretStore),
+            secrets: (!options.disable_keyring && !keyring_disabled_by_env())
+                .then_some(SecretStore),
             connections: Mutex::new(Vec::new()),
             passwords: Mutex::new(HashMap::new()),
             tunnels: Mutex::new(HashMap::new()),
@@ -215,5 +216,28 @@ impl Engine {
             .ok_or_else(|| "Connection not found".to_owned())?;
         self.driver(&config.driver)
             .ok_or_else(|| crate::drivers::missing(&config.driver))
+    }
+}
+
+/// `QUARRY_NO_KEYRING=1` (or `true`): passwords stay in memory for this run.
+fn keyring_disabled_by_env() -> bool {
+    is_on(std::env::var("QUARRY_NO_KEYRING").ok().as_deref())
+}
+
+fn is_on(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true"))
+}
+
+#[cfg(test)]
+mod keyring_env_tests {
+    use super::is_on;
+
+    #[test]
+    fn only_one_or_true_turns_the_keyring_off() {
+        assert!(is_on(Some("1")));
+        assert!(is_on(Some(" true ")));
+        assert!(!is_on(Some("0")));
+        assert!(!is_on(Some("")));
+        assert!(!is_on(None));
     }
 }

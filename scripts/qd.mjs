@@ -5,7 +5,8 @@
 // prints a few lines. Linux (WebKitGTK) only for now.
 
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { connect as tcpConnect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,7 +38,13 @@ const HELP = `qd: drive the Quarry dev app (docs/DEVTOOLS.md)
   ev [-a]               Command/Event traffic since the last ev (-a: all kept)
   logs [-a]             warnings and errors since the last logs (-a: every line)
   perf [reset]          timings since the last perf: count, p50, p95, max per name
+  open <table>          open a table of the active connection (database.table, connection/database.table)
   sql <query>           run in a new tab of the active connection; first rows and time
+  text [word]           the readable text of the open dialog or the window (-a: no limit)
+  seed                  save and connect the test databases that are up (up does it too)
+  bench <query> [n]     run a query n times (default 20); p50, p95, max
+  mem                   memory of the app, its drivers and dev servers
+  run <file|->          run qd commands from a file, one per line; stop at the first failure
   exec <js>             evaluate JavaScript in the window; prints the result
 `;
 
@@ -66,8 +73,11 @@ function isAlive(pid) {
   }
 }
 
+/** The line `qd run` is on, so a failure says where the script stopped. */
+let runLine = null;
+
 function fail(message) {
-  console.error(message);
+  console.error(runLine ? `✗ line ${runLine.number}: qd ${runLine.text}\n${message}` : message);
   process.exit(1);
 }
 
@@ -183,6 +193,8 @@ async function up(fresh) {
     XDG_DATA_HOME: join(SANDBOX, "data"),
     QUARRY_DRIVER_MANIFEST: `http://127.0.0.1:${DRIVER_PORT}/drivers.json`,
     QUARRY_PERF: "1",
+    // Test passwords stay in memory: the developer's keyring is never touched.
+    QUARRY_NO_KEYRING: "1",
     WEBKIT_INSPECTOR_HTTP_SERVER: `127.0.0.1:${INSPECTOR_PORT}`,
     // Keep the developer's own AWS credentials out of the sandbox.
     AWS_CONFIG_FILE: join(SANDBOX, "aws", "config"),
@@ -224,6 +236,8 @@ async function waitReady(pid) {
       app.close();
       if (ready === "object") {
         console.log(`up · sandbox target/qd · inspector 127.0.0.1:${INSPECTOR_PORT}`);
+        // An app that restarted lost the test passwords it kept in memory: give them again.
+        await seed();
         return ps();
       }
     }
@@ -404,10 +418,177 @@ async function sql(query) {
 
 const exec = (js) => withApp(async (app) => console.log(JSON.stringify(await app.evaluate(js), null, 1) ?? "undefined"));
 
+// ---------- Test databases ----------
+
+/** The databases of tests/docker-compose.yml (test values only, as in README › Test database).
+ * Fixed ids, so seeding again updates them instead of adding copies. */
+const SEEDS = [
+  { id: "00000000-0000-4000-8000-00000000a001", name: "MySQL test", driver: "mysql", port: 13306, user: "quarry", password: "quarry" },
+  { id: "00000000-0000-4000-8000-00000000a002", name: "PostgreSQL test", driver: "postgres", port: 15432, user: "quarry", password: "quarry" },
+  { id: "00000000-0000-4000-8000-00000000a003", name: "SQL Server test", driver: "sqlserver", port: 11433, user: "sa", password: "Quarry-test-1" },
+];
+
+/** Something listens on 127.0.0.1:`port`. */
+const isListening = (port) =>
+  new Promise((done) => {
+    const socket = tcpConnect({ host: "127.0.0.1", port, timeout: 300 });
+    const finish = (ok) => {
+      socket.destroy();
+      done(ok);
+    };
+    socket.on("connect", () => finish(true));
+    socket.on("timeout", () => finish(false));
+    socket.on("error", () => finish(false));
+  });
+
+/** Save, install the driver of, and connect every test database that is up. */
+async function seed() {
+  const up = [];
+  // The last one connected becomes the active connection; MySQL test goes last, so it is.
+  for (const db of [...SEEDS].reverse()) if (await isListening(db.port)) up.push(db);
+  if (up.length === 0) {
+    console.log("seed: no test database is up (docker compose -f tests/docker-compose.yml up -d --wait)");
+    return;
+  }
+  await withApp(async (app) => {
+    for (const db of up) {
+      const config = {
+        id: db.id,
+        name: db.name,
+        driver: db.driver,
+        host: "127.0.0.1",
+        port: db.port,
+        database: "shop",
+        user: db.user,
+        path: null,
+        ssl: "prefer",
+        ssh: null,
+        environment: "local",
+        read_only: false,
+        color: null,
+        group: null,
+      };
+      const result = await app.qd("seed", config, db.password);
+      if (result !== "ok") fail(`seed ${db.name}: ${result}`);
+      const until = Date.now() + 120_000;
+      let status = "";
+      while (Date.now() < until) {
+        status = await app.qd("connState", db.id);
+        if (status === "connected" || status.startsWith("failed")) break;
+        await sleep(200);
+      }
+      console.log(`seed: ${db.name} · ${status}`);
+    }
+  });
+}
+
+// ---------- Reading and measuring ----------
+
+async function text(word, all) {
+  await withApp(async (app) => {
+    const result = await app.qd("text", word ?? "", all);
+    if (word && result === null) fail(`no line contains "${word}"`);
+    console.log(result);
+  });
+}
+
+const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+
+async function bench(query, times) {
+  await withApp(async (app) => {
+    const tab = await app.qd("sqlStart", query);
+    if (typeof tab === "string") fail(tab);
+    const runOnce = async () => {
+      const until = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < until) {
+        const run = await app.qd("tabRun", tab);
+        if (!run.running) return run;
+        await sleep(20);
+      }
+      fail("a run took over 5 minutes");
+    };
+    // The first run warms the session and the server's caches; it is not counted.
+    const first = await runOnce();
+    if (first.error) fail(`error: ${first.error}`);
+    const times_ms = [];
+    for (let i = 0; i < times; i++) {
+      const again = await app.qd("rerun", tab);
+      if (again !== "ok") fail(again);
+      const run = await runOnce();
+      if (run.error) fail(`error on run ${i + 1}: ${run.error}`);
+      times_ms.push(run.elapsed);
+    }
+    const sorted = [...times_ms].sort((a, b) => a - b);
+    const ms = (v) => `${v.toFixed(2)} ms`;
+    console.log(`${times} runs · ${first.rows} rows · p50 ${ms(percentile(sorted, 0.5))} · p95 ${ms(percentile(sorted, 0.95))} · max ${ms(sorted.at(-1))}`);
+  });
+}
+
+/** Resident memory of every process the sandbox started (the app, drivers, Vite, Cargo). */
+function mem() {
+  const { pid } = readState();
+  if (!isAlive(pid)) fail("The dev app is not running. Start it with: ./qd up");
+  const page = 4096;
+  const rows = [];
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+      // `pid (comm) state ppid pgrp …`: comm may hold spaces, so read after its last ")".
+      const close = stat.lastIndexOf(")");
+      // The kernel cuts `comm` at 15 characters; the program path is whole.
+      const argv0 = readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0")[0] ?? "";
+      const name = argv0.split("/").at(-1) || stat.slice(stat.indexOf("(") + 1, close);
+      const pgrp = Number(stat.slice(close + 2).split(" ")[2]);
+      if (pgrp !== pid) continue;
+      const rss = Number(readFileSync(`/proc/${entry}/statm`, "utf8").split(" ")[1]) * page;
+      rows.push({ name, pid: entry, mb: rss / 1024 / 1024 });
+    } catch {
+      // The process ended while it was read.
+    }
+  }
+  rows.sort((a, b) => b.mb - a.mb);
+  // The window's web content runs in WebKit's own processes: they are part of the app.
+  const isApp = (r) => r.name === "quarry" || r.name.startsWith("quarry-driver") || r.name.startsWith("WebKit");
+  const app = rows.filter(isApp);
+  for (const r of rows.filter((r) => r.mb >= 5)) console.log(`${r.name}  ${r.pid}  ${r.mb.toFixed(0)} MB`);
+  const total = app.reduce((sum, r) => sum + r.mb, 0);
+  console.log(`app (quarry, WebKit, drivers): ${total.toFixed(0)} MB · the rest is Vite, Cargo and the driver server`);
+}
+
+// ---------- Scripts ----------
+
+/** Words of one script line, with "double quotes" around words that hold spaces. */
+function splitLine(line) {
+  const words = [];
+  const pattern = /"((?:[^"\\]|\\.)*)"|(\S+)/g;
+  for (const match of line.matchAll(pattern)) {
+    words.push(match[1] !== undefined ? match[1].replace(/\\(.)/g, "$1") : match[2]);
+  }
+  return words;
+}
+
+async function run(file) {
+  const source = file === "-" ? readFileSync(0, "utf8") : readFileSync(resolve(file), "utf8");
+  const lines = source.split("\n");
+  for (const [index, raw] of lines.entries()) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const words = splitLine(line.replace(/^(\.\/)?qd\s+/, ""));
+    if (words[0] === "run") fail("run cannot run another script");
+    runLine = { number: index + 1, text: line };
+    console.log(`$ qd ${line}`);
+    await dispatch(words);
+    console.log();
+  }
+  runLine = null;
+}
+
 // ---------- Arguments ----------
 
-const argv = process.argv.slice(2);
-const flags = new Set(argv.filter((a) => a.startsWith("-") && !/^-?\d/.test(a)));
+async function dispatch(argv) {
+// A lone "-" is standard input (`run -`), not a flag.
+const flags = new Set(argv.filter((a) => a.startsWith("-") && a !== "-" && !/^-?\d/.test(a)));
 const args = argv.filter((a, i) => !flags.has(a) && argv[i - 1] !== "-o");
 const option = (name) => {
   const i = argv.indexOf(name);
@@ -417,6 +598,24 @@ const [command, a1, a2] = args;
 const need = (value, usage) => value ?? fail(`usage: qd ${usage}`);
 
 switch (command) {
+  case "open":
+    await act("open", need(a1, "open <table|database.table|connection/database.table>"));
+    break;
+  case "seed":
+    await seed();
+    break;
+  case "text":
+    await text(a1, flags.has("-a"));
+    break;
+  case "bench":
+    await bench(need(a1, "bench <query> [n]"), Number(a2 ?? 20));
+    break;
+  case "mem":
+    mem();
+    break;
+  case "run":
+    await run(need(a1, "run <file|->"));
+    break;
   case "up":
     await up(flags.has("-f"));
     break;
@@ -475,5 +674,8 @@ switch (command) {
     break;
   default:
     console.log(HELP);
-    if (command && command !== "help") process.exit(1);
+    if (command && command !== "help") fail(`unknown command: ${command}`);
 }
+}
+
+await dispatch(process.argv.slice(2));
