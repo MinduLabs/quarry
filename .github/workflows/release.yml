@@ -269,12 +269,20 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  # drivers.json: for each driver and target, the release file's URL and SHA-256.
+  # drivers.json: this version, and for each driver and target the release file's URL and SHA-256.
+  # Signed with the updater key into drivers.json.sig: a release build runs no other driver.
   drivers-manifest:
     needs: [version, drivers]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-drivers-*
@@ -282,6 +290,7 @@ jobs:
           path: out
       - name: Write drivers.json
         env:
+          VERSION: ${{ needs.version.outputs.version }}
           BASE: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
         run: |
           python3 - <<'PY'
@@ -299,12 +308,19 @@ jobs:
                   "url": f"{os.environ['BASE']}/{f.name}",
                   "sha256": sha,
               }
-          pathlib.Path("drivers.json").write_text(json.dumps({"packages": packages}, indent=2))
+          pathlib.Path("drivers.json").write_text(json.dumps({"version": os.environ["VERSION"], "packages": packages}, indent=2))
           PY
+      - name: Sign drivers.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: sh packaging/sign-drivers.sh drivers.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-drivers-manifest
-          path: drivers.json
+          path: |
+            drivers.json
+            drivers.json.sig
           if-no-files-found: error
 
   # latest.json: what the macOS app and the AppImage read to update themselves. Built only when the

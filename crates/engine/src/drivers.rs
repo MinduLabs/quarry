@@ -26,7 +26,8 @@ impl Engine {
         let Some(dir) = self.driver_dir.clone() else {
             return;
         };
-        let programs = match tokio::task::spawn_blocking(move || programs_in(&dir)).await {
+        let scan = dir.clone();
+        let programs = match tokio::task::spawn_blocking(move || programs_in(&scan)).await {
             Ok(Ok(programs)) => programs,
             Ok(Err(err)) => {
                 tracing::warn!(%err, "cannot read the driver directory");
@@ -36,6 +37,11 @@ impl Engine {
                 tracing::warn!(%err, "driver scan stopped");
                 return;
             }
+        };
+        let programs = if self.driver_trust.required {
+            self.signed_only(dir, programs).await
+        } else {
+            programs
         };
         for program in programs {
             match quarry_driver_proto::hello(&program).await {
@@ -49,6 +55,21 @@ impl Engine {
                 Err(err) => tracing::warn!(%err, "driver skipped"),
             }
         }
+    }
+}
+
+impl Engine {
+    /// The programs this version's signed driver list vouches for; see `DriverTrust::signed`.
+    async fn signed_only(&self, dir: PathBuf, programs: Vec<PathBuf>) -> Vec<PathBuf> {
+        let trust = self.driver_trust.clone();
+        let Some(target) = crate::install::target() else {
+            return Vec::new();
+        };
+        tokio::task::spawn_blocking(move || {
+            trust.signed(&dir, programs, env!("CARGO_PKG_VERSION"), target)
+        })
+        .await
+        .unwrap_or_default()
     }
 }
 

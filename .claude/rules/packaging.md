@@ -42,6 +42,6 @@ this: [ARCHITECTURE.md › Packaging](../../docs/ARCHITECTURE.md#packaging).
 - Every job has `timeout-minutes`.
 - A new third-party action needs a reason. No secrets or signing material in workflows, except the
   updater key, read from the `TAURI_SIGNING_PRIVATE_KEY` and `_PASSWORD` repository secrets by
-  `packaging/release-build.sh`.
+  `packaging/release-build.sh` and `packaging/sign-drivers.sh`.
 - A PR that changes `release.yml` builds packages without publishing. Only a `v*` tag publishes.
 - Read the failing job's log before re-running it.

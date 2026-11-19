@@ -1,0 +1,1 @@
+{"version":"9.9.9","packages":{"quarry-driver-mysql":{"x86_64-unknown-linux-gnu":{"url":"https://example.invalid/quarry-driver-mysql","sha256":"b4def8217cadae26d4da633fd2a4e58e326cbb5d570afdc3989484da07af3579"},"universal-apple-darwin":{"url":"https://example.invalid/quarry-driver-mysql-mac","sha256":"b4def8217cadae26d4da633fd2a4e58e326cbb5d570afdc3989484da07af3579"}}}}
