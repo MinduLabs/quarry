@@ -31,9 +31,6 @@ pub struct TableDiff {
     pub kind: TableDiffKind,
     /// What differs, one line each (`+ column note varchar(255)`, `~ column total: …`).
     pub details: Vec<String>,
-    /// What makes the target match, in order. Differences Quarry cannot script yet (primary and
-    /// foreign keys) are only in `details`.
-    pub changes: Vec<SchemaChange>,
 }
 
 /// The result of comparing two databases: what to change in the target so it matches the source.
@@ -46,6 +43,9 @@ pub struct SchemaDiff {
     pub tables: Vec<TableDiff>,
     /// Tables that are the same on both sides.
     pub same: u32,
+    /// What makes the target match, in the order it runs: foreign keys are dropped first and
+    /// added last, around the tables' own changes. Generated columns are only in the details.
+    pub changes: Vec<SchemaChange>,
     /// The script for the target, as the target's driver writes it.
     pub statements: Vec<String>,
 }

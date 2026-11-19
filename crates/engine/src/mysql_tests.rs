@@ -2011,7 +2011,8 @@ async fn compare_schemas_finds_what_differs() {
         target: side(target),
     };
 
-    engine.send(compare(31, "shop", "shop")).unwrap();
+    // No other test writes to `inventory`, so a table made meanwhile cannot show as a difference.
+    engine.send(compare(31, "inventory", "inventory")).unwrap();
     let Event::SchemaCompared { diff, error, .. } = next_matching(&events, |e| {
         matches!(e, Event::SchemaCompared { request: 31, .. })
     })
@@ -2022,7 +2023,7 @@ async fn compare_schemas_finds_what_differs() {
     assert_eq!(error, None);
     let diff = diff.unwrap();
     assert!(diff.tables.is_empty(), "{:?}", diff.tables);
-    assert!(diff.same >= 4);
+    assert!(diff.same >= 1);
     assert!(diff.statements.is_empty());
 
     // `inventory` has none of the shop's tables: each one is created there.
@@ -2045,6 +2046,18 @@ async fn compare_schemas_finds_what_differs() {
         "{:?}",
         diff.statements
     );
+    // The orders' foreign key comes after every table exists, pointing into the target.
+    let key = diff
+        .statements
+        .iter()
+        .position(|s| s.contains("FOREIGN KEY") && s.contains("REFERENCES `inventory`.`customers`"))
+        .unwrap_or_else(|| panic!("{:?}", diff.statements));
+    let last_create = diff
+        .statements
+        .iter()
+        .rposition(|s| s.starts_with("CREATE TABLE"))
+        .unwrap();
+    assert!(key > last_create, "{:?}", diff.statements);
 
     std::fs::remove_dir_all(dir).unwrap();
 }

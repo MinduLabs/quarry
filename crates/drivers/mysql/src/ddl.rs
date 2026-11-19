@@ -1,7 +1,7 @@
 //! MySQL statements for a [`SchemaChange`].
 
 use quarry_driver_api::{Dialect, SpecDialect};
-use quarry_model::{AlterOp, ColumnDef, IndexDef, SchemaChange, Value};
+use quarry_model::{AlterOp, ColumnDef, ForeignKey, IndexDef, SchemaChange, Value};
 
 pub fn statements(d: &SpecDialect, change: &SchemaChange) -> Result<Vec<String>, String> {
     let sql = match change {
@@ -85,7 +85,65 @@ fn alter(d: &SpecDialect, op: &AlterOp) -> Result<String, String> {
         AlterOp::DropIndex { name } => {
             format!("DROP INDEX {}", d.quote_ident(named(name, "index")?))
         }
+        AlterOp::AddPrimaryKey { columns } => {
+            if columns.is_empty() {
+                return Err("Pick at least one column for the primary key.".to_owned());
+            }
+            format!("ADD PRIMARY KEY ({})", idents(d, columns))
+        }
+        AlterOp::DropPrimaryKey => "DROP PRIMARY KEY".to_owned(),
+        AlterOp::AddForeignKey { foreign_key } => add_foreign_key(d, foreign_key)?,
+        AlterOp::DropForeignKey { name } => {
+            format!(
+                "DROP FOREIGN KEY {}",
+                d.quote_ident(named(name, "foreign key")?)
+            )
+        }
     })
+}
+
+fn add_foreign_key(d: &SpecDialect, fk: &ForeignKey) -> Result<String, String> {
+    named(&fk.name, "foreign key")?;
+    named(&fk.references.name, "referenced table")?;
+    if fk.columns.is_empty() || fk.columns.len() != fk.referenced_columns.len() {
+        return Err(format!(
+            "The foreign key “{}” needs as many referenced columns as columns.",
+            fk.name
+        ));
+    }
+    let mut sql = format!(
+        "ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+        d.quote_ident(&fk.name),
+        idents(d, &fk.columns),
+        d.qualify(&fk.references),
+        idents(d, &fk.referenced_columns)
+    );
+    for (clause, action) in [("ON DELETE", &fk.on_delete), ("ON UPDATE", &fk.on_update)] {
+        if let Some(action) = action {
+            sql.push_str(&format!(" {clause} {}", referential_action(action)?));
+        }
+    }
+    Ok(sql)
+}
+
+/// One of SQL's referential actions, upper-cased. Anything else is refused: it goes into the
+/// statement as written.
+fn referential_action(action: &str) -> Result<&'static str, String> {
+    let words = action
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_uppercase();
+    [
+        "RESTRICT",
+        "CASCADE",
+        "SET NULL",
+        "SET DEFAULT",
+        "NO ACTION",
+    ]
+    .into_iter()
+    .find(|known| *known == words)
+    .ok_or_else(|| format!("“{action}” is not a referential action."))
 }
 
 fn add_index(d: &SpecDialect, index: &IndexDef) -> Result<String, String> {
@@ -289,5 +347,53 @@ mod tests {
             ops: vec![],
         };
         assert!(statements(crate::dialect(), &no_ops).is_err());
+    }
+
+    #[test]
+    fn primary_and_foreign_keys() {
+        let fk = ForeignKey {
+            name: "orders_customer".into(),
+            columns: vec!["customer_id".into()],
+            references: TableRef {
+                database: Some("shop".into()),
+                schema: None,
+                name: "customers".into(),
+            },
+            referenced_columns: vec!["id".into()],
+            on_update: Some("no action".into()),
+            on_delete: Some("CASCADE".into()),
+        };
+        let sql = one(SchemaChange::AlterTable {
+            table: table(),
+            ops: vec![
+                AlterOp::DropForeignKey {
+                    name: "old_fk".into(),
+                },
+                AlterOp::DropPrimaryKey,
+                AlterOp::AddPrimaryKey {
+                    columns: vec!["id".into(), "kind".into()],
+                },
+                AlterOp::AddForeignKey {
+                    foreign_key: fk.clone(),
+                },
+            ],
+        });
+        assert_eq!(
+            sql,
+            "ALTER TABLE `shop`.`orders`\n  DROP FOREIGN KEY `old_fk`,\n  DROP PRIMARY KEY,\n  ADD PRIMARY KEY (`id`, `kind`),\n  ADD CONSTRAINT `orders_customer` FOREIGN KEY (`customer_id`) REFERENCES `shop`.`customers` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION"
+        );
+
+        let mut sneaky = fk;
+        sneaky.on_delete = Some("CASCADE; DROP TABLE x".into());
+        let refused = statements(
+            crate::dialect(),
+            &SchemaChange::AlterTable {
+                table: table(),
+                ops: vec![AlterOp::AddForeignKey {
+                    foreign_key: sneaky,
+                }],
+            },
+        );
+        assert!(refused.unwrap_err().contains("not a referential action"));
     }
 }

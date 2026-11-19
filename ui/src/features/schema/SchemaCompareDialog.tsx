@@ -34,7 +34,7 @@ export function SchemaCompareDialog() {
         open={Boolean(compare)}
         onClose={closeSchemaCompare}
         title="Compare schemas"
-        description="What the target needs to match the source: tables, columns and indexes."
+        description="What the target needs to match the source: tables, columns, indexes and keys."
         width={820}
         footer={
           <>
