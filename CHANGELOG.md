@@ -13,6 +13,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - A saved connection whose driver is not downloaded is marked in the sidebar, and connecting to it offers to download the driver, then connects.
 - PostgreSQL: a new query no longer runs in a schema named after the connection's database, where it found no table. It uses the server's default schema until you pick one in the sidebar.
 - PostgreSQL and SQL Server: the sidebar starts at the server's current schema (`public`, `dbo`) instead of showing none.
+### Security
+- Drivers are signed: Quarry runs only drivers listed in its own release's signed driver list, checked at download and at every start. After an update, download your drivers again when asked.
+
+### Known issues
+- Quarry 0.1.0 cannot update itself to this version: its updates were signed with a different key than the one it checks. Download this version once from the release page; later versions update themselves again.
 
 ## [0.1.0] - 2026-10-31
 

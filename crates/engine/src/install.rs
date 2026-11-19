@@ -1,8 +1,8 @@
 //! Driver binaries are downloaded on first use: the release's `drivers.json` names a file and
-//! its SHA-256 for each driver and machine; the file is checked, asked what it serves, and only
-//! then put in the driver directory and loaded.
+//! its SHA-256 for each driver and machine. The list's signature is checked first (release
+//! builds, see `driver_trust`), then the file's SHA-256; only then is it run, asked what it serves,
+//! put in the driver directory and loaded. The signed list is kept there for the next start.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 use futures_util::TryStreamExt;
 use quarry_driver_proto::ProcessDriver;
 use quarry_model::DriverId;
-use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::data_sources::package_of;
+use crate::driver_trust::{Artifact, MANIFEST_FILE, SIGNATURE_FILE};
 use crate::engine::Engine;
 use crate::{DriverInstallState, Event};
 
@@ -29,20 +29,8 @@ const MANIFEST_URL: &str = concat!(
 /// Progress is reported at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
-#[derive(Debug, Deserialize)]
-struct Manifest {
-    /// Package name → target → file.
-    packages: HashMap<String, HashMap<String, Artifact>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Artifact {
-    url: String,
-    sha256: String,
-}
-
 /// The release target this build runs on; macOS packages are universal.
-fn target() -> Option<&'static str> {
+pub(crate) fn target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
         ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
@@ -85,20 +73,25 @@ impl Engine {
             .clone()
             .or_else(|| std::env::var("QUARRY_DRIVER_MANIFEST").ok())
             .unwrap_or_else(|| MANIFEST_URL.to_owned());
-        let manifest: Manifest = serde_json::from_slice(
-            &client
-                .get(&manifest_url)
-                .send()
-                .await
-                .and_then(reqwest::Response::error_for_status)
-                .map_err(|err| unreachable_release(&err))?
-                .bytes()
-                .await
-                .map_err(|err| unreachable_release(&err))?,
-        )
-        .map_err(|err| {
-            format!("The list of drivers could not be read ({err}). Try again later.")
-        })?;
+        let manifest_bytes = client
+            .get(&manifest_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|err| unreachable_release(&err))?
+            .bytes()
+            .await
+            .map_err(|err| unreachable_release(&err))?;
+        // A release before signed lists has none; `driver_trust` decides whether that is enough.
+        let signature = match client.get(format!("{manifest_url}.sig")).send().await {
+            Ok(response) if response.status().is_success() => response.text().await.ok(),
+            _ => None,
+        };
+        let manifest = self.driver_trust.manifest(
+            &manifest_bytes,
+            signature.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+        )?;
         let artifact = manifest
             .packages
             .get(package)
@@ -124,8 +117,10 @@ impl Engine {
             .await;
         if result.is_err() {
             let _ = tokio::fs::remove_file(&staging).await;
+            return result;
         }
-        result
+        // The next start checks the installed drivers against this list, offline.
+        keep_list(&dir, &manifest_bytes, signature.as_deref()).await
     }
 
     async fn fetch_and_check(
@@ -214,6 +209,28 @@ impl Engine {
     }
 }
 
+/// Save the driver list and its signature next to the drivers, each replaced in one rename.
+async fn keep_list(dir: &Path, manifest: &[u8], signature: Option<&str>) -> Result<(), String> {
+    let write = |name: &'static str, bytes: Vec<u8>| async move {
+        let staging = dir.join(format!(".{name}.part"));
+        tokio::fs::write(&staging, bytes).await?;
+        tokio::fs::rename(&staging, dir.join(name)).await
+    };
+    let failed = |err: std::io::Error| format!("The list of drivers could not be saved: {err}.");
+    write(MANIFEST_FILE, manifest.to_vec())
+        .await
+        .map_err(failed)?;
+    match signature {
+        Some(signature) => write(SIGNATURE_FILE, signature.as_bytes().to_vec())
+            .await
+            .map_err(failed),
+        None => match tokio::fs::remove_file(dir.join(SIGNATURE_FILE)).await {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(failed(err)),
+            _ => Ok(()),
+        },
+    }
+}
+
 fn unreachable_release(err: &reqwest::Error) -> String {
     match err.status() {
         Some(status) => format!(
@@ -248,6 +265,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::target;
+    use crate::driver_trust::sha256_hex;
     use crate::{Command, DriverInstallState, EngineEvents, EngineHandle, EngineOptions, Event};
 
     /// Serves `files` by path over HTTP on `listener`, one request per connection.
@@ -283,14 +301,6 @@ mod tests {
                 });
             }
         });
-    }
-
-    fn sha256(bytes: &[u8]) -> String {
-        ring::digest::digest(&ring::digest::SHA256, bytes)
-            .as_ref()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
     }
 
     fn manifest(base: &str, sha: &str) -> Vec<u8> {
@@ -376,12 +386,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_release_build_refuses_an_unsigned_list_before_downloading() {
+        use crate::driver_trust::tests::{KEY, MANIFEST};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        serve_on(
+            listener,
+            HashMap::from([("/drivers.json".to_owned(), MANIFEST.as_bytes().to_vec())]),
+        );
+        let drivers = std::env::temp_dir().join(format!("quarry-drivers-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("quarry-install-{}", uuid::Uuid::new_v4()));
+        let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+            driver_dir: Some(drivers.clone()),
+            driver_manifest: Some(format!("{base}/drivers.json")),
+            driver_signing_key: Some(KEY.to_owned()),
+            require_signed_drivers: Some(true),
+            ..crate::test_support::options(&dir)
+        })
+        .unwrap();
+        engine
+            .send(Command::InstallDriver {
+                driver: DriverId("mysql".into()),
+            })
+            .unwrap();
+        let (state, progress) = outcome(&events).await;
+        assert!(
+            matches!(&state, DriverInstallState::Failed { error } if error.contains("not signed")),
+            "{state:?}"
+        );
+        assert!(progress.is_empty(), "{progress:?}");
+        assert!(leftovers(&drivers).is_empty(), "{:?}", leftovers(&drivers));
+    }
+
+    #[tokio::test]
     async fn a_damaged_download_is_refused_and_removed() {
         let (state, drivers, ..) = install(|base| {
             HashMap::from([
                 (
                     "/drivers.json".to_owned(),
-                    manifest(base, &sha256(b"other")),
+                    manifest(base, &sha256_hex(b"other")),
                 ),
                 ("/mysql".to_owned(), b"#!/bin/sh\n".to_vec()),
             ])
@@ -397,7 +442,7 @@ mod tests {
     #[tokio::test]
     async fn a_download_reports_its_bytes_then_verifies() {
         let body = vec![7u8; 64 * 1024];
-        let sha = sha256(&body);
+        let sha = sha256_hex(&body);
         let size = body.len() as u64;
         let (state, .., progress) = install(move |base| {
             HashMap::from([
@@ -431,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn a_file_that_does_not_run_is_never_installed() {
         let body = b"not a program".to_vec();
-        let sha = sha256(&body);
+        let sha = sha256_hex(&body);
         let (state, drivers, ..) = install(move |base| {
             HashMap::from([
                 ("/drivers.json".to_owned(), manifest(base, &sha)),
@@ -466,7 +511,7 @@ mod tests {
             return;
         };
         let body = std::fs::read(built).unwrap();
-        let sha = sha256(&body);
+        let sha = sha256_hex(&body);
         let (state, drivers, events, engine, _) = install(move |base| {
             HashMap::from([
                 ("/drivers.json".to_owned(), manifest(base, &sha)),
