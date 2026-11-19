@@ -16,6 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Security
 - Drivers are signed: Quarry runs only drivers listed in its own release's signed driver list, checked at download and at every start. After an update, download your drivers again when asked.
 
+### Known issues
+- Quarry 0.1.0 cannot update itself to this version: its updates were signed with a different key than the one it checks. Download this version once from the release page; later versions update themselves again.
+
 ## [0.1.0] - 2026-10-31
 
 The first public release: a fast, open-source database client for MySQL, MariaDB, PostgreSQL and

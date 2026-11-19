@@ -56,7 +56,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGOUFCNjA5NTNGMUU4MzUKUldRMTZQRlRDYmFhenhBaEdQMXNKcXg1Sk9vemplcEZPTTEvUEtYaU91NEVCTUYwKzhpVUQwaUsK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYwRjgyQzhBNkU1OTkyRUYKUldUdmtsbHVpaXo0OEpmL3AzODhCYUs0bmQxRGN5NnpPcWFXbGczRStIMS9OY0dvT0VFQVNwTDcK",
       "endpoints": ["https://github.com/MinduLabs/quarry/releases/latest/download/latest.json"]
     }
   }

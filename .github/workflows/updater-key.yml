@@ -1,0 +1,39 @@
+name: Updater key
+
+# Checks that the TAURI_SIGNING_PRIVATE_KEY secret is the private half of `plugins.updater.pubkey`
+# in tauri.conf.json, long before a tag: on every change to either file on main, and by hand
+# (workflow_dispatch) after the secret is replaced. The release build runs the same check.
+on:
+  push:
+    branches: [main]
+    paths:
+      - src-tauri/tauri.conf.json
+      - packaging/check-updater-key.sh
+      - .github/workflows/updater-key.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check the updater key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set."
+            exit 1
+          fi
+          sh packaging/check-updater-key.sh

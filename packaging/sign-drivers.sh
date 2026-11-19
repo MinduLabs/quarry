@@ -4,6 +4,7 @@
 # without the key fails: its users could not install any driver.
 set -eu
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  sh packaging/check-updater-key.sh
   pnpm tauri signer sign "$1"
   exit 0
 fi

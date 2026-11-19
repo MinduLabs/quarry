@@ -195,6 +195,9 @@ signed with a key made once with `pnpm tauri signer generate -w ~/.tauri/quarry.
 goes in `plugins.updater.pubkey` of `src-tauri/tauri.conf.json`, the private key and its password in
 the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A tag
 is refused without them. Keep the private key safe: without it, installed copies never update again.
+The public key and the secret are one pair: never run `signer generate` again without putting its
+new public key in `tauri.conf.json` and its private key in the secret together. The release build
+and the Updater key workflow (run it by hand after changing the secret) fail when they differ.
 
 ## Contributing
 
