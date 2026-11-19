@@ -170,7 +170,7 @@ impl Engine {
         };
         let id = config.id;
         let existing = match tunnel {
-            TunnelUse::Shared => lock(&self.tunnels).get(&id).cloned(),
+            TunnelUse::Shared => self.live_tunnel(id),
             TunnelUse::Temporary => None,
         };
         let tunnel = match existing {
@@ -203,6 +203,19 @@ impl Engine {
         config.host = Some("127.0.0.1".into());
         config.port = Some(tunnel.local_port());
         Ok((ResolvedConfig { config, password }, Some(tunnel)))
+    }
+
+    /// The connection's shared tunnel, unless its SSH connection has ended: then it is dropped,
+    /// so the caller opens a new one instead of failing on the dead one until Disconnect.
+    fn live_tunnel(&self, id: ConnId) -> Option<Arc<Tunnel>> {
+        let mut tunnels = lock(&self.tunnels);
+        let tunnel = tunnels.get(&id)?;
+        if tunnel.is_alive() {
+            return Some(tunnel.clone());
+        }
+        tracing::info!("SSH tunnel closed; opening a new one");
+        tunnels.remove(&id);
+        None
     }
 
     pub(crate) async fn stored_secret(&self, id: ConnId, kind: SecretKind) -> Option<String> {

@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - A saved connection whose driver is not downloaded is marked in the sidebar, and connecting to it offers to download the driver, then connects.
 - PostgreSQL: a new query no longer runs in a schema named after the connection's database, where it found no table. It uses the server's default schema until you pick one in the sidebar.
 - PostgreSQL and SQL Server: the sidebar starts at the server's current schema (`public`, `dbo`) instead of showing none.
+- A connection over SSH recovers when the SSH server restarts or the network drops: Quarry opens a new tunnel instead of failing on the closed one until you disconnect.
 
 ## [0.1.0] - 2026-10-31
 

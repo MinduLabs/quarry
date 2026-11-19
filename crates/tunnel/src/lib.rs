@@ -2,7 +2,9 @@
 //!
 //! [`open`] signs in to the SSH server, listens on `127.0.0.1:<random port>` and forwards every
 //! connection made there to the database host as seen from the SSH server. The driver then
-//! connects to the local port. Dropping the [`Tunnel`] stops it.
+//! connects to the local port. Dropping the [`Tunnel`] stops it. When the SSH connection ends
+//! (server restart, network, keepalive unanswered), [`Tunnel::is_alive`] turns false and the
+//! caller opens a new one.
 //!
 //! The server key must already be in `known_hosts`: an unknown or changed key is refused, and the
 //! error tells the user to check it once with `ssh`. Sign-in: ssh-agent, a key file (optional
@@ -57,9 +59,9 @@ impl std::fmt::Debug for TunnelSpec {
 }
 
 /// A running tunnel. The forwarding stops when it is dropped.
-#[derive(Debug)]
 pub struct Tunnel {
     local_port: u16,
+    handle: Arc<Handle<Client>>,
     task: JoinHandle<()>,
 }
 
@@ -67,6 +69,20 @@ impl Tunnel {
     /// Connect the database driver to `127.0.0.1` on this port.
     pub fn local_port(&self) -> u16 {
         self.local_port
+    }
+
+    /// Whether the SSH connection still carries new connections. A closed one never comes back.
+    pub fn is_alive(&self) -> bool {
+        !self.handle.is_closed() && !self.task.is_finished()
+    }
+}
+
+impl std::fmt::Debug for Tunnel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tunnel")
+            .field("local_port", &self.local_port)
+            .field("is_alive", &self.is_alive())
+            .finish()
     }
 }
 
@@ -188,14 +204,19 @@ pub async fn open(spec: TunnelSpec) -> Result<Tunnel, TunnelError> {
         .local_addr()
         .map_err(|e| message("Couldn't start the SSH tunnel", "No local port free.", e))?
         .port();
+    let handle = Arc::new(handle);
     let task = tokio::spawn(forward(
         listener,
-        Arc::new(handle),
+        handle.clone(),
         spec.target_host.clone(),
         spec.target_port,
     ));
     tracing::info!(ssh = %address, local_port, "SSH tunnel open");
-    Ok(Tunnel { local_port, task })
+    Ok(Tunnel {
+        local_port,
+        handle,
+        task,
+    })
 }
 
 async fn authenticate(handle: &mut Handle<Client>, spec: &TunnelSpec) -> Result<(), TunnelError> {
@@ -369,6 +390,86 @@ mod tests {
             home.join(".ssh/id_ed25519")
         );
         assert_eq!(expand_home("/etc/key"), PathBuf::from("/etc/key"));
+    }
+
+    /// An SSH server on a local port that takes any password.
+    struct AnyPassword;
+
+    impl russh::server::Handler for AnyPassword {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _: &str,
+            _: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_reports_when_its_ssh_connection_ends() {
+        // A host key from a fixed seed, for this test only.
+        let host_key = russh::keys::PrivateKey::from(
+            russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]),
+        );
+        let public = host_key.public_key().to_openssh().unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = std::env::temp_dir().join(format!("quarry-tunnel-{port}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let known_hosts = dir.join("known_hosts");
+        std::fs::write(&known_hosts, format!("[127.0.0.1]:{port} {public}")).unwrap();
+
+        let config = Arc::new(russh::server::Config {
+            keys: vec![host_key],
+            auth_rejection_time: Duration::ZERO,
+            ..Default::default()
+        });
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            // The session runs on its own task; the handle hangs it up.
+            russh::server::run_stream(config, stream, AnyPassword)
+                .await
+                .unwrap()
+                .handle()
+        });
+        let tunnel = open(TunnelSpec {
+            ssh: SshConfig {
+                host: "127.0.0.1".into(),
+                port,
+                user: "me".into(),
+                auth: SshAuth::Password,
+                key_path: None,
+            },
+            secret: Some("any".into()),
+            target_host: "db".into(),
+            target_port: 3306,
+            known_hosts,
+        })
+        .await
+        .unwrap();
+        assert!(tunnel.is_alive());
+
+        server
+            .await
+            .unwrap()
+            .disconnect(
+                russh::Disconnect::ByApplication,
+                "restart".into(),
+                "en".into(),
+            )
+            .await
+            .unwrap();
+        let closed = async {
+            while tunnel.is_alive() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), closed)
+            .await
+            .expect("the tunnel still says it is alive after the server hung up");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
