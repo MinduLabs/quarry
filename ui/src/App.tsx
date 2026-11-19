@@ -10,6 +10,7 @@ import { isMac } from "@/lib/platform";
 import { pendingWork, saveWorkspace, useApp } from "@/store/app";
 import { ConnectionDialog, DeleteConnectionDialog } from "./features/connections/ConnectionDialog";
 import { DriverDialog } from "./features/connections/DriverDialog";
+import { SshTrustDialog } from "./features/connections/SshTrustDialog";
 import { ExportDialog } from "./features/export/ExportDialog";
 import { ExportProgress } from "./features/export/ExportProgress";
 import { HistoryDialog } from "./features/history/HistoryDialog";
@@ -179,6 +180,7 @@ export function App() {
       <ConnectionDialog />
       <DeleteConnectionDialog />
       <DriverDialog />
+      <SshTrustDialog />
       <ConfirmRunDialog />
       <ConfirmChangesDialog />
       <ConfirmDeleteRowsDialog />

@@ -65,6 +65,9 @@ pub(crate) struct Engine {
     /// One SSH tunnel per connection that has one, shared by all its sessions.
     pub(crate) tunnels: Mutex<HashMap<ConnId, Arc<Tunnel>>>,
     pub(crate) known_hosts: Option<PathBuf>,
+    pub(crate) ssh_config: Option<PathBuf>,
+    /// SSH servers that showed an unknown key, until the user trusts one (`TrustSshHost`).
+    pub(crate) unknown_hosts: Mutex<HashMap<(String, u16), quarry_tunnel::UnknownHost>>,
     /// One metadata session (schema tree) per connection.
     pub(crate) meta: Mutex<HashMap<ConnId, SharedSession>>,
     /// Per-tab sessions. The async mutex is held by `run_query` while a query runs.
@@ -179,7 +182,13 @@ impl Engine {
             tunnels: Mutex::new(HashMap::new()),
             known_hosts: options
                 .known_hosts
+                .or_else(|| sandbox_ssh_dir().map(|d| d.join("known_hosts")))
                 .or_else(quarry_tunnel::default_known_hosts),
+            ssh_config: options
+                .ssh_config
+                .or_else(|| sandbox_ssh_dir().map(|d| d.join("config")))
+                .or_else(quarry_tunnel::default_ssh_config),
+            unknown_hosts: Mutex::new(HashMap::new()),
             meta: Mutex::new(HashMap::new()),
             tabs: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
@@ -220,6 +229,14 @@ impl Engine {
 }
 
 /// `QUARRY_NO_KEYRING=1` (or `true`): passwords stay in memory for this run.
+/// `QUARRY_SSH_DIR` in debug builds; a release always uses `~/.ssh`.
+fn sandbox_ssh_dir() -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("QUARRY_SSH_DIR").map(PathBuf::from)
+}
+
 fn keyring_disabled_by_env() -> bool {
     is_on(std::env::var("QUARRY_NO_KEYRING").ok().as_deref())
 }

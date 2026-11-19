@@ -30,7 +30,15 @@ export type Event = { "type": "Pong", id: number, version: string,
 /**
  * The performance log is on: the client may send its own timings (`PerfMarks`).
  */
-perf: boolean, } | { "type": "UpdateAvailable", version: string, url: string, } | { "type": "Notice", kind: NoticeKind, message: string, } | { "type": "Connections", connections: Array<ConnectionConfig>, } | { "type": "DataSources", sources: Array<DataSource>, } | { "type": "DriverInstall", driver: DriverId, state: DriverInstallState, } | { "type": "TestResult", request: number, server_version: string | null, error: string | null, } | { "type": "ConnState", id: ConnId, state: ConnState, } | { "type": "Databases", id: ConnId, databases: Array<string>, 
+perf: boolean, } | { "type": "UpdateAvailable", version: string, url: string, } | { "type": "Notice", kind: NoticeKind, message: string, } | { "type": "Connections", connections: Array<ConnectionConfig>, } | { "type": "DataSources", sources: Array<DataSource>, } | { "type": "DriverInstall", driver: DriverId, state: DriverInstallState, } | { "type": "TestResult", request: number, server_version: string | null, error: string | null, } | { "type": "ConnState", id: ConnId, state: ConnState, } | { "type": "SshHostUnknown", conn: ConnId, host: string, port: number, 
+/**
+ * `SHA256:…`, as `ssh-keygen -lf` prints it.
+ */
+fingerprint: string, 
+/**
+ * Such as `ssh-ed25519`.
+ */
+key_type: string, } | { "type": "SshHostTrusted", host: string, port: number, } | { "type": "Databases", id: ConnId, databases: Array<string>, 
 /**
  * The entry the session starts in (the current schema, where the list holds schemas):
  * the tree shows it first. `None` when unknown, also from drivers built before it.

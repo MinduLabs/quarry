@@ -54,14 +54,22 @@ pub enum SshAuth {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SshConfig {
+    /// A host name, an IP address or a `~/.ssh/config` alias.
     pub host: String,
+    /// 22 lets `~/.ssh/config` choose the port.
     pub port: u16,
+    /// Empty: `~/.ssh/config`'s `User`, else the local user name.
     pub user: String,
     /// Absent in files written before SSH tunnels existed.
     #[serde(default)]
     pub auth: SshAuth,
-    /// Private key path for `SshAuth::Key`; `~/` is the home directory.
+    /// Private key path for `SshAuth::Key`; `~/` is the home directory. Empty: the alias's
+    /// `IdentityFile`.
     pub key_path: Option<String>,
+    /// Jump hosts to go through first, as OpenSSH's `ProxyJump`: `[user@]host[:port]`, comma
+    /// separated. Empty: the alias's `ProxyJump`. Absent in files written before jump hosts.
+    #[serde(default)]
+    pub jump: Option<String>,
 }
 
 /// How the database user signs in. A password lives in the keyring; AWS IAM needs none.

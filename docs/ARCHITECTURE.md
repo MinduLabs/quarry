@@ -53,7 +53,7 @@ Quarry is a Tauri 2 shell around a React UI, with all logic in a headless Rust c
 | `drivers/mysql` | The `quarry-driver-mysql` binary: MySQL / MariaDB via `mysql_async` + rustls, under the ids `mysql` and `mariadb`. Introspection through `information_schema`, cancel with `KILL QUERY` on a side connection. |
 | `sql` | Statement splitting, statement at cursor, classification (read / write / schema / destructive), transaction effect, completion context. No IO. |
 | `store` | Saved connections and favorites (TOML, no secrets), open tabs, query history, secrets in the OS keyring. |
-| `tunnel` | SSH local port forwarding via `russh`. |
+| `tunnel` | SSH local port forwarding via `russh`, through jump hosts when set. Resolves `~/.ssh/config` aliases (`HostName`, `Port`, `User`, `IdentityFile`, `ProxyJump`); what the connection sets wins. A password goes only to the SSH server itself, never to a jump host. |
 | `export` | The file writers of an export (CSV, TSV, JSON, NDJSON, SQL, Excel). They take rows a batch at a time; the engine streams them from the database. |
 | `import` | Reads CSV and TSV one record at a time, so a file of any size costs one record of memory. No database: the engine maps records to columns and inserts them in one transaction on a session of its own, strict so a value the column cannot hold fails instead of being changed. |
 | `engine` | Owns the runtime and all state; turns `Command`s into `Event`s. Quarry ships without drivers: `InstallDriver` downloads a binary from the release's `drivers.json`, checks its SHA-256 and that it answers `hello`, then puts it in the driver directory (the data directory's `drivers`, or `QUARRY_DRIVER_DIR`). At start the engine asks every binary there what it serves. Holds the catalog of data sources (`LoadDataSources`): an entry is usable when a driver with its id is registered. Exports TypeScript types. |
@@ -92,7 +92,8 @@ Schema       AlterSchema{change, confirmed:false} â†’ SchemaReview{statements} â
   results.
 - **Sessions.** Each query tab owns one database session, so a long query in one tab does not block
   another. Each connection also has a metadata session for introspection and DDL. A connection over
-  SSH has one tunnel shared by all of them.
+  SSH has one tunnel shared by all of them; once its SSH connection ends, the next use opens a new
+  one.
 - **AWS IAM sign-in.** A connection with `DbAuth::AwsIam` has no password. Each session the engine
   opens gets a fresh token (valid 15 minutes) signed with the user's AWS credentials, for the RDS
   host itself even over SSH. Only over TLS, and only with a driver whose capabilities say
@@ -140,7 +141,7 @@ by `safety_check` in the engine. `EXPLAIN ANALYZE <stmt>` is treated like `<stmt
 | Open tabs | `workspace.json` in the OS data dir (`~/.local/share/quarry`, `~/Library/Application Support/quarry`). Results are not saved. An unreadable file is moved aside, not overwritten. |
 | Query history | `history.jsonl` in the data dir, capped (`MAX_ENTRIES`). |
 | Secrets | OS keyring, service `quarry`: Secret Service via `oo7` on Linux, Keychain via `security-framework` on macOS. Account `<connection uuid>` for the database password, `<connection uuid>:ssh` for the SSH secret. |
-| SSH host keys | Read from `~/.ssh/known_hosts`, never written. |
+| SSH host keys | Checked against `~/.ssh/known_hosts` for every server on the way. A changed key is refused. An unknown one is shown to the user (`Event::SshHostUnknown`) and written only when they trust that exact fingerprint (`Command::TrustSshHost`). Debug builds read `QUARRY_SSH_DIR` instead of `~/.ssh`. |
 | View preferences | The webview's `localStorage` (theme, sidebar), so they apply before the engine answers. Anything another client would need goes through the engine instead. |
 
 `connections.toml`, `favorites.toml` and `workspace.json` have a `version` field. A file newer than

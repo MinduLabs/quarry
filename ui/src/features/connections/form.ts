@@ -28,6 +28,8 @@ export interface ConnectionForm {
   sshUser: string;
   sshAuth: SshAuth;
   sshKeyPath: string;
+  /** Jump hosts, as OpenSSH's ProxyJump; empty uses the alias's. */
+  sshJump: string;
   /** SSH password or key passphrase; empty keeps the saved one. */
   sshSecret: string;
 }
@@ -70,6 +72,7 @@ export function toForm(
     sshUser: config?.ssh?.user ?? "",
     sshAuth: config?.ssh?.auth ?? "agent",
     sshKeyPath: config?.ssh?.key_path ?? "~/.ssh/id_ed25519",
+    sshJump: config?.ssh?.jump ?? "",
     sshSecret: "",
   };
 }
@@ -78,7 +81,7 @@ export function hasMissingFields(form: ConnectionForm): boolean {
   return (
     !form.host.trim() ||
     (form.auth === "aws_iam" && !form.user.trim()) ||
-    (form.ssh && (!form.sshHost.trim() || !form.sshUser.trim()))
+    (form.ssh && !form.sshHost.trim())
   );
 }
 
@@ -109,6 +112,7 @@ export function toConfig(
           user: form.sshUser.trim(),
           auth: form.sshAuth,
           key_path: form.sshAuth === "key" ? form.sshKeyPath.trim() || null : null,
+          jump: form.sshJump.trim() || null,
         }
       : null,
     environment: form.environment,

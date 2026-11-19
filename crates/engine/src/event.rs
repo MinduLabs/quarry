@@ -153,6 +153,23 @@ pub enum Event {
         id: ConnId,
         state: ConnState,
     },
+    /// Connecting `conn` (or testing it) stopped at an SSH server that is not in `known_hosts`.
+    /// The client shows the fingerprint and may answer `Command::TrustSshHost`. Comes before the
+    /// failure it causes (`ConnState::Failed` or `TestResult`). A changed key never asks.
+    SshHostUnknown {
+        conn: ConnId,
+        host: String,
+        port: u16,
+        /// `SHA256:…`, as `ssh-keygen -lf` prints it.
+        fingerprint: String,
+        /// Such as `ssh-ed25519`.
+        key_type: String,
+    },
+    /// The key of `host:port` is now in `known_hosts`.
+    SshHostTrusted {
+        host: String,
+        port: u16,
+    },
     Databases {
         id: ConnId,
         databases: Vec<String>,

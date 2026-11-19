@@ -63,6 +63,7 @@ async fn query_latency() {
         config_dir: Some(dir.clone()),
         data_dir: Some(dir.clone()),
         known_hosts: None,
+        ssh_config: Some(std::path::PathBuf::from("/nonexistent/quarry/ssh_config")),
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,

@@ -72,6 +72,10 @@ pub struct EngineOptions {
     pub data_dir: Option<PathBuf>,
     /// `known_hosts` for SSH tunnels; `None` = `~/.ssh/known_hosts`.
     pub known_hosts: Option<PathBuf>,
+    /// The SSH config that resolves host aliases; `None` = `~/.ssh/config`. In debug builds the
+    /// `QUARRY_SSH_DIR` environment variable replaces both with its `known_hosts` and `config`,
+    /// so a development sandbox (`./qd`) never writes to the developer's `~/.ssh`.
+    pub ssh_config: Option<PathBuf>,
     /// Do not touch the system keyring (tests, environments without one). Also set by the
     /// `QUARRY_NO_KEYRING` environment variable (`1`), so a development sandbox (`./qd`) keeps
     /// its test passwords in memory only.

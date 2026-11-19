@@ -182,7 +182,7 @@ async function up(fresh) {
     return waitReady(state.pid);
   }
   if (fresh) rmSync(SANDBOX, { recursive: true, force: true });
-  for (const dir of ["config", "data", "aws", "shots"]) mkdirSync(join(SANDBOX, dir), { recursive: true });
+  for (const dir of ["config", "data", "aws", "ssh", "shots"]) mkdirSync(join(SANDBOX, dir), { recursive: true });
   for (const file of ["config", "credentials"]) {
     const path = join(SANDBOX, "aws", file);
     if (!existsSync(path)) writeFileSync(path, "");
@@ -195,6 +195,8 @@ async function up(fresh) {
     QUARRY_PERF: "1",
     // Test passwords stay in memory: the developer's keyring is never touched.
     QUARRY_NO_KEYRING: "1",
+    // SSH known_hosts and config live in the sandbox: trusting a test server never touches ~/.ssh.
+    QUARRY_SSH_DIR: join(SANDBOX, "ssh"),
     WEBKIT_INSPECTOR_HTTP_SERVER: `127.0.0.1:${INSPECTOR_PORT}`,
     // Keep the developer's own AWS credentials out of the sandbox.
     AWS_CONFIG_FILE: join(SANDBOX, "aws", "config"),

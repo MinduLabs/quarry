@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 - Sign in to Amazon RDS and Aurora (MySQL, MariaDB, PostgreSQL) with AWS IAM instead of a password: choose AWS IAM in the connection's settings. Quarry signs a token with your AWS profile (SSO and roles included) for every session.
+- SSH: an SSH server Quarry has not seen shows its key fingerprint and asks once whether to trust it, instead of sending you to a terminal. A changed key is still refused.
+- SSH: jump hosts (like ProxyJump), and `~/.ssh/config` aliases fill the host name, port, user, key file and jump hosts you leave empty.
+- SSH: RSA key files work.
 - Compare schemas: pick two databases of the same kind and see which tables, columns, indexes, primary and foreign keys differ, with the script that makes the target match the source. Apply it after reviewing its SQL. From the command palette or a database's menu in the sidebar. Scripts are written for MySQL and MariaDB.
 
 ### Fixed

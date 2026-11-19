@@ -17,6 +17,7 @@ fn command_kind(command: &Command) -> &'static str {
         Command::SaveConnection { .. } => "SaveConnection",
         Command::DeleteConnection { .. } => "DeleteConnection",
         Command::TestConnection { .. } => "TestConnection",
+        Command::TrustSshHost { .. } => "TrustSshHost",
         Command::Connect { .. } => "Connect",
         Command::Disconnect { .. } => "Disconnect",
         Command::LoadObjects { .. } => "LoadObjects",
@@ -118,6 +119,11 @@ impl Engine {
                     error,
                 });
             }
+            Command::TrustSshHost {
+                host,
+                port,
+                fingerprint,
+            } => self.trust_ssh_host(host, port, fingerprint).await,
             Command::Connect { id } => self.connect(id).await,
             Command::Disconnect { id } => self.disconnect(id).await,
             Command::LoadObjects { id, database } => self.load_objects(id, database).await,
