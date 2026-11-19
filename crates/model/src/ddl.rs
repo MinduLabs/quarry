@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::TableRef;
+use crate::{ForeignKey, TableRef};
 
 /// A change to the schema, turned into DDL by the driver's dialect. The client always sees the
 /// statements before they run.
@@ -84,6 +84,18 @@ pub enum AlterOp {
         index: IndexDef,
     },
     DropIndex {
+        name: String,
+    },
+    /// The table must have no primary key yet (drop it first).
+    AddPrimaryKey {
+        columns: Vec<String>,
+    },
+    DropPrimaryKey,
+    /// `on_update` / `on_delete` are referential actions (`CASCADE`, `SET NULL`, …).
+    AddForeignKey {
+        foreign_key: ForeignKey,
+    },
+    DropForeignKey {
         name: String,
     },
 }

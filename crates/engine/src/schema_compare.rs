@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use quarry_model::{
-    AlterOp, ColumnDef, ColumnInfo, ConnId, IndexDef, IndexInfo, ObjectKind, SchemaChange,
-    SchemaDiff, SchemaSide, TableDiff, TableDiffKind, TableInfo, TableRef,
+    AlterOp, ColumnDef, ColumnInfo, ConnId, ForeignKey, IndexDef, IndexInfo, ObjectKind,
+    SchemaChange, SchemaDiff, SchemaSide, TableDiff, TableDiffKind, TableInfo, TableRef,
 };
 
 use crate::engine::{Engine, describe};
@@ -56,17 +56,23 @@ impl Engine {
         }
         let source_tables = self.tables_of(&source).await?;
         let target_tables = self.tables_of(&target).await?;
-        let (tables, same) = diff_tables(&target.database, &source_tables, &target_tables);
+        let diff = diff_tables(
+            &source.database,
+            &target.database,
+            &source_tables,
+            &target_tables,
+        );
         let driver = self.driver_of(target.conn)?;
         let mut statements = Vec::new();
-        for change in tables.iter().flat_map(|t| &t.changes) {
+        for change in &diff.changes {
             statements.extend(schema::checked(driver.schema_change(change).await)?);
         }
         Ok(SchemaDiff {
             source,
             target,
-            tables,
-            same,
+            tables: diff.tables,
+            same: diff.same,
+            changes: diff.changes,
             statements,
         })
     }
@@ -142,13 +148,31 @@ impl Engine {
     }
 }
 
-/// The tables that differ between `source` and `target` (by name), and how many are the same.
-/// Changes are for `target_db`.
+/// What `diff_tables` found: the tables that differ, how many are the same, and the changes that
+/// make the target match, in an order they can run in.
+pub(crate) struct Diff {
+    pub tables: Vec<TableDiff>,
+    pub same: u32,
+    pub changes: Vec<SchemaChange>,
+}
+
+/// How one table of the target changes, by phase: foreign keys go first (a dropped column or index
+/// may hold one) and come back last (a new one may point at a table created on the way).
+#[derive(Default)]
+struct TableChanges {
+    details: Vec<String>,
+    drop_keys: Vec<AlterOp>,
+    middle: Vec<SchemaChange>,
+    add_keys: Vec<AlterOp>,
+}
+
+/// Compare `source` (tables of `source_db`) with `target` (of `target_db`), by table name.
 pub(crate) fn diff_tables(
+    source_db: &str,
     target_db: &str,
     source: &[TableInfo],
     target: &[TableInfo],
-) -> (Vec<TableDiff>, u32) {
+) -> Diff {
     let by_name = |tables: &[TableInfo]| -> BTreeMap<String, TableInfo> {
         tables
             .iter()
@@ -157,35 +181,64 @@ pub(crate) fn diff_tables(
     };
     let source = by_name(source);
     let target = by_name(target);
-    let table_ref = |name: &str| TableRef {
-        database: Some(target_db.to_owned()),
-        schema: None,
-        name: name.to_owned(),
-    };
-    let mut diffs = Vec::new();
+    let names: std::collections::BTreeSet<&String> = source.keys().chain(target.keys()).collect();
+    let mut tables = Vec::new();
     let mut same = 0;
-    for (name, src) in &source {
-        match target.get(name) {
-            None => diffs.push(missing_table(table_ref(name), src)),
-            Some(dst) => match changed_table(table_ref(name), src, dst) {
-                Some(diff) => diffs.push(diff),
-                None => same += 1,
-            },
-        }
-    }
-    for name in target.keys().filter(|name| !source.contains_key(*name)) {
-        diffs.push(TableDiff {
+    let (mut first, mut middle, mut last) = (Vec::new(), Vec::new(), Vec::new());
+    for name in names {
+        let table = TableRef {
+            database: Some(target_db.to_owned()),
+            schema: None,
             name: name.clone(),
-            kind: TableDiffKind::Extra,
-            details: vec![format!("- table {name}")],
-            changes: vec![SchemaChange::DropTable {
-                table: table_ref(name),
-                view: false,
-            }],
+        };
+        let (kind, found) = match (source.get(name), target.get(name)) {
+            (Some(src), None) => (
+                TableDiffKind::Missing,
+                missing_table(&table, &retarget(src, source_db, target_db)),
+            ),
+            (Some(src), Some(dst)) => (
+                TableDiffKind::Changed,
+                changed_table(&table, &retarget(src, source_db, target_db), dst),
+            ),
+            (None, Some(dst)) => (TableDiffKind::Extra, extra_table(&table, dst)),
+            (None, None) => continue,
+        };
+        if found.details.is_empty() {
+            same += 1;
+            continue;
+        }
+        let alter = |ops: Vec<AlterOp>| {
+            (!ops.is_empty()).then(|| SchemaChange::AlterTable {
+                table: table.clone(),
+                ops,
+            })
+        };
+        first.extend(alter(found.drop_keys));
+        middle.extend(found.middle);
+        last.extend(alter(found.add_keys));
+        tables.push(TableDiff {
+            name: name.clone(),
+            kind,
+            details: found.details,
         });
     }
-    diffs.sort_by(|a, b| a.name.cmp(&b.name));
-    (diffs, same)
+    Diff {
+        tables,
+        same,
+        changes: [first, middle, last].concat(),
+    }
+}
+
+/// `info` with its foreign keys into its own database pointed at `target_db`: the copy refers to
+/// the target's tables, not back to the source.
+fn retarget(info: &TableInfo, source_db: &str, target_db: &str) -> TableInfo {
+    let mut info = info.clone();
+    for fk in &mut info.foreign_keys {
+        if fk.references.database.as_deref() == Some(source_db) {
+            fk.references.database = Some(target_db.to_owned());
+        }
+    }
+    info
 }
 
 fn column_def(column: &ColumnInfo) -> ColumnDef {
@@ -227,13 +280,30 @@ fn describe_index(index: &IndexInfo) -> String {
     )
 }
 
-fn missing_table(table: TableRef, src: &TableInfo) -> TableDiff {
-    let name = table.name.clone();
-    let mut changes = vec![SchemaChange::CreateTable {
+fn describe_key(fk: &ForeignKey) -> String {
+    format!(
+        "{} ({}) → {}({})",
+        fk.name,
+        fk.columns.join(", "),
+        fk.references.name,
+        fk.referenced_columns.join(", ")
+    )
+}
+
+fn missing_table(table: &TableRef, src: &TableInfo) -> TableChanges {
+    let mut found = TableChanges {
+        details: vec![format!(
+            "+ table {} ({} columns)",
+            table.name,
+            src.columns.len()
+        )],
+        ..TableChanges::default()
+    };
+    found.middle.push(SchemaChange::CreateTable {
         table: table.clone(),
         columns: src.columns.iter().map(column_def).collect(),
         primary_key: src.primary_key.clone(),
-    }];
+    });
     let indexes: Vec<AlterOp> = src
         .indexes
         .iter()
@@ -243,18 +313,39 @@ fn missing_table(table: TableRef, src: &TableInfo) -> TableDiff {
         })
         .collect();
     if !indexes.is_empty() {
-        changes.push(SchemaChange::AlterTable {
-            table,
+        found.middle.push(SchemaChange::AlterTable {
+            table: table.clone(),
             ops: indexes,
         });
     }
-    let mut details = vec![format!("+ table {name} ({} columns)", src.columns.len())];
-    details.extend(foreign_key_notes(src, None));
-    TableDiff {
-        name,
-        kind: TableDiffKind::Missing,
-        details,
-        changes,
+    for fk in &src.foreign_keys {
+        found
+            .details
+            .push(format!("+ foreign key {}", describe_key(fk)));
+        found.add_keys.push(AlterOp::AddForeignKey {
+            foreign_key: fk.clone(),
+        });
+    }
+    found
+}
+
+/// A table only the target has. Its foreign keys go in the first phase, so tables that point at
+/// each other can be dropped in any order.
+fn extra_table(table: &TableRef, dst: &TableInfo) -> TableChanges {
+    TableChanges {
+        details: vec![format!("- table {}", table.name)],
+        drop_keys: dst
+            .foreign_keys
+            .iter()
+            .map(|fk| AlterOp::DropForeignKey {
+                name: fk.name.clone(),
+            })
+            .collect(),
+        middle: vec![SchemaChange::DropTable {
+            table: table.clone(),
+            view: false,
+        }],
+        ..TableChanges::default()
     }
 }
 
@@ -297,8 +388,20 @@ fn column_change(src: &ColumnInfo, dst: &ColumnInfo) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
-fn changed_table(table: TableRef, src: &TableInfo, dst: &TableInfo) -> Option<TableDiff> {
-    let mut details = Vec::new();
+/// Two foreign keys of the same name that point the same way with the same actions.
+fn same_key(a: &ForeignKey, b: &ForeignKey) -> bool {
+    let action = |v: &Option<String>| v.as_deref().map(str::to_uppercase);
+    a.columns == b.columns
+        && a.references.database == b.references.database
+        && a.references.name == b.references.name
+        && a.referenced_columns == b.referenced_columns
+        && action(&a.on_update) == action(&b.on_update)
+        && action(&a.on_delete) == action(&b.on_delete)
+}
+
+fn changed_table(table: &TableRef, src: &TableInfo, dst: &TableInfo) -> TableChanges {
+    let mut found = TableChanges::default();
+    let details = &mut found.details;
     let mut drop_indexes = Vec::new();
     let mut add_columns = Vec::new();
     let mut modify_columns = Vec::new();
@@ -386,84 +489,83 @@ fn changed_table(table: TableRef, src: &TableInfo, dst: &TableInfo) -> Option<Ta
         });
     }
 
+    // The old key goes before columns are dropped (one may be in it); the new one comes after
+    // they are added.
+    let mut drop_primary = None;
+    let mut add_primary = None;
     if src.primary_key != dst.primary_key {
-        details.push(format!(
-            "~ primary key ({}) → ({}): not scripted",
-            dst.primary_key.join(", "),
-            src.primary_key.join(", ")
-        ));
-    }
-    details.extend(foreign_key_notes(src, Some(dst)));
-
-    if details.is_empty() {
-        return None;
-    }
-    // Indexes go first so a dropped column is no longer in one; new indexes come last, after
-    // the columns they use exist.
-    let ops: Vec<AlterOp> = [
-        drop_indexes,
-        add_columns,
-        modify_columns,
-        drop_columns,
-        add_indexes,
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    let changes = if ops.is_empty() {
-        Vec::new()
-    } else {
-        vec![SchemaChange::AlterTable {
-            table: table.clone(),
-            ops,
-        }]
-    };
-    Some(TableDiff {
-        name: table.name,
-        kind: TableDiffKind::Changed,
-        details,
-        changes,
-    })
-}
-
-/// Foreign keys that differ. Quarry has no change for them yet, so they are only reported.
-fn foreign_key_notes(src: &TableInfo, dst: Option<&TableInfo>) -> Vec<String> {
-    let describe = |fk: &quarry_model::ForeignKey| {
-        format!(
-            "{} ({}) → {}({})",
-            fk.name,
-            fk.columns.join(", "),
-            fk.references.name,
-            fk.referenced_columns.join(", ")
-        )
-    };
-    let empty = Vec::new();
-    let dst_keys = dst.map_or(&empty, |d| &d.foreign_keys);
-    let mut notes = Vec::new();
-    for fk in &src.foreign_keys {
-        let other = dst_keys.iter().find(|o| o.name == fk.name);
-        let differs = other.is_none_or(|o| {
-            o.columns != fk.columns
-                || o.references.name != fk.references.name
-                || o.referenced_columns != fk.referenced_columns
-        });
-        if differs {
-            notes.push(format!("+ foreign key {}: not scripted", describe(fk)));
+        details.push(
+            match (dst.primary_key.is_empty(), src.primary_key.is_empty()) {
+                (true, _) => format!("+ primary key ({})", src.primary_key.join(", ")),
+                (_, true) => format!("- primary key ({})", dst.primary_key.join(", ")),
+                _ => format!(
+                    "~ primary key ({}) → ({})",
+                    dst.primary_key.join(", "),
+                    src.primary_key.join(", ")
+                ),
+            },
+        );
+        if !dst.primary_key.is_empty() {
+            drop_primary = Some(AlterOp::DropPrimaryKey);
+        }
+        if !src.primary_key.is_empty() {
+            add_primary = Some(AlterOp::AddPrimaryKey {
+                columns: src.primary_key.clone(),
+            });
         }
     }
-    for fk in dst_keys
+
+    for fk in &src.foreign_keys {
+        match dst.foreign_keys.iter().find(|o| o.name == fk.name) {
+            None => details.push(format!("+ foreign key {}", describe_key(fk))),
+            Some(other) if !same_key(fk, other) => {
+                details.push(format!(
+                    "~ foreign key {} (was {})",
+                    describe_key(fk),
+                    describe_key(other)
+                ));
+                found.drop_keys.push(AlterOp::DropForeignKey {
+                    name: other.name.clone(),
+                });
+            }
+            Some(_) => continue,
+        }
+        found.add_keys.push(AlterOp::AddForeignKey {
+            foreign_key: fk.clone(),
+        });
+    }
+    for other in dst
+        .foreign_keys
         .iter()
         .filter(|o| !src.foreign_keys.iter().any(|f| f.name == o.name))
     {
-        notes.push(format!("- foreign key {}: not scripted", describe(fk)));
+        details.push(format!("- foreign key {}", describe_key(other)));
+        found.drop_keys.push(AlterOp::DropForeignKey {
+            name: other.name.clone(),
+        });
     }
-    notes
+
+    let ops: Vec<AlterOp> = [
+        drop_indexes,
+        drop_primary.into_iter().collect(),
+        add_columns,
+        modify_columns,
+        drop_columns,
+        add_primary.into_iter().collect(),
+        add_indexes,
+    ]
+    .concat();
+    if !ops.is_empty() {
+        found.middle.push(SchemaChange::AlterTable {
+            table: table.clone(),
+            ops,
+        });
+    }
+    found
 }
 
 #[cfg(test)]
 mod tests {
-    use quarry_model::ForeignKey;
-
     use super::*;
 
     fn column(name: &str, type_name: &str, nullable: bool) -> ColumnInfo {
@@ -486,6 +588,21 @@ mod tests {
             columns: columns.iter().map(|c| (*c).to_owned()).collect(),
             unique,
             primary,
+        }
+    }
+
+    fn key(name: &str, column: &str, table: &str, database: &str) -> ForeignKey {
+        ForeignKey {
+            name: name.into(),
+            columns: vec![column.into()],
+            references: TableRef {
+                database: Some(database.into()),
+                schema: None,
+                name: table.into(),
+            },
+            referenced_columns: vec!["id".into()],
+            on_update: None,
+            on_delete: Some("CASCADE".into()),
         }
     }
 
@@ -521,47 +638,97 @@ mod tests {
         )
     }
 
-    #[test]
-    fn same_tables_have_no_diff() {
-        let (diffs, same) = diff_tables("dst", &[orders()], &[orders()]);
-        assert!(diffs.is_empty());
-        assert_eq!(same, 1);
+    fn diff(source: &[TableInfo], target: &[TableInfo]) -> Diff {
+        diff_tables("src", "dst", source, target)
+    }
+
+    fn ops(change: &SchemaChange) -> Vec<&str> {
+        let SchemaChange::AlterTable { ops, .. } = change else {
+            return vec!["not an alter"];
+        };
+        ops.iter()
+            .map(|op| match op {
+                AlterOp::DropIndex { .. } => "drop index",
+                AlterOp::AddColumn { .. } => "add column",
+                AlterOp::ModifyColumn { .. } => "modify column",
+                AlterOp::DropColumn { .. } => "drop column",
+                AlterOp::AddIndex { .. } => "add index",
+                AlterOp::AddPrimaryKey { .. } => "add primary key",
+                AlterOp::DropPrimaryKey => "drop primary key",
+                AlterOp::AddForeignKey { .. } => "add foreign key",
+                AlterOp::DropForeignKey { .. } => "drop foreign key",
+            })
+            .collect()
     }
 
     #[test]
-    fn missing_table_is_created_with_its_indexes() {
-        let (diffs, same) = diff_tables("dst", &[orders()], &[]);
-        assert_eq!(same, 0);
-        let [diff] = diffs.as_slice() else {
-            panic!("{diffs:?}")
-        };
-        assert_eq!(diff.kind, TableDiffKind::Missing);
-        let [
-            SchemaChange::CreateTable {
-                table,
-                columns,
-                primary_key,
-            },
-            SchemaChange::AlterTable { ops, .. },
-        ] = diff.changes.as_slice()
-        else {
-            panic!("{:?}", diff.changes)
+    fn same_tables_have_no_diff() {
+        let found = diff(&[orders()], &[orders()]);
+        assert!(found.tables.is_empty());
+        assert!(found.changes.is_empty());
+        assert_eq!(found.same, 1);
+    }
+
+    #[test]
+    fn missing_tables_get_their_keys_after_every_table_exists() {
+        let mut orders = orders();
+        orders
+            .foreign_keys
+            .push(key("orders_customer", "customer_id", "customers", "src"));
+        let customers = table("customers", vec![column("id", "bigint", false)], Vec::new());
+        // "customers" sorts first, but the key would come before it if it were made with "orders".
+        let found = diff(&[orders, customers], &[]);
+        assert_eq!(found.tables.len(), 2);
+        let kinds: Vec<&str> = found
+            .changes
+            .iter()
+            .map(|c| match c {
+                SchemaChange::CreateTable { table, .. } => table.name.as_str(),
+                SchemaChange::AlterTable { .. } => "alter",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["customers", "orders", "alter", "alter"]);
+        assert_eq!(ops(&found.changes[2]), ["add index"]);
+        let SchemaChange::AlterTable { table, ops: last } = &found.changes[3] else {
+            panic!("{:?}", found.changes)
         };
         assert_eq!(table.database.as_deref(), Some("dst"));
-        assert_eq!(columns.len(), 3);
-        assert_eq!(primary_key, &["id".to_owned()]);
-        assert!(matches!(&ops[..], [AlterOp::AddIndex { index }] if index.name == "orders_total"));
+        let [AlterOp::AddForeignKey { foreign_key }] = last.as_slice() else {
+            panic!("{last:?}")
+        };
+        // A key into the source's own database points into the target's.
+        assert_eq!(foreign_key.references.database.as_deref(), Some("dst"));
+    }
+
+    #[test]
+    fn extra_tables_lose_their_keys_before_any_is_dropped() {
+        // "child" points at "parent"; dropping "parent" first would be refused.
+        let mut child = table("child", vec![column("id", "bigint", false)], Vec::new());
+        child
+            .foreign_keys
+            .push(key("child_parent", "id", "parent", "dst"));
+        let parent = table("parent", vec![column("id", "bigint", false)], Vec::new());
+        let found = diff(&[], &[parent, child]);
+        let steps: Vec<String> = found
+            .changes
+            .iter()
+            .map(|c| match c {
+                SchemaChange::AlterTable { table, .. } => format!("alter {}", table.name),
+                SchemaChange::DropTable { table, .. } => format!("drop {}", table.name),
+                _ => "other".to_owned(),
+            })
+            .collect();
+        assert_eq!(steps, ["alter child", "drop child", "drop parent"]);
+        assert_eq!(ops(&found.changes[0]), ["drop foreign key"]);
     }
 
     #[test]
     fn extra_table_is_dropped() {
-        let (diffs, _) = diff_tables("dst", &[], &[orders()]);
-        let [diff] = diffs.as_slice() else {
-            panic!("{diffs:?}")
-        };
-        assert_eq!(diff.kind, TableDiffKind::Extra);
+        let found = diff(&[], &[orders()]);
+        assert_eq!(found.tables[0].kind, TableDiffKind::Extra);
         assert!(matches!(
-            &diff.changes[..],
+            &found.changes[..],
             [SchemaChange::DropTable { view: false, .. }]
         ));
     }
@@ -569,7 +736,6 @@ mod tests {
     #[test]
     fn changed_columns_and_indexes_become_one_alter_in_a_safe_order() {
         let mut target = orders();
-        // Older type, an extra column, a missing one, and an index on other columns.
         target.columns[1] = column("total", "decimal(10,2)", true);
         target.columns.retain(|c| c.name != "note");
         target.columns.push(column("legacy", "int", true));
@@ -578,26 +744,13 @@ mod tests {
             .indexes
             .push(index("orders_legacy", &["legacy"], false, false));
 
-        let (diffs, _) = diff_tables("dst", &[orders()], &[target]);
-        let [diff] = diffs.as_slice() else {
-            panic!("{diffs:?}")
+        let found = diff(&[orders()], &[target]);
+        assert_eq!(found.tables[0].kind, TableDiffKind::Changed);
+        let [change] = found.changes.as_slice() else {
+            panic!("{:?}", found.changes)
         };
-        assert_eq!(diff.kind, TableDiffKind::Changed);
-        let [SchemaChange::AlterTable { ops, .. }] = diff.changes.as_slice() else {
-            panic!("{:?}", diff.changes)
-        };
-        let kinds: Vec<&str> = ops
-            .iter()
-            .map(|op| match op {
-                AlterOp::DropIndex { .. } => "drop index",
-                AlterOp::AddColumn { .. } => "add column",
-                AlterOp::ModifyColumn { .. } => "modify column",
-                AlterOp::DropColumn { .. } => "drop column",
-                AlterOp::AddIndex { .. } => "add index",
-            })
-            .collect();
         assert_eq!(
-            kinds,
+            ops(change),
             [
                 "drop index",
                 "drop index",
@@ -608,50 +761,59 @@ mod tests {
             ]
         );
         assert!(
-            diff.details.contains(
+            found.tables[0].details.contains(
                 &"~ column total: decimal(10,2) → decimal(12,2), NULL → NOT NULL".to_owned()
             ),
             "{:?}",
-            diff.details
+            found.tables[0].details
         );
     }
 
     #[test]
-    fn type_case_is_not_a_difference() {
+    fn type_and_action_case_is_not_a_difference() {
+        let mut source = orders();
+        source.foreign_keys.push(key("k", "id", "orders", "src"));
         let mut target = orders();
         target.columns[0].type_name = "BIGINT".into();
-        let (diffs, same) = diff_tables("dst", &[orders()], &[target]);
-        assert!(diffs.is_empty(), "{diffs:?}");
-        assert_eq!(same, 1);
+        let mut lower = key("k", "id", "orders", "dst");
+        lower.on_delete = Some("cascade".into());
+        target.foreign_keys.push(lower);
+        let found = diff(&[source], &[target]);
+        assert!(found.tables.is_empty(), "{:?}", found.tables);
+        assert_eq!(found.same, 1);
     }
 
     #[test]
-    fn keys_are_reported_but_not_scripted() {
+    fn keys_are_dropped_first_and_added_last() {
         let mut source = orders();
-        source.foreign_keys.push(ForeignKey {
-            name: "orders_customer".into(),
-            columns: vec!["customer_id".into()],
-            references: TableRef {
-                database: Some("src".into()),
-                schema: None,
-                name: "customers".into(),
-            },
-            referenced_columns: vec!["id".into()],
-            on_update: None,
-            on_delete: None,
-        });
+        source
+            .foreign_keys
+            .push(key("orders_customer", "customer_id", "customers", "src"));
         let mut target = orders();
         target.primary_key = vec!["id".into(), "total".into()];
-        let (diffs, _) = diff_tables("dst", &[source], &[target]);
-        let [diff] = diffs.as_slice() else {
-            panic!("{diffs:?}")
-        };
-        assert!(diff.changes.is_empty());
+        target
+            .foreign_keys
+            .push(key("orders_old", "total", "prices", "dst"));
+        let mut changed = key("orders_customer", "customer_id", "customers", "dst");
+        changed.on_delete = None;
+        target.foreign_keys.push(changed);
+
+        let found = diff(&[source], &[target]);
+        let steps: Vec<Vec<&str>> = found.changes.iter().map(ops).collect();
         assert_eq!(
-            diff.details,
+            steps,
             [
-                "~ primary key (id, total) → (id): not scripted",
-                "+ foreign key orders_customer (customer_id) → customers(id): not scripted",
+                vec!["drop foreign key", "drop foreign key"],
+                vec!["drop primary key", "add primary key"],
+                vec!["add foreign key"],
+            ]
+        );
+        assert_eq!(
+            found.tables[0].details,
+            [
+                "~ primary key (id, total) → (id)",
+                "~ foreign key orders_customer (customer_id) → customers(id) (was orders_customer (customer_id) → customers(id))",
+                "- foreign key orders_old (total) → prices(id)",
             ]
         );
     }

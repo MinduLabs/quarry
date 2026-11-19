@@ -2721,7 +2721,7 @@ export const useApp = create<AppState>()((set, get) => {
     },
     reviewSchemaDiff: () => {
       const compare = get().schemaCompare;
-      const changes = compare?.diff?.tables.flatMap((t) => t.changes) ?? [];
+      const changes = compare?.diff?.changes ?? [];
       if (!compare?.diff || changes.length === 0) return;
       const request = nextRequest++;
       schemaDiffRequests.add(request);
@@ -2746,7 +2746,7 @@ export const useApp = create<AppState>()((set, get) => {
         type: "ApplySchemaDiff",
         request: review.request,
         conn: compare.diff.target.conn,
-        changes: compare.diff.tables.flatMap((t) => t.changes),
+        changes: compare.diff.changes,
         confirmed: true,
       });
     },
