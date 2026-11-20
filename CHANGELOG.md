@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-20
+
+Sign in to Amazon RDS with AWS IAM, compare schemas, a complete SSH tunnel, and signed drivers.
+
+### Upgrading from 0.1.0
+- **Download this version by hand once.** 0.1.0 cannot update itself to it: its updates were signed with a different key than the one it checks. From 0.2.0 on, the macOS app and the AppImage update themselves again.
+- **Download your drivers again** when Quarry asks. Drivers are now signed per release, and those from 0.1.0 are not.
+
+### Download
+
+| Your system | File |
+| --- | --- |
+| Linux, any distro | `Quarry_0.2.0_amd64.AppImage` (updates itself) |
+| Debian, Ubuntu | `Quarry_0.2.0_amd64.deb` |
+| Flatpak | `quarry-0.2.0.flatpak` |
+| macOS | `Quarry_0.2.0_universal.dmg` |
+
+Do not download the rest. `*.app.tar.gz`, `*.sig` and `latest.json` are for the in-app updater;
+`quarry-driver-*`, `drivers.json` and `drivers.json.sig` are the database drivers Quarry fetches by itself.
+
 ### Added
 - Sign in to Amazon RDS and Aurora (MySQL, MariaDB, PostgreSQL) with AWS IAM instead of a password: choose AWS IAM in the connection's settings. Quarry signs a token with your AWS profile (SSO and roles included) for every session.
 - SSH: an SSH server Quarry has not seen shows its key fingerprint and asks once whether to trust it, instead of sending you to a terminal. A changed key is still refused.
@@ -21,8 +41,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Security
 - Drivers are signed: Quarry runs only drivers listed in its own release's signed driver list, checked at download and at every start. After an update, download your drivers again when asked.
 
-### Known issues
-- Quarry 0.1.0 cannot update itself to this version: its updates were signed with a different key than the one it checks. Download this version once from the release page; later versions update themselves again.
+### Notes
+- The macOS build is not notarized yet. Right-click the app and choose **Open**, or run `xattr -cr /Applications/Quarry.app`.
 
 ## [0.1.0] - 2026-10-31
 
@@ -54,5 +74,6 @@ Do not download the rest. `*.app.tar.gz`, `*.sig` and `latest.json` are for the 
 ### Notes
 - The macOS build is not notarized yet. Right-click the app and choose **Open**, or run `xattr -cr /Applications/Quarry.app`.
 
-[Unreleased]: https://github.com/MinduLabs/quarry/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MinduLabs/quarry/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MinduLabs/quarry/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MinduLabs/quarry/releases/tag/v0.1.0
