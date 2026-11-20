@@ -70,6 +70,8 @@ async fn query_latency() {
         driver_manifest: None,
         update_url: None,
         in_process_drivers: Default::default(),
+        driver_signing_key: None,
+        require_signed_drivers: None,
     })
     .unwrap();
     engine

@@ -17,7 +17,7 @@ mod restart;
 
 use std::sync::{Arc, Mutex};
 
-use quarry_engine::{Command, EngineHandle, Event};
+use quarry_engine::{Command, EngineHandle, EngineOptions, Event};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -128,7 +128,20 @@ fn main() {
     #[cfg(target_os = "linux")]
     desktop::integrate();
 
-    let (engine, events) = match EngineHandle::spawn() {
+    let context = tauri::generate_context!();
+    // Drivers are signed with the updater's key, so the engine checks them with its public key.
+    let driver_signing_key = context
+        .config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(|key| key.as_str())
+        .map(str::to_owned);
+    let (engine, events) = match EngineHandle::spawn_with(EngineOptions {
+        driver_signing_key,
+        ..EngineOptions::default()
+    }) {
         Ok(pair) => pair,
         Err(err) => {
             tracing::error!(%err, "failed to start engine");
@@ -204,7 +217,7 @@ fn main() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!());
+        .run(context);
 
     if let Err(err) = result {
         tracing::error!(%err, "tauri");

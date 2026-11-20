@@ -12,6 +12,7 @@ mod connections;
 mod console;
 mod data_sources;
 mod dispatch;
+mod driver_trust;
 mod drivers;
 mod edit;
 mod engine;
@@ -85,6 +86,12 @@ pub struct EngineOptions {
     /// Where the driver binaries are and get installed; `None` = the `QUARRY_DRIVER_DIR`
     /// environment variable, or `drivers` in the data directory.
     pub driver_dir: Option<PathBuf>,
+    /// The minisign public key the release signs `drivers.json` with (base64, the updater's
+    /// `pubkey`).
+    pub driver_signing_key: Option<String>,
+    /// Run only drivers of this version's signed list; `None` = on in release builds, off in
+    /// debug builds (which run the drivers they built themselves).
+    pub require_signed_drivers: Option<bool>,
     /// The list of downloadable drivers; `None` = the `QUARRY_DRIVER_MANIFEST` environment
     /// variable, or this version's release.
     pub driver_manifest: Option<String>,

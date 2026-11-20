@@ -2,11 +2,13 @@
 # `pnpm tauri build` for a release; arguments pass through. With TAURI_SIGNING_PRIVATE_KEY set (a
 # repository secret), the build also writes the signed self-update bundles and their `.sig`. A tag
 # build without the key fails: its release could never update itself. Writes `signed=true|false`
-# to $GITHUB_OUTPUT when it is set.
+# to $GITHUB_OUTPUT when it is set. A key that does not match tauri.conf.json fails before the
+# build (packaging/check-updater-key.sh).
 set -eu
 signed=false
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
   signed=true
+  sh packaging/check-updater-key.sh
   pnpm tauri build "$@" --config '{"bundle":{"createUpdaterArtifacts":true}}'
 else
   case "${GITHUB_REF:-}" in

@@ -18,6 +18,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - PostgreSQL and SQL Server: the sidebar starts at the server's current schema (`public`, `dbo`) instead of showing none.
 - A connection over SSH recovers when the SSH server restarts or the network drops: Quarry opens a new tunnel instead of failing on the closed one until you disconnect.
 
+### Security
+- Drivers are signed: Quarry runs only drivers listed in its own release's signed driver list, checked at download and at every start. After an update, download your drivers again when asked.
+
+### Known issues
+- Quarry 0.1.0 cannot update itself to this version: its updates were signed with a different key than the one it checks. Download this version once from the release page; later versions update themselves again.
+
 ## [0.1.0] - 2026-10-31
 
 The first public release: a fast, open-source database client for MySQL, MariaDB, PostgreSQL and
