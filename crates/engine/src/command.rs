@@ -66,6 +66,14 @@ pub enum Command {
         password: Option<Password>,
         ssh_secret: Option<Password>,
     },
+    /// Add the SSH server's key, shown in `Event::SshHostUnknown`, to `known_hosts` →
+    /// `Event::SshHostTrusted`. Only the key the engine saw is saved, and only when `fingerprint`
+    /// is still its fingerprint; the client then connects (or tests) again.
+    TrustSshHost {
+        host: String,
+        port: u16,
+        fingerprint: String,
+    },
     /// Open the metadata session and list databases.
     Connect {
         id: ConnId,

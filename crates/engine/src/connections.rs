@@ -170,7 +170,7 @@ impl Engine {
         };
         let id = config.id;
         let existing = match tunnel {
-            TunnelUse::Shared => lock(&self.tunnels).get(&id).cloned(),
+            TunnelUse::Shared => self.live_tunnel(id),
             TunnelUse::Temporary => None,
         };
         let tunnel = match existing {
@@ -192,8 +192,13 @@ impl Engine {
                         .port
                         .ok_or_else(|| "Set the database port to connect over SSH.".to_owned())?,
                     known_hosts,
+                    ssh_config: self.ssh_config.clone(),
                 };
-                let opened = Arc::new(quarry_tunnel::open(spec).await.map_err(|e| e.to_string())?);
+                let opened = Arc::new(
+                    quarry_tunnel::open(spec)
+                        .await
+                        .map_err(|err| self.tunnel_failed(id, err))?,
+                );
                 if tunnel == TunnelUse::Shared {
                     lock(&self.tunnels).insert(id, opened.clone());
                 }
@@ -203,6 +208,76 @@ impl Engine {
         config.host = Some("127.0.0.1".into());
         config.port = Some(tunnel.local_port());
         Ok((ResolvedConfig { config, password }, Some(tunnel)))
+    }
+
+    /// The tunnel error as shown. An unknown server is kept, and the client asked whether to
+    /// trust it (`Event::SshHostUnknown`), before the failure is reported.
+    fn tunnel_failed(&self, conn: ConnId, err: quarry_tunnel::TunnelError) -> String {
+        if let quarry_tunnel::TunnelError::UnknownHost(unknown) = &err {
+            self.emit(Event::SshHostUnknown {
+                conn,
+                host: unknown.host.clone(),
+                port: unknown.port,
+                fingerprint: unknown.fingerprint.clone(),
+                key_type: unknown.key_type.clone(),
+            });
+            lock(&self.unknown_hosts)
+                .insert((unknown.host.clone(), unknown.port), (**unknown).clone());
+        }
+        err.to_string()
+    }
+
+    /// Save the key an unknown server showed, if `fingerprint` is still the one the user saw.
+    pub(crate) async fn trust_ssh_host(&self, host: String, port: u16, fingerprint: String) {
+        let unknown = lock(&self.unknown_hosts)
+            .get(&(host.clone(), port))
+            .filter(|u| u.fingerprint == fingerprint)
+            .cloned();
+        let Some(unknown) = unknown else {
+            self.emit(Event::Notice {
+                kind: NoticeKind::Error,
+                message: format!(
+                    "The key of {host}:{port} was not saved: it is not the key Quarry was shown. Connect again to see it."
+                ),
+            });
+            return;
+        };
+        let Some(known_hosts) = self.known_hosts.clone() else {
+            self.emit(Event::Notice {
+                kind: NoticeKind::Error,
+                message: "No home directory, so no ~/.ssh/known_hosts to save the key in.".into(),
+            });
+            return;
+        };
+        let saved = tokio::task::spawn_blocking(move || unknown.trust(&known_hosts)).await;
+        match saved {
+            Ok(Ok(())) => {
+                lock(&self.unknown_hosts).remove(&(host.clone(), port));
+                tracing::info!(%host, port, "SSH host key trusted");
+                self.emit(Event::SshHostTrusted { host, port });
+            }
+            Ok(Err(err)) => self.emit(Event::Notice {
+                kind: NoticeKind::Error,
+                message: err.to_string(),
+            }),
+            Err(err) => self.emit(Event::Notice {
+                kind: NoticeKind::Error,
+                message: format!("The key of {host}:{port} was not saved ({err})."),
+            }),
+        }
+    }
+
+    /// The connection's shared tunnel, unless its SSH connection has ended: then it is dropped,
+    /// so the caller opens a new one instead of failing on the dead one until Disconnect.
+    fn live_tunnel(&self, id: ConnId) -> Option<Arc<Tunnel>> {
+        let mut tunnels = lock(&self.tunnels);
+        let tunnel = tunnels.get(&id)?;
+        if tunnel.is_alive() {
+            return Some(tunnel.clone());
+        }
+        tracing::info!("SSH tunnel closed; opening a new one");
+        tunnels.remove(&id);
+        None
     }
 
     pub(crate) async fn stored_secret(&self, id: ConnId, kind: SecretKind) -> Option<String> {

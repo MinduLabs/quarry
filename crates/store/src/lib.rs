@@ -235,6 +235,37 @@ read_only = false
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// SSH settings from before jump hosts have no `jump`: those connections go direct.
+    #[test]
+    fn loads_ssh_settings_saved_before_jump_hosts() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let old = r#"version = 1
+
+[[connection]]
+id = "6f1c2c8e-8d5e-4f7a-9a43-0b6f2f1d2c11"
+name = "behind ssh"
+driver = "mysql"
+host = "db"
+port = 3306
+user = "root"
+ssl = "prefer"
+environment = "local"
+read_only = false
+
+[connection.ssh]
+host = "bastion"
+port = 22
+user = "me"
+auth = "agent"
+"#;
+        fs::write(dir.join(CONNECTIONS_FILE), old).unwrap();
+        let loaded = ConfigStore::new(&dir).load_connections().unwrap();
+        let ssh = loaded[0].ssh.as_ref().unwrap();
+        assert_eq!((ssh.host.as_str(), ssh.jump.as_deref()), ("bastion", None));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn rejects_newer_format() {
         let dir = temp_dir();

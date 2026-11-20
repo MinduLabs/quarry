@@ -559,6 +559,17 @@ export interface PendingChangesConfirm {
   message: string;
 }
 
+/** An SSH server with an unknown key, waiting for the user to compare its fingerprint. */
+export interface SshTrust {
+  conn: string;
+  host: string;
+  port: number;
+  fingerprint: string;
+  keyType: string;
+  /** What to do again once it is trusted. */
+  retry: "test" | "connect";
+}
+
 export interface PendingConfirm {
   tab: number;
   conn: string;
@@ -625,6 +636,10 @@ export interface AppState {
   dialog: DialogState;
   test: { request: number; pending: boolean; ok: boolean | null; message: string } | null;
   confirm: PendingConfirm | null;
+  sshTrust: SshTrust | null;
+  /** Save the shown key to known_hosts; the test or connect runs again once it is saved. */
+  trustSshHost: () => void;
+  dismissSshTrust: () => void;
   changesConfirm: PendingChangesConfirm | null;
   /** Tabs waiting for the user to agree that closing them rolls back an open transaction. */
   closeConfirm: number[] | null;
@@ -940,6 +955,12 @@ let selfUpdate: Update | null = null;
 /** The release page of an update the app cannot install itself. */
 let releasePage: string | null = null;
 let nextRequest = 1;
+/** The last connection test, in memory only, to run it again after its SSH server is trusted. */
+let lastTest: {
+  config: ConnectionConfig;
+  password: string | null;
+  sshSecret: string | null;
+} | null = null;
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
@@ -1364,6 +1385,21 @@ export const useApp = create<AppState>()((set, get) => {
     askQuit: (info) => set({ quit: info }),
     dismissQuit: () => set({ quit: null }),
     confirm: null,
+    sshTrust: null,
+    trustSshHost: () => {
+      const trust = get().sshTrust;
+      if (!trust) return;
+      send({
+        type: "TrustSshHost",
+        host: trust.host,
+        port: trust.port,
+        fingerprint: trust.fingerprint,
+      });
+    },
+    dismissSshTrust: () => {
+      lastTest = null;
+      set({ sshTrust: null });
+    },
     changesConfirm: null,
     closeConfirm: null,
     deleteConfirm: null,
@@ -1469,6 +1505,29 @@ export const useApp = create<AppState>()((set, get) => {
           );
           break;
         }
+        case "SshHostUnknown":
+          set({
+            sshTrust: {
+              conn: event.conn,
+              host: event.host,
+              port: event.port,
+              fingerprint: event.fingerprint,
+              keyType: event.key_type,
+              retry: get().test?.pending ? "test" : "connect",
+            },
+          });
+          break;
+        case "SshHostTrusted": {
+          const trust = get().sshTrust;
+          if (trust?.host !== event.host || trust.port !== event.port) break;
+          set({ sshTrust: null });
+          if (trust.retry === "test" && lastTest) {
+            get().testConnection(lastTest.config, lastTest.password, lastTest.sshSecret);
+          } else if (trust.retry === "connect") {
+            get().toggleConnection(trust.conn);
+          }
+          break;
+        }
         case "TestResult": {
           const test = get().test;
           if (test?.request !== event.request) break;
@@ -1480,11 +1539,13 @@ export const useApp = create<AppState>()((set, get) => {
               message: event.error ?? `Connected · server ${event.server_version ?? ""}`,
             },
           });
+          if (!get().sshTrust) lastTest = null;
           break;
         }
         case "ConnState": {
           const state = event.state;
-          if (state.kind === "Failed") {
+          // The trust question already says why it failed.
+          if (state.kind === "Failed" && get().sshTrust?.conn !== event.id) {
             const name = get().connections.find((c) => c.id === event.id)?.name ?? "";
             get().toast("error", `${name}: ${state.error}`);
           }
@@ -2039,6 +2100,8 @@ export const useApp = create<AppState>()((set, get) => {
       send({ type: "InstallDriver", driver });
     },
     testConnection: (config, password, sshSecret) => {
+      // Kept until the test ends, to test again after an unknown SSH server is trusted.
+      lastTest = { config, password, sshSecret };
       const request = nextRequest++;
       set({ test: { request, pending: true, ok: null, message: "" } });
       send({ type: "TestConnection", request, config, password, ssh_secret: sshSecret });
@@ -2051,6 +2114,7 @@ export const useApp = create<AppState>()((set, get) => {
         ssh_secret: sshSecret,
         remember_password: remember,
       });
+      lastTest = null;
       set({ dialog: null, test: null });
     },
     deleteConnection: (id) => {

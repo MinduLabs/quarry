@@ -520,7 +520,11 @@ mod tests {
         })
         .await;
         assert_eq!(state, DriverInstallState::Installed);
-        assert_eq!(leftovers(&drivers), vec!["quarry-driver-mysql"]);
+        // The list it was checked against stays next to it, for the check at every start. This
+        // test list is unsigned, so there is no `drivers.json.sig`.
+        let mut kept = leftovers(&drivers);
+        kept.sort();
+        assert_eq!(kept, vec!["drivers.json", "quarry-driver-mysql"]);
         let Event::DataSources { sources } = events.recv().await.unwrap() else {
             panic!("data sources follow the install");
         };

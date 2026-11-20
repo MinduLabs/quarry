@@ -25,7 +25,7 @@ export function SshFields({ form, set, showInvalid, isEditing }: FieldsProps) {
             <Field label="SSH host">
               <Input
                 value={form.sshHost}
-                placeholder="Host name or IP address"
+                placeholder="Host, IP address or ~/.ssh/config alias"
                 aria-invalid={showInvalid && !form.sshHost.trim()}
                 onChange={(e) => set("sshHost", e.target.value)}
               />
@@ -42,7 +42,7 @@ export function SshFields({ form, set, showInvalid, isEditing }: FieldsProps) {
             <Field label="SSH user">
               <Input
                 value={form.sshUser}
-                aria-invalid={showInvalid && !form.sshUser.trim()}
+                placeholder="From ~/.ssh/config"
                 onChange={(e) => set("sshUser", e.target.value)}
               />
             </Field>
@@ -51,7 +51,10 @@ export function SshFields({ form, set, showInvalid, isEditing }: FieldsProps) {
             </Field>
           </div>
           {form.sshAuth === "key" && (
-            <Field label="Private key file">
+            <Field
+              label="Private key file"
+              hint="Empty: the alias's IdentityFile in ~/.ssh/config."
+            >
               <Input value={form.sshKeyPath} onChange={(e) => set("sshKeyPath", e.target.value)} />
             </Field>
           )}
@@ -67,8 +70,19 @@ export function SshFields({ form, set, showInvalid, isEditing }: FieldsProps) {
               />
             </Field>
           )}
+          <Field
+            label="Jump hosts"
+            hint="Optional, like ProxyJump: user@host:port, comma separated. Signs in with ssh-agent or a key file, never the SSH password."
+          >
+            <Input
+              value={form.sshJump}
+              placeholder="From ~/.ssh/config"
+              onChange={(e) => set("sshJump", e.target.value)}
+            />
+          </Field>
           <p className="text-muted text-sm">
-            The server must be in ~/.ssh/known_hosts. Connect once with ssh in a terminal to add it.
+            Settings left empty come from ~/.ssh/config. A server Quarry has not seen asks you to
+            check its key once.
           </p>
         </>
       )}

@@ -784,6 +784,7 @@ async fn connects_through_an_ssh_tunnel() {
         user: "quarry".into(),
         auth: SshAuth::Password,
         key_path: None,
+        jump: None,
     });
     let id = config.id;
 
@@ -849,6 +850,108 @@ async fn connects_through_an_ssh_tunnel() {
             assert!(error.contains("not a known host"), "{error}");
         }
     }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An unknown SSH server is shown to the user, and saved to `known_hosts` only with the
+/// fingerprint they saw; then the connection works.
+#[tokio::test]
+async fn an_unknown_ssh_server_is_trusted_by_its_fingerprint() {
+    use quarry_model::{SshAuth, SshConfig};
+    let (Some(mut config), Ok(ssh)) = (config(), std::env::var("QUARRY_TEST_SSH")) else {
+        return;
+    };
+    let Some((ssh_host, ssh_port)) = ssh.split_once(':') else {
+        return;
+    };
+    let ssh_port: u16 = ssh_port.parse().unwrap();
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let known_hosts = dir.join("known_hosts");
+    config.host = Some("mysql".into());
+    config.port = Some(3306);
+    config.ssh = Some(SshConfig {
+        host: ssh_host.into(),
+        port: ssh_port,
+        user: "quarry".into(),
+        auth: SshAuth::Password,
+        key_path: None,
+        jump: None,
+    });
+    let id = config.id;
+    let (engine, events) = EngineHandle::spawn_with(EngineOptions {
+        known_hosts: Some(known_hosts.clone()),
+        ..options(&dir)
+    })
+    .unwrap();
+    engine
+        .send(Command::SaveConnection {
+            config,
+            password: Some(Password("quarry".into())),
+            ssh_secret: Some(Password("quarry".into())),
+            remember_password: false,
+        })
+        .unwrap();
+    next_matching(&events, |e| matches!(e, Event::Connections { .. })).await;
+    engine.send(Command::Connect { id }).unwrap();
+    let Event::SshHostUnknown {
+        conn,
+        host,
+        port,
+        fingerprint,
+        ..
+    } = next_matching(&events, |e| matches!(e, Event::SshHostUnknown { .. })).await
+    else {
+        unreachable!()
+    };
+    assert_eq!((conn, host.as_str(), port), (id, ssh_host, ssh_port));
+    assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
+    next_matching(&events, |e| {
+        matches!(
+            e,
+            Event::ConnState {
+                state: ConnState::Failed { .. },
+                ..
+            }
+        )
+    })
+    .await;
+
+    // Another fingerprint than the one shown saves nothing.
+    engine
+        .send(Command::TrustSshHost {
+            host: host.clone(),
+            port,
+            fingerprint: "SHA256:not-the-one-shown".into(),
+        })
+        .unwrap();
+    next_matching(&events, |e| {
+        matches!(
+            e,
+            Event::Notice {
+                kind: NoticeKind::Error,
+                ..
+            }
+        )
+    })
+    .await;
+    assert!(!known_hosts.exists());
+
+    engine
+        .send(Command::TrustSshHost {
+            host,
+            port,
+            fingerprint,
+        })
+        .unwrap();
+    next_matching(&events, |e| matches!(e, Event::SshHostTrusted { .. })).await;
+    engine.send(Command::Connect { id }).unwrap();
+    let Event::Databases { databases, .. } =
+        next_matching(&events, |e| matches!(e, Event::Databases { .. })).await
+    else {
+        unreachable!()
+    };
+    assert!(databases.contains(&"shop".to_owned()));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

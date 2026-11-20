@@ -14,6 +14,7 @@ pub(crate) fn options(dir: &Path) -> EngineOptions {
         config_dir: Some(dir.to_path_buf()),
         data_dir: Some(dir.to_path_buf()),
         known_hosts: None,
+        ssh_config: Some(PathBuf::from("/nonexistent/quarry/ssh_config")),
         disable_keyring: true,
         perf_log: None,
         driver_dir: None,

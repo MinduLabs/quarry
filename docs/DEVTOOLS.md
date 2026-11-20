@@ -121,6 +121,7 @@ text differ
 | --- | --- |
 | `config/`, `data/` | The app's config and data folders (`XDG_CONFIG_HOME`, `XDG_DATA_HOME`): saved connections, workspace, installed drivers. Your own are untouched. |
 | `aws/` | Empty AWS config and credentials files. Your AWS profiles and `AWS_*` variables are kept out. |
+| `ssh/` | The SSH `known_hosts` and `config` (`QUARRY_SSH_DIR`). Trusting a test SSH server writes here, never to your `~/.ssh`. |
 | `app.log` | Everything the app, Vite and Cargo print. `logs` reads it. |
 | `data/quarry/perf.jsonl` | The performance log (`QUARRY_PERF=1`). `perf` reads it. |
 | `shots/` | Screenshots. |
