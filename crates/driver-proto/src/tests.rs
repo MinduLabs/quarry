@@ -370,3 +370,30 @@ async fn a_driver_that_goes_away_loses_the_connection() {
     let err = session.list_databases().await.unwrap_err();
     assert!(matches!(err, DriverError::ConnectionLost(_)));
 }
+
+/// A binary that is busy for a moment, as one just written is while a forked process still holds
+/// its writer's file descriptor, starts once it is free.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn hello_waits_for_a_busy_binary() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("quarry-busy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("driver");
+    std::fs::copy("/bin/true", &program).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Open for writing: the kernel refuses to run it (ETXTBSY) until this is closed.
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&program)
+        .unwrap();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        drop(writer);
+    });
+    // `true` answers nothing: it started, which is what this checks.
+    let err = crate::client::hello(&program).await.unwrap_err();
+    assert!(err.contains("answered nothing"), "{err}");
+    release.await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}

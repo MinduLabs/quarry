@@ -25,17 +25,40 @@ use crate::wire::{
 /// How long a driver binary may take to say what it serves, or to exit after `Close`.
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Tries to start a binary that is busy (`ETXTBSY`), and the wait before the first retry.
+const BUSY_TRIES: u32 = 5;
+const BUSY_WAIT: Duration = Duration::from_millis(50);
+
 /// Asks the driver binary at `program` which drivers it serves. Fails when it does not start,
 /// does not answer, or speaks another protocol.
 pub async fn hello(program: &Path) -> std::result::Result<Hello, String> {
     let name = program.display();
-    let run = Command::new(program)
-        .arg("hello")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .output();
+    let run = async {
+        let mut tries = 1;
+        loop {
+            let output = Command::new(program)
+                .arg("hello")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            // A binary just written is busy while a process forked in the meantime (another
+            // thread spawning) still holds a copy of the writer's file descriptor, until that
+            // process execs. It frees up within milliseconds.
+            match output {
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && tries < BUSY_TRIES =>
+                {
+                    tokio::time::sleep(BUSY_WAIT * tries).await;
+                    tries += 1;
+                }
+                output => return output,
+            }
+        }
+    };
     let output = tokio::time::timeout(START_TIMEOUT, run)
         .await
         .map_err(|_| format!("The driver {name} did not answer in time."))?
