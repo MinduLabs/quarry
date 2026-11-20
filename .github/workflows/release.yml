@@ -99,6 +99,12 @@ jobs:
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
+      # The image's Flatpak installation sits in a lower image layer. Updating its SDK renames
+      # directories out of that layer, which overlayfs refuses on runners without redirect_dir
+      # ("Invalid cross-device link", then flatpak-builder crashes). A volume gets a copy of it
+      # that updates in place.
+      volumes:
+        - /var/lib/flatpak
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

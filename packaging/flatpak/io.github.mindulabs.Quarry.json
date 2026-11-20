@@ -12,6 +12,7 @@
     "--socket=fallback-x11",
     "--device=dri",
     "--filesystem=~/.ssh:ro",
+    "--filesystem=~/.ssh/known_hosts",
     "--filesystem=~/.aws:ro",
     "--socket=ssh-auth"
   ],
